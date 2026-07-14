@@ -1,6 +1,6 @@
 # 强制执行本地数据与隐私边界
 
-Status: ready-for-agent
+Status: implemented
 
 ## Parent
 
@@ -12,11 +12,11 @@ Status: ready-for-agent
 
 ## Acceptance criteria
 
-- [ ] 未允许的 Agent 事件字段被拒绝且不会持久化
-- [ ] 数据库不包含终端输出、滚动历史、提示词、回复、工具内容、transcript 或凭据
-- [ ] 数据库与 Socket 只允许当前用户访问
-- [ ] 应用不要求账户，不提供云同步且没有遥测网络请求
-- [ ] 隐私契约测试覆盖事件到持久化的完整路径
+- [x] 未允许的 Agent 事件字段被拒绝且不会持久化
+- [x] 数据库不包含终端输出、滚动历史、提示词、回复、工具内容、transcript 或凭据
+- [x] 数据库与 Socket 只允许当前用户访问
+- [x] 应用不要求账户，不提供云同步且没有遥测网络请求
+- [x] 隐私契约测试覆盖事件到持久化的完整路径
 
 ## Blocked by
 

@@ -1,6 +1,6 @@
 # 提供终端配置样式
 
-Status: ready-for-agent
+Status: implemented
 
 ## Parent
 
@@ -12,11 +12,11 @@ Status: ready-for-agent
 
 ## Acceptance criteria
 
-- [ ] 字体、字号、颜色主题和光标样式可配置并持久化
-- [ ] 变化只影响终端内部并应用到现有与新窗格
-- [ ] 不提供 Shell、快捷键、分屏或 Agent 行为选项
-- [ ] 不读取、导入或同步 Ghostty 配置
-- [ ] TerminalEngine 样式契约测试通过
+- [x] 字体、字号、颜色主题和光标样式可配置并持久化
+- [x] 变化只影响终端内部并应用到现有与新窗格
+- [x] 不提供 Shell、快捷键、分屏或 Agent 行为选项
+- [x] 不读取、导入或同步 Ghostty 配置
+- [x] TerminalEngine 样式契约测试通过
 
 ## Blocked by
 

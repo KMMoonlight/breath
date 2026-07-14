@@ -1,6 +1,6 @@
 # 打开第一个可持久化的原生终端
 
-Status: ready-for-agent
+Status: implemented
 
 ## Parent
 
@@ -12,11 +12,11 @@ Status: ready-for-agent
 
 ## Acceptance criteria
 
-- [ ] 用户可以选择本地目录并在会话树中看到唯一工作区和首个工作会话
-- [ ] 新工作会话只启动空 login shell，cwd 是工作区根目录，不自动启动 Agent
-- [ ] 用户可以输入命令并看到输出
-- [ ] 工作区和工作会话元数据通过公开工作台用例往返持久化
-- [ ] macOS 14 arm64 Debug 构建与高层用例测试通过
+- [x] 用户可以选择本地目录并在会话树中看到唯一工作区和首个工作会话
+- [x] 新工作会话只启动空 login shell，cwd 是工作区根目录，不自动启动 Agent
+- [x] 用户可以输入命令并看到输出
+- [x] 工作区和工作会话元数据通过公开工作台用例往返持久化
+- [x] macOS 14 arm64 Debug 构建与高层用例测试通过
 
 ## Blocked by
 

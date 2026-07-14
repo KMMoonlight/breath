@@ -1,0 +1,3 @@
+repository=https://github.com/ghostty-org/ghostty.git
+revision=55a3e33ab26a23d75b274b23c7f76d837db00578
+zig=0.15

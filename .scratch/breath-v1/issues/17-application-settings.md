@@ -1,6 +1,6 @@
 # 提供应用配置样式
 
-Status: ready-for-agent
+Status: implemented
 
 ## Parent
 
@@ -12,10 +12,10 @@ Status: ready-for-agent
 
 ## Acceptance criteria
 
-- [ ] 应用配置只改变终端外的界面样式并持久化
-- [ ] 应用配置不改变 Shell、快捷键、分屏或 Agent 行为
-- [ ] Agent 集成和已归档作为管理页面而非第三类配置
-- [ ] 样式变化通过可观察 UI 行为测试
+- [x] 应用配置只改变终端外的界面样式并持久化
+- [x] 应用配置不改变 Shell、快捷键、分屏或 Agent 行为
+- [x] Agent 集成和已归档作为管理页面而非第三类配置
+- [x] 样式变化通过可观察 UI 行为测试
 
 ## Blocked by
 

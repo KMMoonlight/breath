@@ -1,6 +1,6 @@
 # 完善原生终端日常交互
 
-Status: ready-for-agent
+Status: implemented
 
 ## Parent
 
@@ -12,11 +12,11 @@ Status: ready-for-agent
 
 ## Acceptance criteria
 
-- [ ] 中文输入法组合与提交文本可以正确送入 PTY
-- [ ] 键盘、选择、复制和粘贴符合 macOS 习惯
-- [ ] 视图尺寸变化会调整终端网格与 PTY
-- [ ] 焦点切换和滚动不破坏输入或渲染
-- [ ] TerminalEngine 集成测试覆盖关键输入输出契约
+- [x] 中文输入法组合与提交文本可以正确送入 PTY
+- [x] 键盘、选择、复制和粘贴符合 macOS 习惯
+- [x] 视图尺寸变化会调整终端网格与 PTY
+- [x] 焦点切换和滚动不破坏输入或渲染
+- [x] TerminalEngine 集成测试覆盖关键输入输出契约
 
 ## Blocked by
 

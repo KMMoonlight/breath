@@ -1,6 +1,6 @@
 # 支持 Claude Code Agent 适配器
 
-Status: ready-for-agent
+Status: implemented
 
 ## Parent
 
@@ -12,11 +12,11 @@ Status: ready-for-agent
 
 ## Acceptance criteria
 
-- [ ] 用户级集成可安全启用、重复启用和卸载
-- [ ] 官方事件正确映射到 Breath 四态并关联到唯一窗格
-- [ ] 官方标题、会话标识和恢复能力按实际支持工作
-- [ ] 缺失能力使用占位标题或空 Shell，不解析终端输出
-- [ ] Claude Code 官方事件样例通过共用适配器契约测试
+- [x] 用户级集成可安全启用、重复启用和卸载
+- [x] 官方事件正确映射到 Breath 四态并关联到唯一窗格
+- [x] 官方标题、会话标识和恢复能力按实际支持工作
+- [x] 缺失能力使用占位标题或空 Shell，不解析终端输出
+- [x] Claude Code 官方事件样例通过共用适配器契约测试
 
 ## Blocked by
 
