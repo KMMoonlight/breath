@@ -33,6 +33,7 @@ struct WorkbenchTests {
         #expect(launches[0].workingDirectory == "/tmp/example-project")
         #expect(launches[0].executable == "/bin/zsh")
         #expect(launches[0].arguments == ["-l"])
+        #expect(launches[0].environment["BREATH_APPLICATION_INSTANCE_ID"] != nil)
         #expect(launches[0].environment["BREATH_WORKSPACE_ID"] == workspaceID.rawValue.uuidString)
         #expect(launches[0].environment["BREATH_WORK_SESSION_ID"] == workSessionID.rawValue.uuidString)
         #expect(launches[0].environment["BREATH_TERMINAL_PANE_ID"] != nil)
@@ -136,6 +137,40 @@ struct WorkbenchTests {
                 .stopped(secondPaneID),
             ]
         )
+    }
+
+    @Test("failed startup cleanup stops terminals without saving a snapshot")
+    func failedStartupCleanupDoesNotSave() async throws {
+        let effects = EffectLog()
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let paneID = TerminalPaneID(rawValue: UUID())
+        let snapshot = WorkbenchSnapshot(
+            workspaces: [Workspace(id: workspaceID, path: "/tmp/project", displayName: "project")],
+            workSessions: [
+                WorkSession(
+                    id: sessionID,
+                    workspaceID: workspaceID,
+                    title: "Session",
+                    pane: TerminalPane(id: paneID)
+                ),
+            ],
+            selectedWorkSessionID: sessionID
+        )
+        let repository = InMemoryWorkbenchRepository(snapshot: snapshot, effects: effects)
+        let runtime = RecordingTerminalRuntime(effects: effects)
+        let workbench = Workbench(
+            repository: repository,
+            terminalRuntime: runtime,
+            defaultShell: { "/bin/zsh" }
+        )
+        try await workbench.restoreFromRepository()
+        await effects.clear()
+
+        await workbench.stopAllTerminalsWithoutSaving()
+
+        #expect(await effects.values == [.stopped(paneID)])
+        #expect(await repository.latestSnapshot == snapshot)
     }
 
     @Test("cold start materializes only the previously selected work session")
@@ -264,11 +299,13 @@ struct WorkbenchTests {
 
     @Test("Codex events update the pane binding, title, and four-state lifecycle")
     func codexLifecycle() async throws {
+        let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
         let repository = InMemoryWorkbenchRepository()
         let terminalRuntime = RecordingTerminalRuntime()
         let workbench = Workbench(
             repository: repository,
             terminalRuntime: terminalRuntime,
+            applicationInstanceID: applicationInstanceID,
             defaultShell: { "/bin/zsh" }
         )
         let workspaceID = try await workbench.addWorkspace(
@@ -279,6 +316,7 @@ struct WorkbenchTests {
 
         try await workbench.handleAgentEvent(
             AgentEvent(
+                applicationInstanceID: applicationInstanceID,
                 agent: .codex,
                 version: "1.2.3",
                 lifecycle: .turnStarted,
@@ -301,6 +339,7 @@ struct WorkbenchTests {
 
         try await workbench.handleAgentEvent(
             AgentEvent(
+                applicationInstanceID: applicationInstanceID,
                 agent: .codex,
                 lifecycle: .needsAttention,
                 occurredAt: Date(timeIntervalSince1970: 201),
@@ -315,6 +354,7 @@ struct WorkbenchTests {
 
         try await workbench.handleAgentEvent(
             AgentEvent(
+                applicationInstanceID: applicationInstanceID,
                 agent: .codex,
                 lifecycle: .turnCompleted,
                 occurredAt: Date(timeIntervalSince1970: 202),
@@ -329,6 +369,7 @@ struct WorkbenchTests {
 
         try await workbench.handleAgentEvent(
             AgentEvent(
+                applicationInstanceID: applicationInstanceID,
                 agent: .codex,
                 lifecycle: .sessionEnded,
                 occurredAt: Date(timeIntervalSince1970: 203),
@@ -340,6 +381,89 @@ struct WorkbenchTests {
         )
         session = try #require(await workbench.snapshot().workSessions.first)
         #expect(session.pane.state == .idle)
+        #expect(session.pane.agentBinding?.isActive == false)
+    }
+
+    @Test("late events from an older Agent session cannot steal the pane binding")
+    func staleAgentEventsAreIgnored() async throws {
+        let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(),
+            terminalRuntime: RecordingTerminalRuntime(),
+            applicationInstanceID: applicationInstanceID,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+        let workSessionID = try await workbench.createWorkSession(in: workspaceID)
+        let paneID = try #require(await workbench.snapshot().workSessions.first?.pane.id)
+
+        for (sessionID, time) in [("old", 100.0), ("new", 200.0)] {
+            try await workbench.handleAgentEvent(
+                AgentEvent(
+                    applicationInstanceID: applicationInstanceID,
+                    agent: .codex,
+                    lifecycle: .turnStarted,
+                    occurredAt: Date(timeIntervalSince1970: time),
+                    workspaceID: workspaceID,
+                    workSessionID: workSessionID,
+                    paneID: paneID,
+                    sessionID: sessionID,
+                    workingDirectory: "/tmp/example-project"
+                )
+            )
+        }
+        try await workbench.handleAgentEvent(
+            AgentEvent(
+                applicationInstanceID: applicationInstanceID,
+                agent: .codex,
+                lifecycle: .sessionEnded,
+                occurredAt: Date(timeIntervalSince1970: 150),
+                workspaceID: workspaceID,
+                workSessionID: workSessionID,
+                paneID: paneID,
+                sessionID: "old",
+                workingDirectory: "/tmp/example-project"
+            )
+        )
+
+        let pane = try #require(await workbench.snapshot().workSessions.first?.pane)
+        #expect(pane.agentBinding?.sessionID == "new")
+        #expect(pane.agentBinding?.isActive == true)
+        #expect(pane.state == .running)
+    }
+
+    @Test("events from another Breath application instance are rejected")
+    func foreignApplicationEvent() async throws {
+        let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(),
+            terminalRuntime: RecordingTerminalRuntime(),
+            applicationInstanceID: applicationInstanceID,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+        let workSessionID = try await workbench.createWorkSession(in: workspaceID)
+        let paneID = try #require(await workbench.snapshot().workSessions.first?.pane.id)
+
+        await #expect(throws: WorkbenchError.agentEventTargetMismatch) {
+            try await workbench.handleAgentEvent(
+                AgentEvent(
+                    applicationInstanceID: ApplicationInstanceID(rawValue: UUID()),
+                    agent: .codex,
+                    lifecycle: .turnStarted,
+                    occurredAt: Date(),
+                    workspaceID: workspaceID,
+                    workSessionID: workSessionID,
+                    paneID: paneID,
+                    sessionID: "foreign",
+                    workingDirectory: "/tmp/example-project"
+                )
+            )
+        }
     }
 
     @Test("the same normalized workspace directory cannot be added twice")
@@ -359,6 +483,27 @@ struct WorkbenchTests {
             )
         }
         #expect(await workbench.snapshot().workspaces.count == 1)
+    }
+
+    @Test("a symbolic-link alias cannot add the same workspace twice")
+    func duplicateWorkspaceSymlink() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("breath-workspace-\(UUID().uuidString)", isDirectory: true)
+        let project = root.appendingPathComponent("project", isDirectory: true)
+        let alias = root.appendingPathComponent("alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: project)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(),
+            terminalRuntime: RecordingTerminalRuntime(),
+            defaultShell: { "/bin/zsh" }
+        )
+
+        _ = try await workbench.addWorkspace(at: project)
+        await #expect(throws: WorkbenchError.workspaceAlreadyExists(project.path)) {
+            try await workbench.addWorkspace(at: alias)
+        }
     }
 
     @Test("removing a workspace stops its terminals and deletes only Breath metadata")
@@ -522,7 +667,11 @@ struct WorkbenchTests {
                         first: .pane(
                             TerminalPane(
                                 id: agentPaneID,
-                                agentBinding: AgentBinding(agent: .codex, sessionID: "thread-123")
+                                agentBinding: AgentBinding(
+                                    agent: .codex,
+                                    sessionID: "thread-123",
+                                    isActive: true
+                                )
                             )
                         ),
                         second: .pane(TerminalPane(id: shellPaneID))
@@ -563,7 +712,11 @@ struct WorkbenchTests {
                     pane: TerminalPane(
                         id: paneID,
                         state: .running,
-                        agentBinding: AgentBinding(agent: .codex, sessionID: "missing-thread")
+                        agentBinding: AgentBinding(
+                            agent: .codex,
+                            sessionID: "missing-thread",
+                            isActive: true
+                        )
                     )
                 ),
             ],
@@ -586,6 +739,258 @@ struct WorkbenchTests {
         #expect(attempts[1].paneID == paneID)
         #expect(await workbench.snapshot().workSessions.first?.pane.state == .idle)
         #expect(await repository.latestSnapshot?.workSessions.first?.pane.state == .idle)
+    }
+
+    @Test("an asynchronously failed Agent recovery reopens the pane as an empty shell")
+    func asynchronousAgentResumeFailureFallsBackToShell() async throws {
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let paneID = TerminalPaneID(rawValue: UUID())
+        let snapshot = WorkbenchSnapshot(
+            workspaces: [Workspace(id: workspaceID, path: "/tmp/project", displayName: "project")],
+            workSessions: [
+                WorkSession(
+                    id: sessionID,
+                    workspaceID: workspaceID,
+                    title: "Agent work",
+                    pane: TerminalPane(
+                        id: paneID,
+                        state: .running,
+                        agentBinding: AgentBinding(
+                            agent: .codex,
+                            sessionID: "missing-thread",
+                            isActive: true
+                        )
+                    )
+                ),
+            ],
+            selectedWorkSessionID: sessionID
+        )
+        let repository = InMemoryWorkbenchRepository(snapshot: snapshot)
+        let runtime = ProcessExitTerminalRuntime()
+        let changes = ChangeRecorder()
+        let workbench = Workbench(
+            repository: repository,
+            terminalRuntime: runtime,
+            agentResumeCommands: FixedAgentResumeCommands(),
+            defaultShell: { "/bin/zsh" }
+        )
+        await workbench.setSnapshotChangeHandler {
+            Task { await changes.record() }
+        }
+
+        try await workbench.restoreFromRepository()
+        await runtime.emitProcessExit(paneID)
+        for _ in 0..<1_000 {
+            if await runtime.launches.count == 2 { break }
+            await Task.yield()
+        }
+
+        #expect(await runtime.launches.map(\.executable) == ["/usr/local/bin/codex", "/bin/zsh"])
+        #expect(await workbench.snapshot().workSessions.first?.pane.state == .idle)
+        #expect(await workbench.snapshot().workSessions.first?.pane.agentBinding?.isActive == false)
+        for _ in 0..<1_000 {
+            if await changes.count == 1 { break }
+            await Task.yield()
+        }
+        #expect(await changes.count == 1)
+    }
+
+    @Test("an Agent that exits before launch returns still falls back to a shell")
+    func immediateAgentExitFallsBackToShell() async throws {
+        let fixture = recoveryFixture()
+        let runtime = ImmediateExitTerminalRuntime(agentExecutable: "/usr/local/bin/codex")
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(snapshot: fixture.snapshot),
+            terminalRuntime: runtime,
+            agentResumeCommands: FixedAgentResumeCommands(),
+            defaultShell: { "/bin/zsh" }
+        )
+
+        try await workbench.restoreFromRepository()
+        for _ in 0..<1_000 {
+            if await runtime.launches.count == 2 { break }
+            await Task.yield()
+        }
+
+        #expect(await runtime.launches.map(\.executable) == ["/usr/local/bin/codex", "/bin/zsh"])
+        #expect(await workbench.snapshot().workSessions.first?.pane.state == .idle)
+    }
+
+    @Test("multi-pane restore stops earlier panes when a later launch fails")
+    func multiPaneRestoreIsAtomic() async throws {
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let firstPaneID = TerminalPaneID(rawValue: UUID())
+        let secondPaneID = TerminalPaneID(rawValue: UUID())
+        let snapshot = WorkbenchSnapshot(
+            workspaces: [Workspace(id: workspaceID, path: "/tmp/project", displayName: "project")],
+            workSessions: [
+                WorkSession(
+                    id: sessionID,
+                    workspaceID: workspaceID,
+                    title: "Two shells",
+                    layout: .split(
+                        orientation: .horizontal,
+                        fraction: 0.5,
+                        first: .pane(TerminalPane(id: firstPaneID)),
+                        second: .pane(TerminalPane(id: secondPaneID))
+                    )
+                ),
+            ],
+            selectedWorkSessionID: sessionID
+        )
+        let runtime = FailingNthLaunchRuntime(failingLaunch: 2)
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(snapshot: snapshot),
+            terminalRuntime: runtime,
+            defaultShell: { "/bin/zsh" }
+        )
+
+        await #expect(throws: FailingNthLaunchRuntime.Failure.launchFailed) {
+            try await workbench.restoreFromRepository()
+        }
+
+        #expect(await runtime.stoppedPaneIDs.contains(firstPaneID))
+    }
+
+    @Test("archiving during recovery fallback cannot relaunch a hidden shell")
+    func archiveCancelsRecoveryFallback() async throws {
+        let fixture = recoveryFixture()
+        let runtime = SuspendedStopTerminalRuntime()
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(snapshot: fixture.snapshot),
+            terminalRuntime: runtime,
+            agentResumeCommands: FixedAgentResumeCommands(),
+            defaultShell: { "/bin/zsh" }
+        )
+        try await workbench.restoreFromRepository()
+
+        await runtime.emitProcessExit(fixture.paneID)
+        for _ in 0..<1_000 {
+            if await runtime.stopCallCount > 0 { break }
+            await Task.yield()
+        }
+        async let archive: Void = workbench.archiveWorkSession(fixture.sessionID)
+        for _ in 0..<1_000 {
+            if await workbench.snapshot().archivedWorkSessions.count == 1 { break }
+            await Task.yield()
+        }
+        await runtime.allowStops()
+        try await archive
+        for _ in 0..<1_000 { await Task.yield() }
+
+        #expect(await runtime.launches.map(\.executable) == ["/usr/local/bin/codex"])
+        #expect(await workbench.snapshot().archivedWorkSessions.map(\.id) == [fixture.sessionID])
+    }
+
+    @Test("a fallback save failure stops the replacement shell")
+    func fallbackSaveFailureStopsShell() async throws {
+        let fixture = recoveryFixture()
+        let repository = FailingSaveRepository(
+            failingSaveNumbers: [1],
+            snapshot: fixture.snapshot
+        )
+        let runtime = ProcessExitTerminalRuntime()
+        let workbench = Workbench(
+            repository: repository,
+            terminalRuntime: runtime,
+            agentResumeCommands: FixedAgentResumeCommands(),
+            defaultShell: { "/bin/zsh" }
+        )
+        try await workbench.restoreFromRepository()
+
+        await runtime.emitProcessExit(fixture.paneID)
+        for _ in 0..<1_000 {
+            if await runtime.stoppedPaneIDs.count >= 2 { break }
+            await Task.yield()
+        }
+
+        #expect(await runtime.launches.map(\.executable) == ["/usr/local/bin/codex", "/bin/zsh"])
+        #expect(await runtime.stoppedPaneIDs.count >= 2)
+    }
+
+    @Test("a cleanly ended Agent restores as an empty shell")
+    func endedAgentRestoresAsShell() async throws {
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let paneID = TerminalPaneID(rawValue: UUID())
+        let snapshot = WorkbenchSnapshot(
+            workspaces: [Workspace(id: workspaceID, path: "/tmp/project", displayName: "project")],
+            workSessions: [
+                WorkSession(
+                    id: sessionID,
+                    workspaceID: workspaceID,
+                    title: "Ended Agent",
+                    pane: TerminalPane(
+                        id: paneID,
+                        agentBinding: AgentBinding(
+                            agent: .codex,
+                            sessionID: "ended-thread",
+                            isActive: false
+                        )
+                    )
+                ),
+            ],
+            selectedWorkSessionID: sessionID
+        )
+        let runtime = RecordingTerminalRuntime()
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(snapshot: snapshot),
+            terminalRuntime: runtime,
+            agentResumeCommands: FixedAgentResumeCommands(),
+            defaultShell: { "/bin/zsh" }
+        )
+
+        try await workbench.restoreFromRepository()
+
+        #expect(await runtime.launches.map(\.executable) == ["/bin/zsh"])
+    }
+
+    @Test("a failed session save rolls back metadata and stops the untracked terminal")
+    func failedSessionSaveCompensatesLaunch() async throws {
+        let repository = FailingSaveRepository(failingSaveNumbers: [2])
+        let runtime = RecordingTerminalRuntime()
+        let workbench = Workbench(
+            repository: repository,
+            terminalRuntime: runtime,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/project", isDirectory: true)
+        )
+
+        await #expect(throws: TestPersistenceError.saveFailed) {
+            try await workbench.createWorkSession(in: workspaceID)
+        }
+
+        #expect(await workbench.snapshot().workSessions.isEmpty)
+        let launchedPaneID = try #require(await runtime.launches.first?.paneID)
+        #expect(await runtime.stoppedPaneIDs == [launchedPaneID])
+    }
+
+    @Test("a failed workspace removal save retains metadata and running terminals")
+    func failedWorkspaceRemovalRollsBack() async throws {
+        let repository = FailingSaveRepository(failingSaveNumbers: [3])
+        let runtime = RecordingTerminalRuntime()
+        let workbench = Workbench(
+            repository: repository,
+            terminalRuntime: runtime,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/project", isDirectory: true)
+        )
+        let sessionID = try await workbench.createWorkSession(in: workspaceID)
+
+        await #expect(throws: TestPersistenceError.saveFailed) {
+            try await workbench.removeWorkspace(workspaceID)
+        }
+
+        let snapshot = await workbench.snapshot()
+        #expect(snapshot.workspaces.map(\.id) == [workspaceID])
+        #expect(snapshot.workSessions.map(\.id) == [sessionID])
+        #expect(await runtime.stoppedPaneIDs.isEmpty)
     }
 }
 
@@ -618,6 +1023,36 @@ private actor InMemoryWorkbenchRepository: WorkbenchRepository {
     }
 }
 
+private enum TestPersistenceError: Error {
+    case saveFailed
+}
+
+private actor FailingSaveRepository: WorkbenchRepository {
+    private let failingSaveNumbers: Set<Int>
+    private var saveCount = 0
+    private var snapshot: WorkbenchSnapshot
+
+    init(
+        failingSaveNumbers: Set<Int>,
+        snapshot: WorkbenchSnapshot = .empty
+    ) {
+        self.failingSaveNumbers = failingSaveNumbers
+        self.snapshot = snapshot
+    }
+
+    func load() async throws -> WorkbenchSnapshot {
+        snapshot
+    }
+
+    func save(_ snapshot: WorkbenchSnapshot) async throws {
+        saveCount += 1
+        guard !failingSaveNumbers.contains(saveCount) else {
+            throw TestPersistenceError.saveFailed
+        }
+        self.snapshot = snapshot
+    }
+}
+
 private actor RecordingTerminalRuntime: TerminalRuntime {
     private let effects: EffectLog?
     private(set) var launches: [TerminalLaunch] = []
@@ -635,6 +1070,143 @@ private actor RecordingTerminalRuntime: TerminalRuntime {
         stoppedPaneIDs.append(paneID)
         await effects?.append(.stopped(paneID))
     }
+}
+
+private actor ProcessExitTerminalRuntime: TerminalRuntime {
+    private(set) var launches: [TerminalLaunch] = []
+    private(set) var stoppedPaneIDs: [TerminalPaneID] = []
+    private var processExitHandler: (@Sendable (TerminalPaneID) -> Void)?
+
+    func launch(_ request: TerminalLaunch) async throws {
+        launches.append(request)
+    }
+
+    func stop(paneID: TerminalPaneID) async {
+        stoppedPaneIDs.append(paneID)
+    }
+
+    func setProcessExitHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) -> Void
+    ) async {
+        processExitHandler = handler
+    }
+
+    func emitProcessExit(_ paneID: TerminalPaneID) {
+        processExitHandler?(paneID)
+    }
+}
+
+private actor ImmediateExitTerminalRuntime: TerminalRuntime {
+    private let agentExecutable: String
+    private(set) var launches: [TerminalLaunch] = []
+    private var processExitHandler: (@Sendable (TerminalPaneID) -> Void)?
+
+    init(agentExecutable: String) {
+        self.agentExecutable = agentExecutable
+    }
+
+    func launch(_ request: TerminalLaunch) async throws {
+        launches.append(request)
+        if request.executable == agentExecutable {
+            processExitHandler?(request.paneID)
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    func stop(paneID: TerminalPaneID) async {}
+
+    func setProcessExitHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) -> Void
+    ) async {
+        processExitHandler = handler
+    }
+}
+
+private actor FailingNthLaunchRuntime: TerminalRuntime {
+    enum Failure: Error {
+        case launchFailed
+    }
+
+    private let failingLaunch: Int
+    private var launchCount = 0
+    private(set) var stoppedPaneIDs: [TerminalPaneID] = []
+
+    init(failingLaunch: Int) {
+        self.failingLaunch = failingLaunch
+    }
+
+    func launch(_ request: TerminalLaunch) async throws {
+        launchCount += 1
+        if launchCount == failingLaunch { throw Failure.launchFailed }
+    }
+
+    func stop(paneID: TerminalPaneID) async {
+        stoppedPaneIDs.append(paneID)
+    }
+}
+
+private actor SuspendedStopTerminalRuntime: TerminalRuntime {
+    private(set) var launches: [TerminalLaunch] = []
+    private(set) var stopCallCount = 0
+    private var stopsAllowed = false
+    private var processExitHandler: (@Sendable (TerminalPaneID) -> Void)?
+
+    func launch(_ request: TerminalLaunch) async throws {
+        launches.append(request)
+    }
+
+    func stop(paneID: TerminalPaneID) async {
+        stopCallCount += 1
+        while !stopsAllowed { await Task.yield() }
+    }
+
+    func setProcessExitHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) -> Void
+    ) async {
+        processExitHandler = handler
+    }
+
+    func emitProcessExit(_ paneID: TerminalPaneID) {
+        processExitHandler?(paneID)
+    }
+
+    func allowStops() {
+        stopsAllowed = true
+    }
+}
+
+private func recoveryFixture() -> (
+    snapshot: WorkbenchSnapshot,
+    sessionID: WorkSessionID,
+    paneID: TerminalPaneID
+) {
+    let workspaceID = WorkspaceID(rawValue: UUID())
+    let sessionID = WorkSessionID(rawValue: UUID())
+    let paneID = TerminalPaneID(rawValue: UUID())
+    return (
+        WorkbenchSnapshot(
+            workspaces: [Workspace(id: workspaceID, path: "/tmp/project", displayName: "project")],
+            workSessions: [
+                WorkSession(
+                    id: sessionID,
+                    workspaceID: workspaceID,
+                    title: "Agent work",
+                    pane: TerminalPane(
+                        id: paneID,
+                        state: .running,
+                        agentBinding: AgentBinding(
+                            agent: .codex,
+                            sessionID: "thread",
+                            isActive: true
+                        )
+                    )
+                ),
+            ],
+            selectedWorkSessionID: sessionID
+        ),
+        sessionID,
+        paneID
+    )
 }
 
 private actor FailingAgentResumeRuntime: TerminalRuntime {
@@ -668,5 +1240,13 @@ private actor EffectLog {
 
     func clear() {
         values.removeAll()
+    }
+}
+
+private actor ChangeRecorder {
+    private(set) var count = 0
+
+    func record() {
+        count += 1
     }
 }

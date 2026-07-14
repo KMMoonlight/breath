@@ -12,6 +12,7 @@ struct AgentHookCommandTests {
         let workspaceID = WorkspaceID(rawValue: UUID())
         let workSessionID = WorkSessionID(rawValue: UUID())
         let paneID = TerminalPaneID(rawValue: UUID())
+        let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
         let command = AgentHookCommand(
             factory: AgentHookEventFactory(now: { Date(timeIntervalSince1970: 3) }),
             sender: sender
@@ -21,6 +22,7 @@ struct AgentHookCommandTests {
         let result = command.run(
             arguments: ["Breath", "--agent-hook", "codex", "turnStarted"],
             environment: [
+                "BREATH_APPLICATION_INSTANCE_ID": applicationInstanceID.rawValue.uuidString,
                 "BREATH_WORKSPACE_ID": workspaceID.rawValue.uuidString,
                 "BREATH_WORK_SESSION_ID": workSessionID.rawValue.uuidString,
                 "BREATH_TERMINAL_PANE_ID": paneID.rawValue.uuidString,

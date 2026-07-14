@@ -86,9 +86,11 @@ struct SQLiteWorkbenchRepositoryTests {
             .appendingPathComponent("breath-project-\(UUID().uuidString)", isDirectory: true)
         let repository = try SQLiteWorkbenchRepository(databaseURL: databaseURL)
         let runtime = PrivacyTerminalRuntime()
+        let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
         let workbench = Workbench(
             repository: repository,
             terminalRuntime: runtime,
+            applicationInstanceID: applicationInstanceID,
             defaultShell: { "/bin/zsh" }
         )
         let workspaceID = try await workbench.addWorkspace(at: workspaceURL)
@@ -112,9 +114,10 @@ struct SQLiteWorkbenchRepositoryTests {
         let event = try #require(
             try AgentHookEventFactory().makeEvent(
                 agent: .claudeCode,
-                lifecycle: .turnCompleted,
+                lifecycle: .turnStarted,
                 rawPayload: rawPayload,
                 environment: [
+                    "BREATH_APPLICATION_INSTANCE_ID": applicationInstanceID.rawValue.uuidString,
                     "BREATH_WORKSPACE_ID": workspaceID.rawValue.uuidString,
                     "BREATH_WORK_SESSION_ID": workSessionID.rawValue.uuidString,
                     "BREATH_TERMINAL_PANE_ID": paneID.rawValue.uuidString,

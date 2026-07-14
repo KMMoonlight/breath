@@ -10,6 +10,7 @@ final class BreathApplicationModel: ObservableObject {
     @Published private(set) var snapshot: WorkbenchSnapshot = .empty
     @Published var settings: SettingsSnapshot = .default
     @Published private(set) var enabledAgents: Set<AgentKind> = []
+    @Published private(set) var isReady = false
     @Published var lastError: String?
 
     let terminalEngine: GhosttyTerminalEngine
@@ -20,10 +21,13 @@ final class BreathApplicationModel: ObservableObject {
     private let workbench: Workbench
     private let eventServer: UnixAgentEventServer
     private let eventSink: AgentEventSink
+    private let snapshotRefreshSink = SnapshotRefreshSink()
     private let userHookInstaller = UserHookIntegrationInstaller()
     private let scriptInstaller = ScriptIntegrationInstaller()
     private let homeDirectory: URL
     private var started = false
+    private var startupSucceeded = false
+    private var startupTask: Task<Void, Never>?
 
     static func makeDefault() -> BreathApplicationModel {
         do {
@@ -43,6 +47,7 @@ final class BreathApplicationModel: ObservableObject {
             attributes: [.posixPermissions: 0o700]
         )
         let socketURL = supportDirectory.appendingPathComponent("agent-events.sock")
+        let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
         repository = try SQLiteWorkbenchRepository(
             databaseURL: supportDirectory.appendingPathComponent("breath.sqlite")
         )
@@ -55,6 +60,7 @@ final class BreathApplicationModel: ObservableObject {
             repository: repository,
             terminalRuntime: runtime,
             agentResumeCommands: BuiltInAgentResumeCommands(),
+            applicationInstanceID: applicationInstanceID,
             defaultShell: {
                 ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
             },
@@ -81,6 +87,11 @@ final class BreathApplicationModel: ObservableObject {
                 }
             }
         }
+        snapshotRefreshSink.handler = { [weak self] in
+            Task { @MainActor [weak self] in
+                await self?.refreshSnapshot()
+            }
+        }
     }
 
     func start() {
@@ -92,12 +103,18 @@ final class BreathApplicationModel: ObservableObject {
             lastError = "Agent 事件服务启动失败：\(error.localizedDescription)"
         }
         refreshEnabledAgents()
-        Task {
+        startupTask = Task { [weak self] in
+            guard let self else { return }
+            defer { isReady = true }
             do {
+                await workbench.setSnapshotChangeHandler { [snapshotRefreshSink] in
+                    snapshotRefreshSink.receive()
+                }
                 settings = try await repository.loadSettings()
                 await runtime.apply(settings: settings.terminal)
                 try await workbench.restoreFromRepository()
                 await refreshSnapshot()
+                startupSucceeded = true
             } catch {
                 lastError = error.localizedDescription
             }
@@ -218,6 +235,12 @@ final class BreathApplicationModel: ObservableObject {
     }
 
     func prepareForTermination() async -> Bool {
+        if !started { start() }
+        await startupTask?.value
+        guard startupSucceeded else {
+            await workbench.stopAllTerminalsWithoutSaving()
+            return true
+        }
         do {
             try await workbench.prepareForCleanExit()
             return true
@@ -238,6 +261,11 @@ final class BreathApplicationModel: ObservableObject {
     private func perform(
         _ operation: @escaping @MainActor () async throws -> Void
     ) {
+        guard isReady else { return }
+        guard startupSucceeded else {
+            lastError = "启动恢复未完成。请退出 Breath 后重试；现有会话数据不会被覆盖。"
+            return
+        }
         Task { @MainActor in
             do {
                 try await operation()
@@ -292,5 +320,17 @@ private final class AgentEventSink: @unchecked Sendable {
         let handler = self.handler
         lock.unlock()
         handler?(event)
+    }
+}
+
+private final class SnapshotRefreshSink: @unchecked Sendable {
+    private let lock = NSLock()
+    var handler: (@Sendable () -> Void)?
+
+    func receive() {
+        lock.lock()
+        let handler = self.handler
+        lock.unlock()
+        handler?()
     }
 }

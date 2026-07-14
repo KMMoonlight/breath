@@ -14,7 +14,11 @@ public struct AgentHookEventFactory: Sendable {
         rawPayload: Data,
         environment: [String: String]
     ) throws -> AgentEvent? {
-        guard let workspaceID = identifier(
+        guard let applicationInstanceID = identifier(
+            ApplicationInstanceID.init(rawValue:),
+            value: environment["BREATH_APPLICATION_INSTANCE_ID"]
+        ),
+            let workspaceID = identifier(
             WorkspaceID.init(rawValue:),
             value: environment["BREATH_WORKSPACE_ID"]
         ),
@@ -32,6 +36,7 @@ public struct AgentHookEventFactory: Sendable {
 
         let metadata = try metadata(from: rawPayload)
         return AgentEvent(
+            applicationInstanceID: applicationInstanceID,
             agent: agent,
             version: environment["BREATH_AGENT_VERSION"],
             lifecycle: lifecycle,

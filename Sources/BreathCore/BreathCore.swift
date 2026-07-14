@@ -1,5 +1,13 @@
 import Foundation
 
+public struct ApplicationInstanceID: RawRepresentable, Hashable, Codable, Sendable {
+    public let rawValue: UUID
+
+    public init(rawValue: UUID) {
+        self.rawValue = rawValue
+    }
+}
+
 public struct WorkspaceID: RawRepresentable, Hashable, Codable, Sendable {
     public let rawValue: UUID
 
@@ -60,6 +68,7 @@ public enum AgentLifecycle: String, Equatable, Codable, Sendable {
     case needsAttention
     case turnCompleted
     case sessionEnded
+    case metadataUpdated
 }
 
 public struct AgentBinding: Equatable, Codable, Sendable {
@@ -67,21 +76,28 @@ public struct AgentBinding: Equatable, Codable, Sendable {
     public var version: String?
     public var sessionID: String?
     public var nativeTitle: String?
+    public var isActive: Bool?
+    public var lastEventAt: Date?
 
     public init(
         agent: AgentKind,
         version: String? = nil,
         sessionID: String? = nil,
-        nativeTitle: String? = nil
+        nativeTitle: String? = nil,
+        isActive: Bool? = nil,
+        lastEventAt: Date? = nil
     ) {
         self.agent = agent
         self.version = version
         self.sessionID = sessionID
         self.nativeTitle = nativeTitle
+        self.isActive = isActive
+        self.lastEventAt = lastEventAt
     }
 }
 
 public struct AgentEvent: Equatable, Codable, Sendable {
+    public let applicationInstanceID: ApplicationInstanceID
     public let agent: AgentKind
     public let version: String?
     public let lifecycle: AgentLifecycle
@@ -94,6 +110,7 @@ public struct AgentEvent: Equatable, Codable, Sendable {
     public let workingDirectory: String
 
     public init(
+        applicationInstanceID: ApplicationInstanceID,
         agent: AgentKind,
         version: String? = nil,
         lifecycle: AgentLifecycle,
@@ -105,6 +122,7 @@ public struct AgentEvent: Equatable, Codable, Sendable {
         nativeTitle: String? = nil,
         workingDirectory: String
     ) {
+        self.applicationInstanceID = applicationInstanceID
         self.agent = agent
         self.version = version
         self.lifecycle = lifecycle
@@ -459,6 +477,15 @@ public protocol WorkbenchRepository: Sendable {
 public protocol TerminalRuntime: Sendable {
     func launch(_ request: TerminalLaunch) async throws
     func stop(paneID: TerminalPaneID) async
+    func setProcessExitHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) -> Void
+    ) async
+}
+
+public extension TerminalRuntime {
+    func setProcessExitHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) -> Void
+    ) async {}
 }
 
 public struct AgentResumeCommand: Equatable, Sendable {
@@ -487,8 +514,15 @@ public enum WorkbenchError: Error, Equatable {
 }
 
 public actor Workbench {
+    private struct RecoveryFallback: Sendable {
+        let token: UUID
+        let workSessionID: WorkSessionID
+        let shellLaunch: TerminalLaunch
+    }
+
     private let repository: any WorkbenchRepository
     private let terminalRuntime: any TerminalRuntime
+    private let applicationInstanceID: ApplicationInstanceID
     private let agentResumeCommands: (any AgentResumeCommandProviding)?
     private let defaultShell: @Sendable () -> String
     private let workspaceAvailable: @Sendable (String) -> Bool
@@ -496,11 +530,15 @@ public actor Workbench {
     private let timeZone: TimeZone
     private var currentSnapshot: WorkbenchSnapshot
     private var materializedWorkSessionIDs: Set<WorkSessionID>
+    private var recoveryFallbacks: [TerminalPaneID: RecoveryFallback]
+    private var monitorsProcessExits = false
+    private var snapshotChangeHandler: (@Sendable () -> Void)?
 
     public init(
         repository: any WorkbenchRepository,
         terminalRuntime: any TerminalRuntime,
         agentResumeCommands: (any AgentResumeCommandProviding)? = nil,
+        applicationInstanceID: ApplicationInstanceID = ApplicationInstanceID(rawValue: UUID()),
         defaultShell: @escaping @Sendable () -> String,
         workspaceAvailable: @escaping @Sendable (String) -> Bool = { _ in true },
         now: @escaping @Sendable () -> Date = Date.init,
@@ -509,18 +547,24 @@ public actor Workbench {
         self.repository = repository
         self.terminalRuntime = terminalRuntime
         self.agentResumeCommands = agentResumeCommands
+        self.applicationInstanceID = applicationInstanceID
         self.defaultShell = defaultShell
         self.workspaceAvailable = workspaceAvailable
         self.now = now
         self.timeZone = timeZone
         currentSnapshot = .empty
         materializedWorkSessionIDs = []
+        recoveryFallbacks = [:]
     }
 
     @discardableResult
     public func addWorkspace(at url: URL) async throws -> WorkspaceID {
-        let normalizedURL = url.standardizedFileURL
-        guard !currentSnapshot.workspaces.contains(where: { $0.path == normalizedURL.path }) else {
+        let previousSnapshot = currentSnapshot
+        let normalizedURL = canonicalWorkspaceURL(url)
+        let comparisonKey = workspaceComparisonKey(normalizedURL)
+        guard !currentSnapshot.workspaces.contains(where: {
+            workspaceComparisonKey(URL(fileURLWithPath: $0.path, isDirectory: true)) == comparisonKey
+        }) else {
             throw WorkbenchError.workspaceAlreadyExists(normalizedURL.path)
         }
         let workspace = Workspace(
@@ -529,7 +573,7 @@ public actor Workbench {
             displayName: normalizedURL.lastPathComponent
         )
         currentSnapshot.workspaces.append(workspace)
-        try await repository.save(currentSnapshot)
+        try await persistSnapshot(rollingBackTo: previousSnapshot)
         return workspace.id
     }
 
@@ -556,17 +600,24 @@ public actor Workbench {
             executable: defaultShell(),
             arguments: ["-l"],
             environment: [
+                "BREATH_APPLICATION_INSTANCE_ID": applicationInstanceID.rawValue.uuidString,
                 "BREATH_WORKSPACE_ID": workspaceID.rawValue.uuidString,
                 "BREATH_WORK_SESSION_ID": workSessionID.rawValue.uuidString,
                 "BREATH_TERMINAL_PANE_ID": paneID.rawValue.uuidString,
             ]
         )
 
+        let previousSnapshot = currentSnapshot
         try await terminalRuntime.launch(launch)
         currentSnapshot.workSessions.append(workSession)
         currentSnapshot.selectedWorkSessionID = workSessionID
+        do {
+            try await persistSnapshot(rollingBackTo: previousSnapshot)
+        } catch {
+            await terminalRuntime.stop(paneID: paneID)
+            throw error
+        }
         materializedWorkSessionIDs.insert(workSessionID)
-        try await repository.save(currentSnapshot)
         return workSessionID
     }
 
@@ -574,7 +625,14 @@ public actor Workbench {
         currentSnapshot
     }
 
+    public func setSnapshotChangeHandler(
+        _ handler: @escaping @Sendable () -> Void
+    ) {
+        snapshotChangeHandler = handler
+    }
+
     public func selectWorkSession(_ workSessionID: WorkSessionID) async throws {
+        let previousSelection = currentSnapshot.selectedWorkSessionID
         guard currentSnapshot.workSessions.contains(where: {
             $0.id == workSessionID && $0.archivedAt == nil
         }) else {
@@ -584,7 +642,12 @@ public actor Workbench {
             try await materializeWorkSession(workSessionID)
         }
         currentSnapshot.selectedWorkSessionID = workSessionID
-        try await repository.save(currentSnapshot)
+        do {
+            try await repository.save(currentSnapshot)
+        } catch {
+            currentSnapshot.selectedWorkSessionID = previousSelection
+            throw error
+        }
     }
 
     public func restoreFromRepository() async throws {
@@ -608,11 +671,22 @@ public actor Workbench {
 
     public func prepareForCleanExit() async throws {
         try await repository.save(currentSnapshot)
+        recoveryFallbacks.removeAll()
         for workSession in currentSnapshot.workSessions {
             for paneID in workSession.layout.paneIDs {
                 await terminalRuntime.stop(paneID: paneID)
             }
         }
+    }
+
+    public func stopAllTerminalsWithoutSaving() async {
+        recoveryFallbacks.removeAll()
+        for workSession in currentSnapshot.workSessions {
+            for paneID in workSession.layout.paneIDs {
+                await terminalRuntime.stop(paneID: paneID)
+            }
+        }
+        materializedWorkSessionIDs.removeAll()
     }
 
     @discardableResult
@@ -649,15 +723,22 @@ public actor Workbench {
             executable: defaultShell(),
             arguments: ["-l"],
             environment: [
+                "BREATH_APPLICATION_INSTANCE_ID": applicationInstanceID.rawValue.uuidString,
                 "BREATH_WORKSPACE_ID": workspace.id.rawValue.uuidString,
                 "BREATH_WORK_SESSION_ID": workSession.id.rawValue.uuidString,
                 "BREATH_TERMINAL_PANE_ID": newPane.id.rawValue.uuidString,
             ]
         )
 
+        let previousSnapshot = currentSnapshot
         try await terminalRuntime.launch(launch)
         currentSnapshot.workSessions[sessionIndex].layout = layout
-        try await repository.save(currentSnapshot)
+        do {
+            try await persistSnapshot(rollingBackTo: previousSnapshot)
+        } catch {
+            await terminalRuntime.stop(paneID: newPane.id)
+            throw error
+        }
         return newPane.id
     }
 
@@ -675,8 +756,9 @@ public actor Workbench {
         else {
             throw WorkbenchError.terminalPaneNotFound(paneID)
         }
+        let previousSnapshot = currentSnapshot
         currentSnapshot.workSessions[sessionIndex].layout = layout
-        try await repository.save(currentSnapshot)
+        try await persistSnapshot(rollingBackTo: previousSnapshot)
     }
 
     public func resizeSplit(
@@ -695,8 +777,9 @@ public actor Workbench {
         ) else {
             throw WorkbenchError.invalidSplitPath
         }
+        let previousSnapshot = currentSnapshot
         currentSnapshot.workSessions[sessionIndex].layout = layout
-        try await repository.save(currentSnapshot)
+        try await persistSnapshot(rollingBackTo: previousSnapshot)
     }
 
     public func closePane(_ paneID: TerminalPaneID) async throws {
@@ -711,8 +794,10 @@ public actor Workbench {
         guard let layout = currentSnapshot.workSessions[sessionIndex].layout.removingPane(id: paneID) else {
             throw WorkbenchError.terminalPaneNotFound(paneID)
         }
+        let previousSnapshot = currentSnapshot
         currentSnapshot.workSessions[sessionIndex].layout = layout
-        try await repository.save(currentSnapshot)
+        try await persistSnapshot(rollingBackTo: previousSnapshot)
+        recoveryFallbacks.removeValue(forKey: paneID)
         await terminalRuntime.stop(paneID: paneID)
     }
 
@@ -723,12 +808,14 @@ public actor Workbench {
             throw WorkbenchError.workSessionNotFound(workSessionID)
         }
         let paneIDs = currentSnapshot.workSessions[index].layout.paneIDs
+        let previousSnapshot = currentSnapshot
         currentSnapshot.workSessions[index].archivedAt = now()
         if currentSnapshot.selectedWorkSessionID == workSessionID {
             currentSnapshot.selectedWorkSessionID = nil
         }
-        try await repository.save(currentSnapshot)
+        try await persistSnapshot(rollingBackTo: previousSnapshot)
         for paneID in paneIDs {
+            recoveryFallbacks.removeValue(forKey: paneID)
             await terminalRuntime.stop(paneID: paneID)
         }
         materializedWorkSessionIDs.remove(workSessionID)
@@ -740,8 +827,9 @@ public actor Workbench {
         }) else {
             throw WorkbenchError.workSessionNotFound(workSessionID)
         }
+        let previousSnapshot = currentSnapshot
         currentSnapshot.workSessions[index].archivedAt = nil
-        try await repository.save(currentSnapshot)
+        try await persistSnapshot(rollingBackTo: previousSnapshot)
     }
 
     public func deleteArchivedWorkSession(_ workSessionID: WorkSessionID) async throws {
@@ -750,9 +838,10 @@ public actor Workbench {
         }) else {
             throw WorkbenchError.workSessionNotFound(workSessionID)
         }
+        let previousSnapshot = currentSnapshot
         currentSnapshot.workSessions.removeAll { $0.id == workSessionID }
+        try await persistSnapshot(rollingBackTo: previousSnapshot)
         materializedWorkSessionIDs.remove(workSessionID)
-        try await repository.save(currentSnapshot)
     }
 
     public func removeWorkspace(_ workspaceID: WorkspaceID) async throws {
@@ -763,6 +852,7 @@ public actor Workbench {
         let removedSessions = currentSnapshot.workSessions.filter {
             $0.workspaceID == workspaceID
         }
+        let previousSnapshot = currentSnapshot
         currentSnapshot.workspaces.removeAll { $0.id == workspaceID }
         currentSnapshot.workSessions.removeAll { $0.workspaceID == workspaceID }
         if let selectedID = currentSnapshot.selectedWorkSessionID,
@@ -770,17 +860,21 @@ public actor Workbench {
         {
             currentSnapshot.selectedWorkSessionID = nil
         }
-        try await repository.save(currentSnapshot)
+        try await persistSnapshot(rollingBackTo: previousSnapshot)
 
         for workSession in removedSessions {
             materializedWorkSessionIDs.remove(workSession.id)
             for paneID in workSession.layout.paneIDs {
+                recoveryFallbacks.removeValue(forKey: paneID)
                 await terminalRuntime.stop(paneID: paneID)
             }
         }
     }
 
     public func handleAgentEvent(_ event: AgentEvent) async throws {
+        guard event.applicationInstanceID == applicationInstanceID else {
+            throw WorkbenchError.agentEventTargetMismatch
+        }
         guard let sessionIndex = currentSnapshot.workSessions.firstIndex(where: {
             $0.id == event.workSessionID && $0.workspaceID == event.workspaceID
         }) else {
@@ -788,6 +882,26 @@ public actor Workbench {
         }
 
         let currentLayout = currentSnapshot.workSessions[sessionIndex].layout
+        guard let currentPane = currentLayout.panes.first(where: { $0.id == event.paneID }) else {
+            throw WorkbenchError.agentEventTargetMismatch
+        }
+        if let lastEventAt = currentPane.agentBinding?.lastEventAt,
+           event.occurredAt < lastEventAt
+        {
+            return
+        }
+        if event.lifecycle != .turnStarted {
+            guard let current = currentPane.agentBinding,
+                  current.agent == event.agent,
+                  current.sessionID == nil
+                    || event.sessionID == nil
+                    || current.sessionID == event.sessionID
+            else {
+                return
+            }
+        }
+
+        let previousSnapshot = currentSnapshot
         guard let updatedLayout = currentLayout.updatingPane(id: event.paneID, transform: { pane in
             var binding: AgentBinding
             if let current = pane.agentBinding, current.agent == event.agent {
@@ -804,16 +918,23 @@ public actor Workbench {
             if let nativeTitle = event.nativeTitle, !nativeTitle.isEmpty {
                 binding.nativeTitle = nativeTitle
             }
+            binding.lastEventAt = event.occurredAt
             pane.agentBinding = binding
             switch event.lifecycle {
             case .turnStarted:
                 pane.state = .running
+                pane.agentBinding?.isActive = true
             case .needsAttention:
                 pane.state = .needsAttention
+                pane.agentBinding?.isActive = true
             case .turnCompleted:
                 pane.state = .turnCompleted
+                pane.agentBinding?.isActive = true
             case .sessionEnded:
                 pane.state = .idle
+                pane.agentBinding?.isActive = false
+            case .metadataUpdated:
+                break
             }
         }) else {
             throw WorkbenchError.agentEventTargetMismatch
@@ -827,7 +948,7 @@ public actor Workbench {
             currentSnapshot.workSessions[sessionIndex].title = nativeTitle
             currentSnapshot.workSessions[sessionIndex].titleSource = .agentNative
         }
-        try await repository.save(currentSnapshot)
+        try await persistSnapshot(rollingBackTo: previousSnapshot)
     }
 
     private func placeholderTitle(at date: Date) -> String {
@@ -839,6 +960,7 @@ public actor Workbench {
     }
 
     private func materializeWorkSession(_ workSessionID: WorkSessionID) async throws {
+        await ensureProcessExitMonitoring()
         guard let workSession = currentSnapshot.workSessions.first(where: {
             $0.id == workSessionID
         }) else {
@@ -853,56 +975,102 @@ public actor Workbench {
             throw WorkbenchError.workspaceUnavailable(workspace.id)
         }
 
+        let previousSnapshot = currentSnapshot
         var snapshotChanged = false
-        for pane in workSession.layout.panes {
-            let command = pane.agentBinding.flatMap {
-                agentResumeCommands?.resumeCommand(for: $0)
-            }
-            let environment = [
-                "BREATH_WORKSPACE_ID": workspace.id.rawValue.uuidString,
-                "BREATH_WORK_SESSION_ID": workSession.id.rawValue.uuidString,
-                "BREATH_TERMINAL_PANE_ID": pane.id.rawValue.uuidString,
-            ]
-            let shellLaunch = TerminalLaunch(
-                paneID: pane.id,
-                workingDirectory: workspace.path,
-                executable: defaultShell(),
-                arguments: ["-l"],
-                environment: environment
-            )
+        var latestOwnedSnapshot = currentSnapshot
+        var launchedPaneIDs: [TerminalPaneID] = []
+        do {
+            for pane in workSession.layout.panes {
+                let command: AgentResumeCommand? = pane.agentBinding.flatMap {
+                    guard $0.isActive == true else { return nil }
+                    return agentResumeCommands?.resumeCommand(for: $0)
+                }
+                let environment = [
+                    "BREATH_APPLICATION_INSTANCE_ID": applicationInstanceID.rawValue.uuidString,
+                    "BREATH_WORKSPACE_ID": workspace.id.rawValue.uuidString,
+                    "BREATH_WORK_SESSION_ID": workSession.id.rawValue.uuidString,
+                    "BREATH_TERMINAL_PANE_ID": pane.id.rawValue.uuidString,
+                ]
+                let shellLaunch = TerminalLaunch(
+                    paneID: pane.id,
+                    workingDirectory: workspace.path,
+                    executable: defaultShell(),
+                    arguments: ["-l"],
+                    environment: environment
+                )
 
-            if let command {
-                do {
-                    try await terminalRuntime.launch(
-                        TerminalLaunch(
-                            paneID: pane.id,
-                            workingDirectory: workspace.path,
-                            executable: command.executable,
-                            arguments: command.arguments,
-                            environment: environment
-                        )
+                if let command {
+                    let fallback = RecoveryFallback(
+                        token: UUID(),
+                        workSessionID: workSessionID,
+                        shellLaunch: shellLaunch
                     )
-                } catch {
-                    await terminalRuntime.stop(paneID: pane.id)
+                    recoveryFallbacks[pane.id] = fallback
+                    do {
+                        try await terminalRuntime.launch(
+                            TerminalLaunch(
+                                paneID: pane.id,
+                                workingDirectory: workspace.path,
+                                executable: command.executable,
+                                arguments: command.arguments,
+                                environment: environment
+                            )
+                        )
+                        launchedPaneIDs.append(pane.id)
+                    } catch {
+                        removeRecoveryFallback(pane.id, token: fallback.token)
+                        await terminalRuntime.stop(paneID: pane.id)
+                        try await terminalRuntime.launch(shellLaunch)
+                        launchedPaneIDs.append(pane.id)
+                        snapshotChanged = markPaneIdle(
+                            pane.id,
+                            in: workSessionID
+                        ) || snapshotChanged
+                        latestOwnedSnapshot = currentSnapshot
+                    }
+                } else {
                     try await terminalRuntime.launch(shellLaunch)
-                    snapshotChanged = markPaneIdle(
-                        pane.id,
-                        in: workSessionID
-                    ) || snapshotChanged
-                }
-            } else {
-                try await terminalRuntime.launch(shellLaunch)
-                if pane.agentBinding != nil || pane.state != .idle {
-                    snapshotChanged = markPaneIdle(
-                        pane.id,
-                        in: workSessionID
-                    ) || snapshotChanged
+                    launchedPaneIDs.append(pane.id)
+                    if pane.agentBinding != nil || pane.state != .idle {
+                        snapshotChanged = markPaneIdle(
+                            pane.id,
+                            in: workSessionID
+                        ) || snapshotChanged
+                        latestOwnedSnapshot = currentSnapshot
+                    }
                 }
             }
+            if snapshotChanged {
+                try await persistSnapshot(rollingBackTo: previousSnapshot)
+            }
+            materializedWorkSessionIDs.insert(workSessionID)
+        } catch {
+            for paneID in workSession.layout.paneIDs {
+                recoveryFallbacks.removeValue(forKey: paneID)
+            }
+            for paneID in Set(launchedPaneIDs) {
+                await terminalRuntime.stop(paneID: paneID)
+            }
+            if currentSnapshot == latestOwnedSnapshot,
+               currentSnapshot != previousSnapshot
+            {
+                currentSnapshot = previousSnapshot
+            }
+            throw error
         }
-        materializedWorkSessionIDs.insert(workSessionID)
-        if snapshotChanged {
-            try await repository.save(currentSnapshot)
+    }
+
+    private func persistSnapshot(
+        rollingBackTo previousSnapshot: WorkbenchSnapshot
+    ) async throws {
+        let attemptedSnapshot = currentSnapshot
+        do {
+            try await repository.save(attemptedSnapshot)
+        } catch {
+            if currentSnapshot == attemptedSnapshot {
+                currentSnapshot = previousSnapshot
+            }
+            throw error
         }
     }
 
@@ -915,12 +1083,83 @@ public actor Workbench {
         }),
             let layout = currentSnapshot.workSessions[sessionIndex].layout.updatingPane(
                 id: paneID,
-                transform: { $0.state = .idle }
+                transform: {
+                    $0.state = .idle
+                    $0.agentBinding?.isActive = false
+                }
             )
         else {
             return false
         }
         currentSnapshot.workSessions[sessionIndex].layout = layout
         return true
+    }
+
+    private func canonicalWorkspaceURL(_ url: URL) -> URL {
+        url.standardizedFileURL.resolvingSymlinksInPath().standardizedFileURL
+    }
+
+    private func workspaceComparisonKey(_ url: URL) -> String {
+        let canonical = canonicalWorkspaceURL(url)
+        let isCaseSensitive = (try? canonical.resourceValues(
+            forKeys: [.volumeSupportsCaseSensitiveNamesKey]
+        ).volumeSupportsCaseSensitiveNames) ?? true
+        return isCaseSensitive ? canonical.path : canonical.path.lowercased()
+    }
+
+    private func ensureProcessExitMonitoring() async {
+        guard !monitorsProcessExits else { return }
+        monitorsProcessExits = true
+        await terminalRuntime.setProcessExitHandler { [weak self] paneID in
+            Task { await self?.handleTerminalProcessExit(paneID) }
+        }
+    }
+
+    private func handleTerminalProcessExit(_ paneID: TerminalPaneID) async {
+        guard let fallback = recoveryFallbacks[paneID],
+              isActivePane(paneID, in: fallback.workSessionID)
+        else { return }
+        await terminalRuntime.stop(paneID: paneID)
+        guard recoveryFallbacks[paneID]?.token == fallback.token,
+              isActivePane(paneID, in: fallback.workSessionID)
+        else { return }
+        do {
+            try await terminalRuntime.launch(fallback.shellLaunch)
+            guard recoveryFallbacks[paneID]?.token == fallback.token,
+                  isActivePane(paneID, in: fallback.workSessionID)
+            else {
+                await terminalRuntime.stop(paneID: paneID)
+                return
+            }
+            let previousSnapshot = currentSnapshot
+            guard markPaneIdle(paneID, in: fallback.workSessionID) else {
+                await terminalRuntime.stop(paneID: paneID)
+                return
+            }
+            try await persistSnapshot(rollingBackTo: previousSnapshot)
+            removeRecoveryFallback(paneID, token: fallback.token)
+            snapshotChangeHandler?()
+        } catch {
+            await terminalRuntime.stop(paneID: paneID)
+            removeRecoveryFallback(paneID, token: fallback.token)
+            materializedWorkSessionIDs.remove(fallback.workSessionID)
+            snapshotChangeHandler?()
+        }
+    }
+
+    private func removeRecoveryFallback(_ paneID: TerminalPaneID, token: UUID) {
+        guard recoveryFallbacks[paneID]?.token == token else { return }
+        recoveryFallbacks.removeValue(forKey: paneID)
+    }
+
+    private func isActivePane(
+        _ paneID: TerminalPaneID,
+        in workSessionID: WorkSessionID
+    ) -> Bool {
+        currentSnapshot.workSessions.contains {
+            $0.id == workSessionID
+                && $0.archivedAt == nil
+                && $0.layout.paneIDs.contains(paneID)
+        }
     }
 }

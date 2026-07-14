@@ -46,9 +46,43 @@ struct AgentAdapterRegistryTests {
         }
     }
 
+    @Test("Gemini and OpenCode map their official lifecycle events")
+    func officialLifecycleMappings() throws {
+        let gemini = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .geminiCLI }
+        )
+        #expect(gemini.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "Notification", lifecycle: .needsAttention)
+        ))
+        #expect(gemini.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "SessionEnd", lifecycle: .sessionEnded)
+        ))
+
+        let openCode = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .openCode }
+        )
+        #expect(openCode.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "session.status", lifecycle: .turnStarted)
+        ))
+        #expect(openCode.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "session.updated", lifecycle: .metadataUpdated)
+        ))
+        #expect(!openCode.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "session.updated", lifecycle: .turnStarted)
+        ))
+
+        let cursor = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .cursorAgent }
+        )
+        #expect(cursor.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "sessionEnd", lifecycle: .sessionEnded)
+        ))
+    }
+
     @Test("agent event decoding rejects conversation content fields")
     func strictEventPayload() throws {
         let event = AgentEvent(
+            applicationInstanceID: ApplicationInstanceID(rawValue: UUID()),
             agent: .claudeCode,
             version: "2.1.7",
             lifecycle: .turnStarted,
@@ -138,6 +172,26 @@ struct AgentAdapterRegistryTests {
         let hooks = try #require(object["hooks"] as? [String: Any])
         #expect((hooks["Stop"] as? [Any])?.count == 1)
         #expect(hooks["UserPromptSubmit"] == nil)
+    }
+
+    @Test("uninstall removes only Breath's nested hook handler")
+    func uninstallPreservesSharedMatcherHandlers() throws {
+        let source = Data(
+            """
+            {"hooks":{"Stop":[{"matcher":"","hooks":[
+              {"type":"command","name":"Breath","command":"'/Applications/Breath.app/Contents/MacOS/Breath' --agent-hook claudeCode turnCompleted"},
+              {"type":"command","name":"User Tool","command":"user-tool"}
+            ]}]}}
+            """.utf8
+        )
+
+        let result = try JSONHookConfigurationEditor().uninstall(from: source)
+        let root = try #require(JSONSerialization.jsonObject(with: result) as? [String: Any])
+        let hooks = try #require(root["hooks"] as? [String: Any])
+        let entries = try #require(hooks["Stop"] as? [[String: Any]])
+        let handlers = try #require(entries.first?["hooks"] as? [[String: Any]])
+        #expect(handlers.count == 1)
+        #expect(handlers.first?["command"] as? String == "user-tool")
     }
 
     @Test("Copilot personal hooks use its versioned flat command schema")
@@ -290,6 +344,7 @@ struct AgentAdapterRegistryTests {
         let workspaceID = WorkspaceID(rawValue: UUID())
         let workSessionID = WorkSessionID(rawValue: UUID())
         let paneID = TerminalPaneID(rawValue: UUID())
+        let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
         let factory = AgentHookEventFactory(now: { Date(timeIntervalSince1970: 42) })
 
         let event = try #require(
@@ -298,6 +353,7 @@ struct AgentAdapterRegistryTests {
                 lifecycle: .turnStarted,
                 rawPayload: raw,
                 environment: [
+                    "BREATH_APPLICATION_INSTANCE_ID": applicationInstanceID.rawValue.uuidString,
                     "BREATH_WORKSPACE_ID": workspaceID.rawValue.uuidString,
                     "BREATH_WORK_SESSION_ID": workSessionID.rawValue.uuidString,
                     "BREATH_TERMINAL_PANE_ID": paneID.rawValue.uuidString,
@@ -306,6 +362,7 @@ struct AgentAdapterRegistryTests {
         )
 
         #expect(event.sessionID == "agent-session-7")
+        #expect(event.applicationInstanceID == applicationInstanceID)
         #expect(event.nativeTitle == "Fix navigation")
         #expect(event.workingDirectory == "/tmp/project")
         let encoded = String(decoding: try JSONEncoder().encode(event), as: UTF8.self)
@@ -406,7 +463,9 @@ struct AgentAdapterRegistryTests {
         let workspaceID = WorkspaceID(rawValue: UUID())
         let workSessionID = WorkSessionID(rawValue: UUID())
         let paneID = TerminalPaneID(rawValue: UUID())
+        let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
         let environment = [
+            "BREATH_APPLICATION_INSTANCE_ID": applicationInstanceID.rawValue.uuidString,
             "BREATH_WORKSPACE_ID": workspaceID.rawValue.uuidString,
             "BREATH_WORK_SESSION_ID": workSessionID.rawValue.uuidString,
             "BREATH_TERMINAL_PANE_ID": paneID.rawValue.uuidString,
@@ -453,6 +512,13 @@ struct AgentAdapterRegistryTests {
             #expect(source.contains("/Applications/Breath.app/Contents/MacOS/Breath"))
             #expect(!source.contains("transcript"))
             #expect(!source.contains("tool_input"))
+            if kind == .pi {
+                #expect(source.contains("getSessionId"))
+                #expect(!source.contains("getSessionFile"))
+            }
+            if kind == .openCode {
+                #expect(source.contains("properties.status?.type !== \"busy\""))
+            }
             let mode = try #require(
                 FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions]
                     as? NSNumber

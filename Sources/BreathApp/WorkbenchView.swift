@@ -18,6 +18,14 @@ struct WorkbenchView: View {
             detail
         }
         .frame(minWidth: 900, minHeight: 600)
+        .disabled(!model.isReady)
+        .overlay {
+            if !model.isReady {
+                ProgressView("正在恢复上次工作区…")
+                    .padding(18)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
         .onAppear {
             model.start()
             offerRemovalForUnavailableWorkspace()
@@ -154,6 +162,9 @@ struct WorkbenchView: View {
                     } label: {
                         HStack(spacing: 7) {
                             StateDot(state: pane.state)
+                            if let agent = pane.agentBinding?.agent {
+                                AgentTypeLabel(agent: agent)
+                            }
                             Image(systemName: "rectangle.split.2x1")
                                 .foregroundStyle(.secondary)
                             Text(pane.agentBinding?.nativeTitle ?? "终端 \(index + 1)")
@@ -178,6 +189,9 @@ struct WorkbenchView: View {
     private func sessionRowContent(_ session: WorkSession, pane: TerminalPane?) -> some View {
         HStack(spacing: 7) {
             if let pane { StateDot(state: pane.state) }
+            if let agent = pane?.agentBinding?.agent {
+                AgentTypeLabel(agent: agent)
+            }
             Button {
                 model.selectWorkSession(session.id)
             } label: {
@@ -453,6 +467,9 @@ private struct TerminalPaneView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 StateDot(state: pane.state)
+                if let agent = pane.agentBinding?.agent {
+                    AgentTypeLabel(agent: agent)
+                }
                 Text(pane.agentBinding?.nativeTitle ?? "终端")
                     .font(.caption)
                     .lineLimit(1)
@@ -489,13 +506,67 @@ private struct TerminalPaneView: View {
     }
 }
 
+private struct AgentTypeLabel: View {
+    let agent: AgentKind
+
+    var body: some View {
+        Text(agent.displayName)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(.quaternary, in: Capsule())
+            .fixedSize()
+    }
+}
+
+private extension AgentKind {
+    var displayName: String {
+        switch self {
+        case .codex: "Codex"
+        case .claudeCode: "Claude"
+        case .geminiCLI: "Gemini"
+        case .githubCopilotCLI: "Copilot"
+        case .qwenCode: "Qwen"
+        case .cursorAgent: "Cursor"
+        case .factoryDroid: "Droid"
+        case .openCode: "OpenCode"
+        case .pi: "Pi"
+        }
+    }
+}
+
 private struct TerminalNativeView: NSViewRepresentable {
     let engine: GhosttyTerminalEngine
     let paneID: TerminalPaneID
 
-    func makeNSView(context: Context) -> NSView {
-        engine.view(for: paneID) ?? NSTextField(labelWithString: "终端正在启动…")
+    func makeNSView(context: Context) -> TerminalHostView {
+        let host = TerminalHostView()
+        host.install(engine.view(for: paneID))
+        return host
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: TerminalHostView, context: Context) {
+        nsView.install(engine.view(for: paneID))
+    }
+}
+
+@MainActor
+private final class TerminalHostView: NSView {
+    private weak var hostedView: NSView?
+
+    func install(_ terminalView: NSView?) {
+        if let terminalView, hostedView === terminalView { return }
+        hostedView?.removeFromSuperview()
+        let view = terminalView ?? NSTextField(labelWithString: "终端正在启动…")
+        hostedView = view
+        view.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: trailingAnchor),
+            view.topAnchor.constraint(equalTo: topAnchor),
+            view.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
 }

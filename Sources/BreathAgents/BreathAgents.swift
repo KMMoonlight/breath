@@ -8,6 +8,7 @@ public enum AgentEventDecodingError: Error, Equatable, Sendable {
 
 public struct StrictAgentEventDecoder: Sendable {
     private static let allowedFields: Set<String> = [
+        "applicationInstanceID",
         "agent",
         "version",
         "lifecycle",
@@ -133,6 +134,8 @@ public struct AgentAdapterRegistry: Sendable {
             hookRegistrations: [
                 AgentHookRegistration(eventName: "BeforeAgent", lifecycle: .turnStarted),
                 AgentHookRegistration(eventName: "AfterAgent", lifecycle: .turnCompleted),
+                AgentHookRegistration(eventName: "Notification", lifecycle: .needsAttention),
+                AgentHookRegistration(eventName: "SessionEnd", lifecycle: .sessionEnded),
             ]
         ),
         AgentAdapterDescriptor(
@@ -166,6 +169,7 @@ public struct AgentAdapterRegistry: Sendable {
                 AgentHookRegistration(eventName: "beforeSubmitPrompt", lifecycle: .turnStarted),
                 AgentHookRegistration(eventName: "afterAgentResponse", lifecycle: .turnCompleted),
                 AgentHookRegistration(eventName: "stop", lifecycle: .turnCompleted),
+                AgentHookRegistration(eventName: "sessionEnd", lifecycle: .sessionEnded),
             ]
         ),
         AgentAdapterDescriptor(
@@ -183,7 +187,8 @@ public struct AgentAdapterRegistry: Sendable {
             integrationMechanism: .plugin,
             userConfigurationPath: "~/.config/opencode/plugins/breath.ts",
             hookRegistrations: [
-                AgentHookRegistration(eventName: "session.updated", lifecycle: .turnStarted),
+                AgentHookRegistration(eventName: "session.status", lifecycle: .turnStarted),
+                AgentHookRegistration(eventName: "session.updated", lifecycle: .metadataUpdated),
                 AgentHookRegistration(eventName: "permission.asked", lifecycle: .needsAttention),
                 AgentHookRegistration(eventName: "session.idle", lifecycle: .turnCompleted),
             ]

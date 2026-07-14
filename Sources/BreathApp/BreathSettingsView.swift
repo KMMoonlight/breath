@@ -98,6 +98,7 @@ struct BreathSettingsView: View {
             .tabItem { Label("已归档", systemImage: "archivebox") }
         }
         .frame(width: 650, height: 440)
+        .disabled(!model.isReady)
         .alert("永久删除归档？", isPresented: deleteAlertPresented, presenting: archiveToDelete) { session in
             Button("取消", role: .cancel) { archiveToDelete = nil }
             Button("永久删除", role: .destructive) {

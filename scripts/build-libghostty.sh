@@ -5,12 +5,30 @@ ROOT="${0:A:h:h}"
 REVISION="55a3e33ab26a23d75b274b23c7f76d837db00578"
 SOURCE_DIR="${ROOT}/.build/libghostty-source"
 VENDOR_DIR="${ROOT}/Vendor"
-ZIG_BIN="${ZIG_BIN:-/opt/homebrew/opt/zig@0.15/bin/zig}"
-METAL_TOOLCHAIN="${METAL_TOOLCHAIN:-com.apple.dt.toolchain.Metal.32023.864}"
+ZIG_BIN="${ZIG_BIN:-$(command -v zig 2>/dev/null || true)}"
+METAL_TOOLCHAIN="${METAL_TOOLCHAIN:-}"
 
 if [[ ! -x "${ZIG_BIN}" ]]; then
   print -u2 "Zig 0.15 is required. Install it with: brew install zig@0.15"
   exit 1
+fi
+if [[ "$("${ZIG_BIN}" version)" != 0.15.* ]]; then
+  print -u2 "Zig 0.15 is required; found $("${ZIG_BIN}" version)"
+  exit 1
+fi
+
+if [[ -z "${METAL_TOOLCHAIN}" ]]; then
+  TOOLCHAIN_INFO=$(find \
+    /var/run/com.apple.security.cryptexd/mnt \
+    /Library/Developer/Toolchains \
+    "${HOME}/Library/Developer/Toolchains" \
+    -path '*/Metal.xctoolchain/ToolchainInfo.plist' \
+    -print -quit 2>/dev/null || true)
+  if [[ -z "${TOOLCHAIN_INFO}" ]]; then
+    print -u2 "Apple Metal Toolchain is required. Run: xcodebuild -downloadComponent MetalToolchain"
+    exit 1
+  fi
+  METAL_TOOLCHAIN=$(/usr/libexec/PlistBuddy -c 'Print :Identifier' "${TOOLCHAIN_INFO}")
 fi
 
 if [[ ! -d "${SOURCE_DIR}/.git" ]]; then
@@ -20,25 +38,27 @@ fi
 git -C "${SOURCE_DIR}" fetch --depth 1 origin "${REVISION}"
 git -C "${SOURCE_DIR}" checkout --detach "${REVISION}"
 
-env \
-  TOOLCHAINS="${METAL_TOOLCHAIN}" \
-  PATH="${ZIG_BIN:h}:/opt/homebrew/bin:/usr/bin:/bin" \
-  ZIG_GLOBAL_CACHE_DIR="${ROOT}/.build/zig-cache" \
-  "${ZIG_BIN}" build \
-  -Demit-lib-vt=false \
-  -Dapp-runtime=none \
-  -Demit-xcframework=true \
-  -Demit-macos-app=false \
-  -Dxcframework-target=universal \
-  -Dsentry=false \
-  -Di18n=false \
-  -Demit-docs=false \
-  -Demit-terminfo=false \
-  -Demit-themes=false \
-  -Doptimize=ReleaseFast
+(
+  cd "${SOURCE_DIR}"
+  env \
+    TOOLCHAINS="${METAL_TOOLCHAIN}" \
+    PATH="${ZIG_BIN:h}:/opt/homebrew/bin:/usr/bin:/bin" \
+    ZIG_GLOBAL_CACHE_DIR="${ROOT}/.build/zig-cache" \
+    "${ZIG_BIN}" build \
+    -Demit-lib-vt=false \
+    -Dapp-runtime=none \
+    -Demit-xcframework=true \
+    -Demit-macos-app=false \
+    -Dxcframework-target=universal \
+    -Dsentry=false \
+    -Di18n=false \
+    -Demit-docs=false \
+    -Demit-terminfo=false \
+    -Demit-themes=false \
+    -Doptimize=ReleaseFast
+)
 
 mkdir -p "${VENDOR_DIR}"
 rm -rf "${VENDOR_DIR}/GhosttyKit.xcframework"
 ditto "${SOURCE_DIR}/macos/GhosttyKit.xcframework" "${VENDOR_DIR}/GhosttyKit.xcframework"
 print "Built GhosttyKit.xcframework from ${REVISION}"
-

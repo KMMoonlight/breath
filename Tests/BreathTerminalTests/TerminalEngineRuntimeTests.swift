@@ -6,6 +6,13 @@ import Testing
 
 @Suite("Terminal engine boundary")
 struct TerminalEngineRuntimeTests {
+    @Test("multiline and control-character pastes require explicit confirmation")
+    func pasteSafety() {
+        #expect(!TerminalPasteSafety.requiresConfirmation("git status"))
+        #expect(TerminalPasteSafety.requiresConfirmation("git status\ngit push"))
+        #expect(TerminalPasteSafety.requiresConfirmation("echo ok\u{001B}"))
+    }
+
     @Test("runtime forwards shell lifecycle and live terminal-only styling")
     func lifecycleAndStyle() async throws {
         let engine = RecordingTerminalEngine()

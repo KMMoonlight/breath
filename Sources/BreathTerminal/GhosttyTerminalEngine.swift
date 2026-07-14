@@ -5,12 +5,31 @@ import Foundation
 #if BREATH_HAS_GHOSTTY && canImport(GhosttyKit)
 import GhosttyKit
 
+@MainActor
+private func requestPasteConfirmation(for value: String, in window: NSWindow?) -> Bool {
+    let alert = NSAlert()
+    alert.messageText = "粘贴多行或控制字符？"
+    alert.informativeText = "这段内容可能一次执行多条命令。请确认内容可信后再粘贴。"
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "粘贴")
+    alert.addButton(withTitle: "取消")
+    if let window {
+        // A synchronous sheet would deadlock the libghostty completion callback;
+        // use the native modal confirmation while keeping the callback on MainActor.
+        window.makeKeyAndOrderFront(nil)
+    }
+    return alert.runModal() == .alertFirstButtonReturn
+}
+
 private func ghosttyRuntimeWakeup(_ userdata: UnsafeMutableRawPointer?) {
     guard let userdata else { return }
-    let address = UInt(bitPattern: userdata)
+    let retainedHost = Unmanaged<GhosttyRuntimeHost>
+        .fromOpaque(userdata)
+        .retain()
+    let address = UInt(bitPattern: retainedHost.toOpaque())
     DispatchQueue.main.async {
         guard let userdata = UnsafeMutableRawPointer(bitPattern: address) else { return }
-        let host = Unmanaged<GhosttyRuntimeHost>.fromOpaque(userdata).takeUnretainedValue()
+        let host = Unmanaged<GhosttyRuntimeHost>.fromOpaque(userdata).takeRetainedValue()
         ghostty_app_tick(host.app)
     }
 }
@@ -29,6 +48,7 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
     private let synchronizeRendering: Bool
     private var settings: TerminalSettings
     private var views: [TerminalPaneID: GhosttySurfaceView] = [:]
+    private var processExitHandler: (@Sendable (TerminalPaneID) -> Void)?
     public let usesLibghostty = true
 
     public init(
@@ -62,11 +82,21 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
             fontSize: Float(settings.fontSize),
             agentSocketURL: agentSocketURL
         )
+        view.processExitHandler = { [weak self, weak view] in
+            guard let self, let view,
+                  self.views[launch.paneID] === view
+            else { return }
+            view.processExitHandler = nil
+            self.views.removeValue(forKey: launch.paneID)
+            view.closeSurface()
+            self.processExitHandler?(launch.paneID)
+        }
         views[launch.paneID] = view
     }
 
     public func close(_ paneID: TerminalPaneID) async {
         guard let view = views.removeValue(forKey: paneID) else { return }
+        view.processExitHandler = nil
         view.closeSurface()
     }
 
@@ -86,6 +116,12 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
 
     public func view(for paneID: TerminalPaneID) -> NSView? {
         views[paneID]
+    }
+
+    public func setProcessExitHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) -> Void
+    ) async {
+        processExitHandler = handler
     }
 
     private static func writeConfiguration(
@@ -274,12 +310,24 @@ private final class GhosttyRuntimeHost {
     ) {
         guard request == GHOSTTY_CLIPBOARD_REQUEST_PASTE,
               let view = view(from: userdata),
-              let surface = view.surface,
+              view.surface != nil,
               let value
         else {
             return
         }
-        ghostty_surface_complete_clipboard_request(surface, value, state, true)
+        let paste = String(cString: value)
+        DispatchQueue.main.async { [weak view] in
+            guard let view, let surface = view.surface else { return }
+            let confirmed = requestPasteConfirmation(for: paste, in: view.window)
+            paste.withCString { pointer in
+                ghostty_surface_complete_clipboard_request(
+                    surface,
+                    pointer,
+                    state,
+                    confirmed
+                )
+            }
+        }
     }
 
     private static func writeClipboard(
@@ -305,6 +353,9 @@ private final class GhosttyRuntimeHost {
         guard let view = view(from: userdata) else { return }
         DispatchQueue.main.async {
             view.processExited = !processAlive
+            if !processAlive {
+                view.processExitHandler?()
+            }
         }
     }
 
@@ -326,6 +377,7 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
     fileprivate var workingDirectory: String?
     fileprivate var cellSize = CGSize(width: 8, height: 16)
     fileprivate var processExited = false
+    fileprivate var processExitHandler: (() -> Void)?
     private var markedText = NSMutableAttributedString()
     private var keyTextAccumulator: [String]?
     private var trackingArea: NSTrackingArea?
@@ -569,6 +621,9 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
         else {
             return
         }
+        guard !TerminalPasteSafety.requiresConfirmation(value)
+                || requestPasteConfirmation(for: value, in: window)
+        else { return }
         value.withCString { pointer in
             ghostty_surface_text(surface, pointer, UInt(value.lengthOfBytes(using: .utf8)))
         }

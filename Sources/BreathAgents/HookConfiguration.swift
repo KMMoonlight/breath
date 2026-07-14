@@ -66,7 +66,7 @@ public struct JSONHookConfigurationEditor: Sendable {
             guard let entries = hooks[eventName] as? [[String: Any]] else {
                 continue
             }
-            let remaining = entries.filter { !isBreathEntry($0, lifecycle: nil) }
+            let remaining = entries.compactMap(removingBreathHandlers)
             if remaining.isEmpty {
                 hooks.removeValue(forKey: eventName)
             } else {
@@ -78,6 +78,21 @@ public struct JSONHookConfigurationEditor: Sendable {
             withJSONObject: root,
             options: [.prettyPrinted, .sortedKeys]
         )
+    }
+
+    private func removingBreathHandlers(
+        from entry: [String: Any]
+    ) -> [String: Any]? {
+        guard let handlers = entry["hooks"] as? [[String: Any]] else {
+            return entry
+        }
+        let remainingHandlers = handlers.filter { handler in
+            !isBreathHandler(handler, lifecycle: nil)
+        }
+        guard !remainingHandlers.isEmpty else { return nil }
+        var updated = entry
+        updated["hooks"] = remainingHandlers
+        return updated
     }
 
     private func rootObject(from data: Data) throws -> [String: Any] {
@@ -102,17 +117,22 @@ public struct JSONHookConfigurationEditor: Sendable {
         lifecycle: AgentLifecycle?
     ) -> Bool {
         guard let commands = entry["hooks"] as? [[String: Any]] else { return false }
-        return commands.contains { command in
-            guard command["type"] as? String == "command",
-                  command["name"] as? String == "Breath",
-                  let value = command["command"] as? String,
-                  value.contains(" --agent-hook ")
-            else {
-                return false
-            }
-            guard let lifecycle else { return true }
-            return value.hasSuffix(" \(lifecycle.rawValue)")
+        return commands.contains { isBreathHandler($0, lifecycle: lifecycle) }
+    }
+
+    private func isBreathHandler(
+        _ command: [String: Any],
+        lifecycle: AgentLifecycle?
+    ) -> Bool {
+        guard command["type"] as? String == "command",
+              command["name"] as? String == "Breath",
+              let value = command["command"] as? String,
+              value.contains(" --agent-hook ")
+        else {
+            return false
         }
+        guard let lifecycle else { return true }
+        return value.hasSuffix(" \(lifecycle.rawValue)")
     }
 }
 

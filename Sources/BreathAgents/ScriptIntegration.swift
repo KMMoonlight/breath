@@ -87,9 +87,10 @@ public struct ScriptIntegrationInstaller: Sendable {
             const lifecycle = lifecycleByEvent[event.type]
             if (!lifecycle) return
             const properties = "properties" in event ? event.properties as Record<string, any> : {}
+            if (event.type === "session.status" && properties.status?.type !== "busy") return
             const info = properties.info ?? properties.session ?? {}
             send(lifecycle, {
-              session_id: info.id,
+              session_id: info.id ?? properties.sessionID,
               title: info.title,
               cwd: directory
             })
@@ -123,7 +124,7 @@ public struct ScriptIntegrationInstaller: Sendable {
               stdio: ["pipe", "ignore", "ignore"]
             })
             child.stdin.end(JSON.stringify({
-              session_id: ctx.sessionManager.getSessionFile?.(),
+              session_id: ctx.sessionManager.getSessionId?.(),
               title: ctx.sessionManager.getSessionName?.(),
               cwd: process.cwd()
             }))

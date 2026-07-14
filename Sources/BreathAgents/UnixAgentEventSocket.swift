@@ -14,6 +14,10 @@ public final class UnixAgentEventServer: @unchecked Sendable {
     private let decoder: StrictAgentEventDecoder
     private let onEvent: @Sendable (AgentEvent) -> Void
     private let queue = DispatchQueue(label: "app.breath.agent-events")
+    private let clientQueue = DispatchQueue(
+        label: "app.breath.agent-events.clients",
+        attributes: .concurrent
+    )
     private let lock = NSLock()
     private var descriptor: Int32 = -1
     private var source: DispatchSourceRead?
@@ -80,22 +84,27 @@ public final class UnixAgentEventServer: @unchecked Sendable {
         guard fd >= 0 else { return }
         let client = accept(fd, nil, nil)
         guard client >= 0 else { return }
-        defer { Darwin.close(client) }
-
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 4_096)
-        while data.count <= 65_536 {
-            let count = buffer.withUnsafeMutableBytes { rawBuffer in
-                Darwin.read(client, rawBuffer.baseAddress, rawBuffer.count)
+        clientQueue.async { [weak self] in
+            guard let self else {
+                Darwin.close(client)
+                return
             }
-            if count <= 0 { break }
-            data.append(buffer, count: count)
+            self.readConnection(client)
         }
-        guard data.count <= 65_536,
+    }
+
+    private func readConnection(_ client: Int32) {
+        defer { Darwin.close(client) }
+        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        _ = withUnsafePointer(to: &timeout) {
+            setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, $0, socklen_t(MemoryLayout<timeval>.size))
+        }
+        guard let header = readExactly(4, from: client) else { return }
+        let length = header.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+        guard length <= 65_536,
+              let data = readExactly(Int(length), from: client),
               let event = try? decoder.decode(data)
-        else {
-            return
-        }
+        else { return }
         onEvent(event)
     }
 }
@@ -115,12 +124,28 @@ public struct UnixAgentEventClient: AgentEventSending, Sendable {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw posixError("socket") }
         defer { Darwin.close(fd) }
+        var noSignal: Int32 = 1
+        _ = withUnsafePointer(to: &noSignal) {
+            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, $0, socklen_t(MemoryLayout<Int32>.size))
+        }
+        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        _ = withUnsafePointer(to: &timeout) {
+            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, $0, socklen_t(MemoryLayout<timeval>.size))
+        }
 
         let connectResult = try withAddress(path: socketURL.path) { address, length in
             Darwin.connect(fd, address, length)
         }
         guard connectResult == 0 else { throw posixError("connect") }
 
+        var length = UInt32(data.count).bigEndian
+        let header = withUnsafeBytes(of: &length) { Data($0) }
+        try writeAll(header, to: fd)
+        try writeAll(data, to: fd)
+        _ = shutdown(fd, SHUT_WR)
+    }
+
+    private func writeAll(_ data: Data, to fd: Int32) throws {
         try data.withUnsafeBytes { rawBuffer in
             var written = 0
             while written < rawBuffer.count {
@@ -133,8 +158,26 @@ public struct UnixAgentEventClient: AgentEventSending, Sendable {
                 written += count
             }
         }
-        _ = shutdown(fd, SHUT_WR)
     }
+}
+
+private func readExactly(_ length: Int, from fd: Int32) -> Data? {
+    if length == 0 { return Data() }
+    var data = Data(count: length)
+    let completed = data.withUnsafeMutableBytes { rawBuffer -> Bool in
+        var offset = 0
+        while offset < length {
+            let count = Darwin.read(
+                fd,
+                rawBuffer.baseAddress?.advanced(by: offset),
+                length - offset
+            )
+            guard count > 0 else { return false }
+            offset += count
+        }
+        return true
+    }
+    return completed ? data : nil
 }
 
 private func withAddress<T>(
