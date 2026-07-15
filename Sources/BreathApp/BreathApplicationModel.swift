@@ -13,7 +13,7 @@ final class BreathApplicationModel: ObservableObject {
     @Published private(set) var isReady = false
     @Published var lastError: String?
 
-    let terminalEngine: GhosttyTerminalEngine
+    let terminalEngine: any TerminalEngine & TerminalViewProviding
     let adapters = AgentAdapterRegistry.builtIn.adapters
 
     private let repository: SQLiteWorkbenchRepository
@@ -37,10 +37,23 @@ final class BreathApplicationModel: ObservableObject {
         }
     }
 
-    private init() throws {
-        homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+    private convenience init() throws {
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
         let supportDirectory = homeDirectory
             .appendingPathComponent("Library/Application Support/Breath", isDirectory: true)
+        try self.init(
+            homeDirectory: homeDirectory,
+            supportDirectory: supportDirectory
+        )
+    }
+
+    private init(
+        homeDirectory: URL,
+        supportDirectory: URL,
+        testingSnapshot: WorkbenchSnapshot? = nil,
+        injectedTerminalEngine: (any TerminalEngine & TerminalViewProviding)? = nil
+    ) throws {
+        self.homeDirectory = homeDirectory
         try FileManager.default.createDirectory(
             at: supportDirectory,
             withIntermediateDirectories: true,
@@ -51,10 +64,14 @@ final class BreathApplicationModel: ObservableObject {
         repository = try SQLiteWorkbenchRepository(
             databaseURL: supportDirectory.appendingPathComponent("breath.sqlite")
         )
-        terminalEngine = try GhosttyTerminalEngine(
-            configurationDirectory: supportDirectory.appendingPathComponent("terminal", isDirectory: true),
-            agentSocketURL: socketURL
-        )
+        if let injectedTerminalEngine {
+            terminalEngine = injectedTerminalEngine
+        } else {
+            terminalEngine = try GhosttyTerminalEngine(
+                configurationDirectory: supportDirectory.appendingPathComponent("terminal", isDirectory: true),
+                agentSocketURL: socketURL
+            )
+        }
         runtime = TerminalEngineRuntime(engine: terminalEngine)
         workbench = Workbench(
             repository: repository,
@@ -92,7 +109,31 @@ final class BreathApplicationModel: ObservableObject {
                 await self?.refreshSnapshot()
             }
         }
+        if let testingSnapshot {
+            snapshot = testingSnapshot
+            isReady = true
+            startupSucceeded = true
+            started = true
+        }
     }
+
+#if DEBUG
+    static func makeTesting(
+        snapshot: WorkbenchSnapshot,
+        supportDirectory: URL
+    ) throws -> BreathApplicationModel {
+        try BreathApplicationModel(
+            homeDirectory: supportDirectory,
+            supportDirectory: supportDirectory,
+            testingSnapshot: snapshot,
+            injectedTerminalEngine: TestingTerminalEngine()
+        )
+    }
+
+    func replaceTestingSnapshot(_ snapshot: WorkbenchSnapshot) {
+        self.snapshot = snapshot
+    }
+#endif
 
     func start() {
         guard !started else { return }
@@ -310,6 +351,21 @@ final class BreathApplicationModel: ObservableObject {
         })
     }
 }
+
+#if DEBUG
+@MainActor
+private final class TestingTerminalEngine: TerminalEngine, TerminalViewProviding, @unchecked Sendable {
+    func open(_ launch: TerminalLaunch) async throws {}
+
+    func close(_ paneID: TerminalPaneID) async {}
+
+    func apply(settings: TerminalSettings) async {}
+
+    func view(for paneID: TerminalPaneID) -> NSView? {
+        nil
+    }
+}
+#endif
 
 private final class AgentEventSink: @unchecked Sendable {
     private let lock = NSLock()

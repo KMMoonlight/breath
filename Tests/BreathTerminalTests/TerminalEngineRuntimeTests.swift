@@ -1,6 +1,7 @@
 import AppKit
 import BreathCore
 import BreathTerminal
+import BreathTestSupport
 import Foundation
 import Testing
 
@@ -44,6 +45,8 @@ struct TerminalEngineRuntimeTests {
     @Test("libghostty creates a native surface, accepts composed text, resizes, and reloads style")
     @MainActor
     func libghosttySurfaceSmoke() async throws {
+        await NativeUITestGate.shared.acquire()
+        defer { NativeUITestGate.shared.release() }
         _ = NSApplication.shared
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),

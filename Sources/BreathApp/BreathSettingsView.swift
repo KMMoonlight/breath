@@ -2,12 +2,28 @@ import BreathAgents
 import BreathCore
 import SwiftUI
 
+enum BreathSettingsTab: Hashable {
+    case application
+    case terminal
+    case agentIntegrations
+    case archives
+}
+
 struct BreathSettingsView: View {
     @ObservedObject var model: BreathApplicationModel
+    @State private var selectedTab: BreathSettingsTab
     @State private var archiveToDelete: WorkSession?
 
+    init(
+        model: BreathApplicationModel,
+        selectedTab: BreathSettingsTab = .application
+    ) {
+        self.model = model
+        _selectedTab = State(initialValue: selectedTab)
+    }
+
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             Form {
                 Picker("外观", selection: applicationAppearance) {
                     Text("跟随系统").tag(ApplicationAppearance.system)
@@ -24,6 +40,7 @@ struct BreathSettingsView: View {
             }
             .padding(24)
             .tabItem { Label("应用配置", systemImage: "paintbrush") }
+            .tag(BreathSettingsTab.application)
 
             Form {
                 TextField("字体（不可用时使用 Menlo）", text: terminalFontFamily)
@@ -46,6 +63,7 @@ struct BreathSettingsView: View {
             }
             .padding(24)
             .tabItem { Label("终端配置", systemImage: "terminal") }
+            .tag(BreathSettingsTab.terminal)
 
             List(model.adapters, id: \.kind) { adapter in
                 HStack {
@@ -66,15 +84,15 @@ struct BreathSettingsView: View {
             }
             .padding(12)
             .tabItem { Label("Agent 集成", systemImage: "point.3.connected.trianglepath.dotted") }
+            .tag(BreathSettingsTab.agentIntegrations)
 
-            Group {
+            List {
                 if model.snapshot.archivedWorkSessions.isEmpty {
-                    ContentUnavailableView(
-                        "没有已归档会话",
-                        systemImage: "archivebox"
-                    )
+                    Text("暂无已归档工作会话")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 } else {
-                    List(model.snapshot.archivedWorkSessions) { session in
+                    ForEach(model.snapshot.archivedWorkSessions) { session in
                         HStack {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(session.title)
@@ -96,6 +114,7 @@ struct BreathSettingsView: View {
             }
             .padding(12)
             .tabItem { Label("已归档", systemImage: "archivebox") }
+            .tag(BreathSettingsTab.archives)
         }
         .frame(width: 650, height: 440)
         .disabled(!model.isReady)

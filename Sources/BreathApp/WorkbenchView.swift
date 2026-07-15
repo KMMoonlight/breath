@@ -3,6 +3,11 @@ import BreathCore
 import BreathTerminal
 import SwiftUI
 
+enum WorkbenchAccessibility {
+    static let addWorkspace = "添加工作区"
+    static let noSelectedWorkSession = "没有选中的工作会话"
+}
+
 struct WorkbenchView: View {
     @ObservedObject var model: BreathApplicationModel
     @State private var pendingArchive: WorkSession?
@@ -80,7 +85,8 @@ struct WorkbenchView: View {
                     Image(systemName: "folder.badge.plus")
                 }
                 .buttonStyle(.plain)
-                .help("添加工作区")
+                .accessibilityLabel(WorkbenchAccessibility.addWorkspace)
+                .help(WorkbenchAccessibility.addWorkspace)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -88,12 +94,9 @@ struct WorkbenchView: View {
             Divider()
 
             if model.snapshot.workspaces.isEmpty {
-                ContentUnavailableView(
-                    "还没有工作区",
-                    systemImage: "folder",
-                    description: Text("添加一个项目目录以打开第一个空终端。")
-                )
-                .frame(maxHeight: .infinity)
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityHidden(true)
             } else {
                 List {
                     ForEach(model.snapshot.workspaces) { workspace in
@@ -239,11 +242,9 @@ struct WorkbenchView: View {
             )
             .id(session.id)
         } else {
-            ContentUnavailableView(
-                "选择一个工作会话",
-                systemImage: "terminal",
-                description: Text("只会在选中时恢复对应布局和 Agent 会话。")
-            )
+            model.settings.terminal.colorTheme.canvasColor
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(WorkbenchAccessibility.noSelectedWorkSession)
         }
     }
 
@@ -536,8 +537,21 @@ private extension AgentKind {
     }
 }
 
+private extension TerminalColorTheme {
+    var canvasColor: Color {
+        switch self {
+        case .dark:
+            Color(red: 16 / 255, green: 18 / 255, blue: 24 / 255)
+        case .light:
+            Color(red: 247 / 255, green: 247 / 255, blue: 245 / 255)
+        case .solarizedDark:
+            Color(red: 0 / 255, green: 43 / 255, blue: 54 / 255)
+        }
+    }
+}
+
 private struct TerminalNativeView: NSViewRepresentable {
-    let engine: GhosttyTerminalEngine
+    let engine: any TerminalViewProviding
     let paneID: TerminalPaneID
 
     func makeNSView(context: Context) -> TerminalHostView {

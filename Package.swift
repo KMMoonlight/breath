@@ -11,6 +11,7 @@ let hasGhosttyFramework = FileManager.default.fileExists(
 var terminalDependencies: [Target.Dependency] = ["BreathCore"]
 var targets: [Target] = [
     .target(name: "BreathCore"),
+    .target(name: "BreathTestSupport"),
     .target(
         name: "BreathAgents",
         dependencies: ["BreathCore"]
@@ -76,11 +77,15 @@ targets += [
     ),
     .testTarget(
         name: "BreathTerminalTests",
-        dependencies: ["BreathCore", "BreathTerminal"]
+        dependencies: ["BreathCore", "BreathTerminal", "BreathTestSupport"]
     ),
     .testTarget(
         name: "BreathUpdatesTests",
         dependencies: ["BreathUpdates"]
+    ),
+    .testTarget(
+        name: "BreathAppTests",
+        dependencies: ["BreathApp", "BreathCore", "BreathTestSupport"]
     ),
 ]
 

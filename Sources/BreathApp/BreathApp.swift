@@ -2,12 +2,23 @@ import AppKit
 import BreathAgents
 import BreathCore
 import BreathUpdates
+import Darwin
 import SwiftUI
 
 @main
 enum BreathMain {
     @MainActor
     static func main() {
+#if DEBUG
+        if CommandLine.arguments.dropFirst().first == "--verify-quiet-empty-states" {
+            let resultURL: URL? = CommandLine.arguments.firstIndex(of: "--result-file").flatMap { index in
+                let pathIndex = CommandLine.arguments.index(after: index)
+                guard pathIndex < CommandLine.arguments.endIndex else { return nil }
+                return URL(fileURLWithPath: CommandLine.arguments[pathIndex])
+            }
+            exit(AppShellEmptyStateVerifier.run(resultURL: resultURL))
+        }
+#endif
         if CommandLine.arguments.dropFirst().first == "--agent-hook" {
             let input = FileHandle.standardInput.readDataToEndOfFile()
             _ = AgentHookCommand().run(
