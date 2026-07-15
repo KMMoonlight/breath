@@ -539,14 +539,12 @@ private extension AgentKind {
 
 private extension TerminalColorTheme {
     var canvasColor: Color {
-        switch self {
-        case .dark:
-            Color(red: 16 / 255, green: 18 / 255, blue: 24 / 255)
-        case .light:
-            Color(red: 247 / 255, green: 247 / 255, blue: 245 / 255)
-        case .solarizedDark:
-            Color(red: 0 / 255, green: 43 / 255, blue: 54 / 255)
-        }
+        let background = palette.background
+        return Color(
+            red: Double(background.red) / 255,
+            green: Double(background.green) / 255,
+            blue: Double(background.blue) / 255
+        )
     }
 }
 

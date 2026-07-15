@@ -136,14 +136,7 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
             .contains(requestedFontFamily)
             ? requestedFontFamily
             : "Menlo"
-        let colors: (background: String, foreground: String, cursor: String) = switch settings.colorTheme {
-        case .dark:
-            ("#101218", "#E7EAF0", "#A8B2D1")
-        case .light:
-            ("#F7F7F5", "#202124", "#325CC0")
-        case .solarizedDark:
-            ("#002B36", "#839496", "#93A1A1")
-        }
+        let colors = settings.colorTheme.palette
         let cursor = switch settings.cursorStyle {
         case .block: "block"
         case .bar: "bar"
@@ -152,9 +145,9 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         let contents = """
         font-family = \(fontFamily)
         font-size = \(settings.fontSize)
-        background = \(colors.background)
-        foreground = \(colors.foreground)
-        cursor-color = \(colors.cursor)
+        background = \(colors.background.ghosttyHex)
+        foreground = \(colors.foreground.ghosttyHex)
+        cursor-color = \(colors.cursor.ghosttyHex)
         cursor-style = \(cursor)
         window-vsync = \(synchronizeRendering)
         window-decoration = false
@@ -165,6 +158,12 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
             [.posixPermissions: 0o600],
             ofItemAtPath: url.path
         )
+    }
+}
+
+private extension TerminalRGBColor {
+    var ghosttyHex: String {
+        String(format: "#%02X%02X%02X", red, green, blue)
     }
 }
 

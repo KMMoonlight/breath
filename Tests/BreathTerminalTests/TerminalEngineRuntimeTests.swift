@@ -47,59 +47,65 @@ struct TerminalEngineRuntimeTests {
     func libghosttySurfaceSmoke() async throws {
         await NativeUITestGate.shared.acquire()
         defer { NativeUITestGate.shared.release() }
-        _ = NSApplication.shared
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        window.makeKeyAndOrderFront(nil)
-        defer { window.close() }
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("breath-ghostty-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let engine = try GhosttyTerminalEngine(
-            configurationDirectory: directory,
-            agentSocketURL: directory.appendingPathComponent("events.sock"),
-            synchronizeRendering: false
-        )
-        guard engine.usesLibghostty else { return }
-
-        let paneID = TerminalPaneID(rawValue: UUID())
-        try await engine.open(
-            TerminalLaunch(
-                paneID: paneID,
-                workingDirectory: "/tmp",
-                executable: "/bin/zsh",
-                arguments: ["-l"],
-                environment: [:]
-            )
-        )
-        let view = try #require(engine.view(for: paneID))
-        view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
-        view.layoutSubtreeIfNeeded()
-        let textInput = try #require(view as? any NSTextInputClient)
-        textInput.setMarkedText(
-            "拼音",
-            selectedRange: NSRange(location: 2, length: 0),
-            replacementRange: NSRange(location: NSNotFound, length: 0)
-        )
-        textInput.insertText(
-            "中文",
-            replacementRange: NSRange(location: NSNotFound, length: 0)
-        )
-        await engine.apply(
-            settings: TerminalSettings(
-                fontFamily: "SF Mono",
-                fontSize: 15,
-                colorTheme: .solarizedDark,
-                cursorStyle: .bar
-            )
-        )
-        await engine.close(paneID)
-        #expect(engine.view(for: paneID) == nil)
+        try await verifyLibghosttySurface()
+        try await Task.sleep(for: .milliseconds(100))
     }
+}
+
+@MainActor
+private func verifyLibghosttySurface() async throws {
+    _ = NSApplication.shared
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+        styleMask: [.titled],
+        backing: .buffered,
+        defer: false
+    )
+    window.makeKeyAndOrderFront(nil)
+    defer { window.close() }
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("breath-ghostty-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let engine = try GhosttyTerminalEngine(
+        configurationDirectory: directory,
+        agentSocketURL: directory.appendingPathComponent("events.sock"),
+        synchronizeRendering: false
+    )
+    guard engine.usesLibghostty else { return }
+
+    let paneID = TerminalPaneID(rawValue: UUID())
+    try await engine.open(
+        TerminalLaunch(
+            paneID: paneID,
+            workingDirectory: "/tmp",
+            executable: "/bin/zsh",
+            arguments: ["-l"],
+            environment: [:]
+        )
+    )
+    let view = try #require(engine.view(for: paneID))
+    view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
+    view.layoutSubtreeIfNeeded()
+    let textInput = try #require(view as? any NSTextInputClient)
+    textInput.setMarkedText(
+        "拼音",
+        selectedRange: NSRange(location: 2, length: 0),
+        replacementRange: NSRange(location: NSNotFound, length: 0)
+    )
+    textInput.insertText(
+        "中文",
+        replacementRange: NSRange(location: NSNotFound, length: 0)
+    )
+    await engine.apply(
+        settings: TerminalSettings(
+            fontFamily: "SF Mono",
+            fontSize: 15,
+            colorTheme: .solarizedDark,
+            cursorStyle: .bar
+        )
+    )
+    await engine.close(paneID)
+    #expect(engine.view(for: paneID) == nil)
 }
 
 private actor RecordingTerminalEngine: TerminalEngine {

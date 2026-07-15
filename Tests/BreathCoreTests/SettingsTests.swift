@@ -23,4 +23,20 @@ struct SettingsTests {
             )
         )
     }
+
+    @Test("terminal themes expose one shared palette")
+    func terminalThemePalettes() {
+        #expect(
+            TerminalColorTheme.dark.palette.background
+                == TerminalRGBColor(red: 0x10, green: 0x12, blue: 0x18)
+        )
+        #expect(
+            TerminalColorTheme.light.palette.background
+                == TerminalRGBColor(red: 0xF7, green: 0xF7, blue: 0xF5)
+        )
+        #expect(
+            TerminalColorTheme.solarizedDark.palette.background
+                == TerminalRGBColor(red: 0x00, green: 0x2B, blue: 0x36)
+        )
+    }
 }

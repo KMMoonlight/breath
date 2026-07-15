@@ -47,11 +47,10 @@ final class BreathApplicationModel: ObservableObject {
         )
     }
 
-    private init(
+    init(
         homeDirectory: URL,
         supportDirectory: URL,
-        testingSnapshot: WorkbenchSnapshot? = nil,
-        injectedTerminalEngine: (any TerminalEngine & TerminalViewProviding)? = nil
+        terminalEngineOverride: (any TerminalEngine & TerminalViewProviding)? = nil
     ) throws {
         self.homeDirectory = homeDirectory
         try FileManager.default.createDirectory(
@@ -64,8 +63,8 @@ final class BreathApplicationModel: ObservableObject {
         repository = try SQLiteWorkbenchRepository(
             databaseURL: supportDirectory.appendingPathComponent("breath.sqlite")
         )
-        if let injectedTerminalEngine {
-            terminalEngine = injectedTerminalEngine
+        if let terminalEngineOverride {
+            terminalEngine = terminalEngineOverride
         } else {
             terminalEngine = try GhosttyTerminalEngine(
                 configurationDirectory: supportDirectory.appendingPathComponent("terminal", isDirectory: true),
@@ -109,29 +108,14 @@ final class BreathApplicationModel: ObservableObject {
                 await self?.refreshSnapshot()
             }
         }
-        if let testingSnapshot {
-            snapshot = testingSnapshot
-            isReady = true
-            startupSucceeded = true
-            started = true
-        }
     }
 
 #if DEBUG
-    static func makeTesting(
-        snapshot: WorkbenchSnapshot,
-        supportDirectory: URL
-    ) throws -> BreathApplicationModel {
-        try BreathApplicationModel(
-            homeDirectory: supportDirectory,
-            supportDirectory: supportDirectory,
-            testingSnapshot: snapshot,
-            injectedTerminalEngine: TestingTerminalEngine()
-        )
-    }
-
-    func replaceTestingSnapshot(_ snapshot: WorkbenchSnapshot) {
+    func prepareForAppShellTesting(snapshot: WorkbenchSnapshot) {
         self.snapshot = snapshot
+        isReady = true
+        startupSucceeded = true
+        started = true
     }
 #endif
 
@@ -351,21 +335,6 @@ final class BreathApplicationModel: ObservableObject {
         })
     }
 }
-
-#if DEBUG
-@MainActor
-private final class TestingTerminalEngine: TerminalEngine, TerminalViewProviding, @unchecked Sendable {
-    func open(_ launch: TerminalLaunch) async throws {}
-
-    func close(_ paneID: TerminalPaneID) async {}
-
-    func apply(settings: TerminalSettings) async {}
-
-    func view(for paneID: TerminalPaneID) -> NSView? {
-        nil
-    }
-}
-#endif
 
 private final class AgentEventSink: @unchecked Sendable {
     private let lock = NSLock()

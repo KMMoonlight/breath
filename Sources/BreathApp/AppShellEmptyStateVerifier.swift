@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import ApplicationServices
 import BreathCore
 import SwiftUI
 import Vision
@@ -30,6 +31,8 @@ enum AppShellEmptyStateVerifier {
         var failures: [String] = []
 
         var visibleText = try fixture.renderedText(WorkbenchView(model: fixture.model))
+        let accessibilityText = fixture.accessibilityText()
+        var canvasInspection = try fixture.inspectBlankTerminalCanvas()
         require(visibleText.contains("工作区"), "empty workbench did not render its sidebar", into: &failures)
         require(!visibleText.contains("还没有工作区"), "empty workspace title is still visible", into: &failures)
         require(
@@ -44,40 +47,107 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
         require(
-            WorkbenchAccessibility.addWorkspace == "添加工作区",
-            "add workspace action lost its accessibility label",
+            !accessibilityText.contains("还没有工作区")
+                && !accessibilityText.contains("添加一个项目目录以打开第一个空终端"),
+            "removed workspace prompt remains in the accessibility tree: \(accessibilityText)",
             into: &failures
         )
         require(
-            WorkbenchAccessibility.noSelectedWorkSession == "没有选中的工作会话",
-            "blank terminal canvas lost its accessibility status",
+            !accessibilityText.contains("选择一个工作会话")
+                && !accessibilityText.contains("只会在选中时恢复对应布局"),
+            "removed selection prompt remains in the accessibility tree: \(accessibilityText)",
+            into: &failures
+        )
+        require(
+            accessibilityText.contains(WorkbenchAccessibility.addWorkspace),
+            "add workspace action lost its accessibility label: \(accessibilityText)",
+            into: &failures
+        )
+        require(
+            accessibilityText.contains(WorkbenchAccessibility.noSelectedWorkSession),
+            "blank terminal canvas lost its accessibility status: \(accessibilityText)",
+            into: &failures
+        )
+        require(
+            fixture.terminalLaunchCount == 0,
+            "rendering the empty workbench launched a terminal",
+            into: &failures
+        )
+        require(
+            canvasInspection.isSolid,
+            "empty terminal canvas contains visible placeholder content: \(canvasInspection)",
             into: &failures
         )
 
-        let activeSessionSnapshot = makeSnapshotWithActiveSession()
-        fixture.use(activeSessionSnapshot)
+        let activeWorkSessionSnapshot = makeSnapshotWithActiveWorkSession()
+        try fixture.use(activeWorkSessionSnapshot)
         visibleText = try fixture.renderedText(WorkbenchView(model: fixture.model))
+        canvasInspection = try fixture.inspectBlankTerminalCanvas()
         require(visibleText.contains("示例项目"), "workspace tree did not render", into: &failures)
+        require(
+            fixture.expandDisclosure(named: "示例项目"),
+            "workspace disclosure could not be expanded through accessibility",
+            into: &failures
+        )
+        require(
+            fixture.accessibilityText().contains("Agent 对话摘要"),
+            "active WorkSession tree content did not render",
+            into: &failures
+        )
         require(!visibleText.contains("选择一个工作会话"), "selection title is visible with a workspace", into: &failures)
-        require(fixture.model.snapshot == activeSessionSnapshot, "rendering changed the active-session snapshot", into: &failures)
+        require(
+            fixture.model.snapshot == activeWorkSessionSnapshot,
+            "rendering changed the active WorkSession snapshot",
+            into: &failures
+        )
+        require(
+            fixture.terminalLaunchCount == 0,
+            "rendering an unselected WorkSession launched a terminal",
+            into: &failures
+        )
+        require(
+            canvasInspection.isSolid,
+            "unselected WorkSession canvas contains visible placeholder content: \(canvasInspection)",
+            into: &failures
+        )
 
         let workspaceID = WorkspaceID(rawValue: UUID())
-        let noSessionsSnapshot = WorkbenchSnapshot(
+        let noWorkSessionsSnapshot = WorkbenchSnapshot(
             workspaces: [Workspace(id: workspaceID, path: "/tmp", displayName: "空项目")],
             workSessions: [],
             selectedWorkSessionID: nil
         )
-        fixture.use(noSessionsSnapshot)
+        try fixture.use(noWorkSessionsSnapshot)
         visibleText = try fixture.renderedText(WorkbenchView(model: fixture.model))
+        canvasInspection = try fixture.inspectBlankTerminalCanvas()
         require(visibleText.contains("空项目"), "workspace without sessions did not render", into: &failures)
         require(!visibleText.contains("选择一个工作会话"), "selection title is visible without sessions", into: &failures)
-        require(fixture.model.snapshot == noSessionsSnapshot, "rendering created or selected a session", into: &failures)
+        require(
+            fixture.model.snapshot == noWorkSessionsSnapshot,
+            "rendering created or selected a WorkSession",
+            into: &failures
+        )
+        require(
+            fixture.terminalLaunchCount == 0,
+            "rendering a workspace without WorkSessions launched a terminal",
+            into: &failures
+        )
+        require(
+            canvasInspection.isSolid,
+            "empty WorkSession canvas contains visible placeholder content: \(canvasInspection)",
+            into: &failures
+        )
 
         let settingsText = try fixture.renderedText(
             BreathSettingsView(model: fixture.model, selectedTab: .archives)
         )
         require(settingsText.contains("已归档"), "archived settings tab did not render", into: &failures)
         require(!settingsText.contains("没有已归档会话"), "archived settings still use the large empty title", into: &failures)
+        require(
+            fixture.terminalLaunchCount == 0,
+            "rendering archived settings launched a terminal",
+            into: &failures
+        )
 
         guard failures.isEmpty else {
             throw AppShellVerificationError.failed(failures)
@@ -94,7 +164,7 @@ enum AppShellEmptyStateVerifier {
         }
     }
 
-    private static func makeSnapshotWithActiveSession() -> WorkbenchSnapshot {
+    private static func makeSnapshotWithActiveWorkSession() -> WorkbenchSnapshot {
         let workspaceID = WorkspaceID(rawValue: UUID())
         let sessionID = WorkSessionID(rawValue: UUID())
         return WorkbenchSnapshot(
@@ -114,9 +184,18 @@ enum AppShellEmptyStateVerifier {
 
 @MainActor
 private final class AppShellFixture {
-    let model: BreathApplicationModel
+    private var harness: AppShellTestingHarness
     private let supportDirectory: URL
     private var window: NSWindow?
+    private var capturedImage: CGImage?
+
+    var model: BreathApplicationModel {
+        harness.model
+    }
+
+    var terminalLaunchCount: Int {
+        harness.terminalEngine.openedLaunches.count
+    }
 
     init(snapshot: WorkbenchSnapshot) throws {
         _ = NSApplication.shared
@@ -125,9 +204,9 @@ private final class AppShellFixture {
         NSApp.activate(ignoringOtherApps: true)
         supportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("breath-app-shell-\(UUID().uuidString)", isDirectory: true)
-        model = try BreathApplicationModel.makeTesting(
+        harness = try AppShellTestingHarness(
             snapshot: snapshot,
-            supportDirectory: supportDirectory
+            supportDirectory: supportDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         )
     }
 
@@ -161,22 +240,260 @@ private final class AppShellFixture {
         ) else {
             throw AppShellVerificationError.couldNotCapture
         }
+        capturedImage = image
         return try recognizeText(in: image)
     }
 
-    func use(_ snapshot: WorkbenchSnapshot) {
-        model.replaceTestingSnapshot(snapshot)
+    func inspectBlankTerminalCanvas() throws -> SolidCanvasInspection {
+        guard let capturedImage else {
+            throw AppShellVerificationError.couldNotCapture
+        }
+        return try SolidCanvasInspection(
+            image: capturedImage,
+            background: model.settings.terminal.colorTheme.palette.background
+        )
+    }
+
+    func use(_ snapshot: WorkbenchSnapshot) throws {
+        window?.close()
+        harness = try AppShellTestingHarness(
+            snapshot: snapshot,
+            supportDirectory: supportDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        )
+    }
+
+    func accessibilityText() -> [String] {
+        let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        return accessibilityText(in: application, depth: 0)
+    }
+
+    func expandDisclosure(named name: String) -> Bool {
+        let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        guard pressAccessibilityElement(named: name, in: application, depth: 0) else {
+            return false
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        window?.layoutIfNeeded()
+        return true
     }
 
     func close() {
         window?.close()
         try? FileManager.default.removeItem(at: supportDirectory)
     }
+
+    private func accessibilityText(in element: AXUIElement, depth: Int) -> [String] {
+        guard depth < 20 else { return [] }
+        var text = accessibilityStrings(for: element)
+        for child in accessibilityChildren(of: element) {
+            text.append(contentsOf: accessibilityText(in: child, depth: depth + 1))
+        }
+        return text
+    }
+
+    private func accessibilityStrings(for element: AXUIElement) -> [String] {
+        var text: [String] = []
+        for attribute in [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, kAXValueAttribute] {
+            var value: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+               let string = value as? String,
+               !string.isEmpty {
+                text.append(string)
+            }
+        }
+        return text
+    }
+
+    private func accessibilityChildren(of element: AXUIElement) -> [AXUIElement] {
+        var children: [AXUIElement] = []
+        for attribute in [kAXWindowsAttribute, kAXChildrenAttribute] {
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+                  let attributeChildren = value as? [AXUIElement]
+            else {
+                continue
+            }
+            children.append(contentsOf: attributeChildren)
+        }
+        return children
+    }
+
+    private func pressAccessibilityElement(
+        named name: String,
+        in element: AXUIElement,
+        depth: Int
+    ) -> Bool {
+        guard depth < 20 else { return false }
+        if accessibilityStrings(for: element).contains(name),
+           pressElementOrAncestor(element) {
+            return true
+        }
+        return accessibilityChildren(of: element).contains { child in
+            pressAccessibilityElement(named: name, in: child, depth: depth + 1)
+        }
+    }
+
+    private func pressElementOrAncestor(_ element: AXUIElement) -> Bool {
+        var candidate = element
+        for _ in 0..<6 {
+            var actionNames: CFArray?
+            if AXUIElementCopyActionNames(candidate, &actionNames) == .success,
+               let actionNames = actionNames as? [String],
+               actionNames.contains(kAXPressAction),
+               AXUIElementPerformAction(candidate, kAXPressAction as CFString) == .success {
+                return true
+            }
+            var parent: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(
+                candidate,
+                kAXParentAttribute as CFString,
+                &parent
+            ) == .success,
+                let parent,
+                CFGetTypeID(parent) == AXUIElementGetTypeID()
+            else {
+                return false
+            }
+            candidate = parent as! AXUIElement
+        }
+        return false
+    }
 }
 
 private enum AppShellVerificationError: Error {
     case couldNotCapture
+    case couldNotReadPixels
     case failed([String])
+}
+
+struct SolidCanvasInspection: CustomStringConvertible {
+    let regionPixels: Int
+    let boundingPixels: Int
+    let enclosedPixels: Int
+    let imagePixels: Int
+
+    var isSolid: Bool {
+        enclosedPixels == 0 && boundingPixels * 2 > imagePixels
+    }
+
+    var description: String {
+        "region=\(regionPixels), bounds=\(boundingPixels), enclosed=\(enclosedPixels), image=\(imagePixels)"
+    }
+
+    init(image: CGImage, background: TerminalRGBColor) throws {
+        let width = image.width
+        let height = image.height
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        let rendered = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else {
+                return false
+            }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard rendered else { throw AppShellVerificationError.couldNotReadPixels }
+
+        let target = (background.red, background.green, background.blue)
+        func isBackground(_ index: Int) -> Bool {
+            let offset = index * 4
+            return abs(Int(pixels[offset]) - Int(target.0)) <= 1
+                && abs(Int(pixels[offset + 1]) - Int(target.1)) <= 1
+                && abs(Int(pixels[offset + 2]) - Int(target.2)) <= 1
+                && pixels[offset + 3] > 0
+        }
+
+        var visited = [Bool](repeating: false, count: width * height)
+        var largest = (count: 0, minX: 0, maxX: -1, minY: 0, maxY: -1)
+        for index in 0..<visited.count where !visited[index] && isBackground(index) {
+            var stack = [index]
+            visited[index] = true
+            var region = (
+                count: 0,
+                minX: index % width,
+                maxX: index % width,
+                minY: index / width,
+                maxY: index / width
+            )
+            while let current = stack.popLast() {
+                let x = current % width
+                let y = current / width
+                region.count += 1
+                region.minX = min(region.minX, x)
+                region.maxX = max(region.maxX, x)
+                region.minY = min(region.minY, y)
+                region.maxY = max(region.maxY, y)
+                for neighbor in [
+                    x > 0 ? current - 1 : -1,
+                    x + 1 < width ? current + 1 : -1,
+                    y > 0 ? current - width : -1,
+                    y + 1 < height ? current + width : -1,
+                ] where neighbor >= 0 && !visited[neighbor] && isBackground(neighbor) {
+                    visited[neighbor] = true
+                    stack.append(neighbor)
+                }
+            }
+            if region.count > largest.count {
+                largest = region
+            }
+        }
+
+        regionPixels = largest.count
+        let boundsWidth = max(0, largest.maxX - largest.minX + 1)
+        let boundsHeight = max(0, largest.maxY - largest.minY + 1)
+        boundingPixels = boundsWidth * boundsHeight
+        imagePixels = width * height
+
+        var boundaryConnected = [Bool](repeating: false, count: boundingPixels)
+        var boundaryStack: [Int] = []
+        if boundsWidth > 0, boundsHeight > 0 {
+            for localY in 0..<boundsHeight {
+                for localX in 0..<boundsWidth
+                where localX == 0 || localX == boundsWidth - 1
+                    || localY == 0 || localY == boundsHeight - 1 {
+                    let localIndex = localY * boundsWidth + localX
+                    let imageIndex = (largest.minY + localY) * width + largest.minX + localX
+                    if !isBackground(imageIndex), !boundaryConnected[localIndex] {
+                        boundaryConnected[localIndex] = true
+                        boundaryStack.append(localIndex)
+                    }
+                }
+            }
+        }
+        while let current = boundaryStack.popLast() {
+            let x = current % boundsWidth
+            let y = current / boundsWidth
+            for neighbor in [
+                x > 0 ? current - 1 : -1,
+                x + 1 < boundsWidth ? current + 1 : -1,
+                y > 0 ? current - boundsWidth : -1,
+                y + 1 < boundsHeight ? current + boundsWidth : -1,
+            ] where neighbor >= 0 && !boundaryConnected[neighbor] {
+                let imageX = largest.minX + neighbor % boundsWidth
+                let imageY = largest.minY + neighbor / boundsWidth
+                if !isBackground(imageY * width + imageX) {
+                    boundaryConnected[neighbor] = true
+                    boundaryStack.append(neighbor)
+                }
+            }
+        }
+        enclosedPixels = boundaryConnected.indices.reduce(into: 0) { count, localIndex in
+            guard !boundaryConnected[localIndex] else { return }
+            let imageX = largest.minX + localIndex % boundsWidth
+            let imageY = largest.minY + localIndex / boundsWidth
+            if !isBackground(imageY * width + imageX) {
+                count += 1
+            }
+        }
+    }
 }
 
 private func recognizeText(in image: CGImage) throws -> String {
