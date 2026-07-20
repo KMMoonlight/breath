@@ -56,6 +56,38 @@ struct AgentCLIInstallationStatusTests {
         )
     }
 
+    @Test("only a verified compatible Agent can be selected as a Skill target")
+    func globalSkillTargetRequiresCompatibleVersion() throws {
+        let adapter = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .codex }
+        )
+
+        #expect(
+            AgentSkillTargetAvailabilityResolver.resolve(
+                adapter: adapter,
+                status: .installed(version: "0.144.3", updateAvailable: false)
+            ) == .available
+        )
+        #expect(
+            AgentSkillTargetAvailabilityResolver.resolve(
+                adapter: adapter,
+                status: .installed(version: "0.120.0", updateAvailable: true)
+            ).isSelectable == false
+        )
+        #expect(
+            AgentSkillTargetAvailabilityResolver.resolve(
+                adapter: adapter,
+                status: .installed(version: nil, updateAvailable: false)
+            ).isSelectable == false
+        )
+        #expect(
+            AgentSkillTargetAvailabilityResolver.resolve(
+                adapter: adapter,
+                status: .notInstalled
+            ).isSelectable == false
+        )
+    }
+
     @Test("flags an update when the official release is newer than the compatible minimum")
     func officialReleaseIsNewer() throws {
         let temporaryDirectory = try makeTemporaryDirectory()

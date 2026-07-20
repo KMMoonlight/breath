@@ -2,6 +2,7 @@ import AppKit
 import BreathAgents
 import BreathCore
 import BreathPersistence
+import BreathSkills
 import BreathTerminal
 import Foundation
 
@@ -18,6 +19,7 @@ final class BreathApplicationModel: ObservableObject {
     @Published var lastError: String?
 
     let terminalEngine: any TerminalEngine & TerminalViewProviding
+    let skillsService: GlobalSkillsService
     let adapters = AgentAdapterRegistry.builtIn.adapters
 
     private let repository: SQLiteWorkbenchRepository
@@ -74,6 +76,21 @@ final class BreathApplicationModel: ObservableObject {
         let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
         repository = try SQLiteWorkbenchRepository(
             databaseURL: supportDirectory.appendingPathComponent("breath.sqlite")
+        )
+        skillsService = GlobalSkillsService(
+            homeDirectory: homeDirectory,
+            agentAdapters: AgentAdapterRegistry.builtIn.adapters,
+            targetAvailability: Dictionary(uniqueKeysWithValues:
+                AgentAdapterRegistry.builtIn.adapters.map {
+                    (
+                        $0.kind,
+                        AgentSkillTargetAvailability.unavailable(
+                            reason: "Agent installation status is still being checked."
+                        )
+                    )
+                }
+            ),
+            recordRepository: repository
         )
         if let terminalEngineOverride {
             terminalEngine = terminalEngineOverride
@@ -321,6 +338,17 @@ final class BreathApplicationModel: ObservableObject {
             }.value
             guard let self else { return }
             agentCLIStatuses = localStatuses
+            await skillsService.updateTargetAvailability(
+                Dictionary(uniqueKeysWithValues: adapters.map { adapter in
+                    (
+                        adapter.kind,
+                        AgentSkillTargetAvailabilityResolver.resolve(
+                            adapter: adapter,
+                            status: localStatuses[adapter.kind]
+                        )
+                    )
+                })
+            )
 
             await withTaskGroup(of: (AgentKind, String, String?).self) { group in
                 for adapter in adapters {
@@ -565,6 +593,32 @@ struct AgentIntegrationPreferenceStore {
 enum AgentCLIInstallationStatus: Equatable, Sendable {
     case notInstalled
     case installed(version: String?, updateAvailable: Bool)
+}
+
+enum AgentSkillTargetAvailabilityResolver {
+    static func resolve(
+        adapter: AgentAdapterDescriptor,
+        status: AgentCLIInstallationStatus?
+    ) -> AgentSkillTargetAvailability {
+        switch status {
+        case .installed(let version?, _):
+            guard !InstalledAgentCLIDetector.isVersion(
+                version,
+                olderThan: adapter.minimumVersion
+            ) else {
+                return .unavailable(
+                    reason: "\(adapter.displayName) \(version) is older than the supported \(adapter.minimumVersion)."
+                )
+            }
+            return .available
+        case .installed(version: nil, updateAvailable: _):
+            return .unavailable(
+                reason: "\(adapter.displayName) is installed, but its version could not be verified."
+            )
+        case .notInstalled, nil:
+            return .unavailable(reason: "\(adapter.displayName) is not installed.")
+        }
+    }
 }
 
 enum AgentCLIInstallationError: LocalizedError {

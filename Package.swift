@@ -20,8 +20,13 @@ var targets: [Target] = [
         ]
     ),
     .target(
+        name: "BreathSkills",
+        dependencies: ["BreathAgents", "BreathCore"]
+    ),
+    .target(
         name: "BreathPersistence",
         dependencies: [
+            "BreathSkills",
             "BreathCore",
             .product(name: "GRDB", package: "GRDB.swift"),
         ]
@@ -62,6 +67,7 @@ targets += [
             "BreathAgents",
             "BreathCore",
             "BreathPersistence",
+            "BreathSkills",
             "BreathTerminal",
             "BreathUpdates",
         ],
@@ -82,6 +88,10 @@ targets += [
             "BreathCore",
             .product(name: "GRDB", package: "GRDB.swift"),
         ]
+    ),
+    .testTarget(
+        name: "BreathSkillsTests",
+        dependencies: ["BreathSkills"]
     ),
     .testTarget(
         name: "BreathTerminalTests",
@@ -109,6 +119,7 @@ let package = Package(
     products: [
         .library(name: "BreathCore", targets: ["BreathCore"]),
         .library(name: "BreathAgents", targets: ["BreathAgents"]),
+        .library(name: "BreathSkills", targets: ["BreathSkills"]),
         .library(name: "BreathPersistence", targets: ["BreathPersistence"]),
         .library(name: "BreathTerminal", targets: ["BreathTerminal"]),
         .library(name: "BreathUpdates", targets: ["BreathUpdates"]),

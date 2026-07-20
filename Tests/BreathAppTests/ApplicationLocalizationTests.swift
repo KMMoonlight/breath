@@ -68,6 +68,7 @@ struct ApplicationLocalizationTests {
             "Sources/BreathApp/BreathSettingsView.swift",
             "Sources/BreathApp/BreathApp.swift",
             "Sources/BreathApp/WorkbenchView.swift",
+            "Sources/BreathApp/SkillsView.swift",
         ]
         let referencedKeys = try sourceFiles.reduce(into: Set<String>()) {
             result,

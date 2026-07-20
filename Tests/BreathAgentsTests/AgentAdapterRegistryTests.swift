@@ -47,6 +47,49 @@ struct AgentAdapterRegistryTests {
         }
     }
 
+    @Test("every supported Agent declares a resolvable global Skills contract")
+    func globalSkillContracts() throws {
+        let home = URL(fileURLWithPath: "/Users/tester", isDirectory: true)
+        let expected: [AgentKind: String] = [
+            .codex: "/Users/tester/.codex/skills",
+            .claudeCode: "/Users/tester/.claude/skills",
+            .geminiCLI: "/Users/tester/.gemini/skills",
+            .githubCopilotCLI: "/Users/tester/.copilot/skills",
+            .qwenCode: "/Users/tester/.qwen/skills",
+            .cursorAgent: "/Users/tester/.cursor/skills",
+            .factoryDroid: "/Users/tester/.factory/skills",
+            .openCode: "/Users/tester/.config/opencode/skills",
+            .pi: "/Users/tester/.pi/agent/skills",
+        ]
+
+        for adapter in AgentAdapterRegistry.builtIn.adapters {
+            let capability = try #require(adapter.globalSkills)
+            #expect(
+                capability.resolveDirectory(
+                    homeDirectory: home,
+                    environment: [:]
+                ).path == expected[adapter.kind]
+            )
+            #expect(!capability.activationHint.isEmpty)
+        }
+
+        let openCode = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .openCode }
+        )
+        #expect(
+            openCode.globalSkills?.resolveDirectory(
+                homeDirectory: home,
+                environment: ["XDG_CONFIG_HOME": "/Volumes/config" ]
+            ).path == "/Volumes/config/opencode/skills"
+        )
+        #expect(
+            openCode.globalSkills?.reliablyResolveDirectory(
+                homeDirectory: home,
+                environment: ["XDG_CONFIG_HOME": "relative/config"]
+            ) == nil
+        )
+    }
+
     @Test("Claude, Gemini, and OpenCode map their official lifecycle events")
     func officialLifecycleMappings() throws {
         let claude = try #require(

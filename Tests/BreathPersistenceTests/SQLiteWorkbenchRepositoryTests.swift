@@ -1,6 +1,7 @@
 import BreathAgents
 import BreathCore
 import BreathPersistence
+import BreathSkills
 import Foundation
 import Testing
 
@@ -151,6 +152,36 @@ struct SQLiteWorkbenchRepositoryTests {
         ] {
             #expect(!rawDatabase.contains(secret))
         }
+    }
+
+    @Test("remote Skill provenance survives a repository round trip")
+    func skillInstallationRecordRoundTrip() async throws {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("breath-skill-records-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+        let repository = try SQLiteWorkbenchRepository(databaseURL: databaseURL)
+        let record = SkillInstallationRecord(
+            agent: .codex,
+            installationDirectory: URL(fileURLWithPath: "/Users/tester/.codex/skills/review"),
+            skillName: "review",
+            source: .github,
+            repository: "example/skills",
+            sourceRelativePath: "skills/review",
+            reference: SkillSourceReference(kind: .branch, value: "main"),
+            resolvedCommit: "0123456789abcdef",
+            installedContentDigest: "digest-v1",
+            installedAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        try await repository.saveSkillInstallationRecord(record)
+
+        let reopened = try SQLiteWorkbenchRepository(databaseURL: databaseURL)
+        #expect(try await reopened.loadSkillInstallationRecords() == [record])
+        try await reopened.removeSkillInstallationRecord(
+            installationDirectory: record.installationDirectory
+        )
+        #expect(try await reopened.loadSkillInstallationRecords().isEmpty)
     }
 }
 

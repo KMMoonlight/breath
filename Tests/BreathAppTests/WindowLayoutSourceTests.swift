@@ -14,6 +14,25 @@ private final class TestSplitTrackingAncestor:
 
 @Suite("Main window layout source guard")
 struct WindowLayoutSourceTests {
+    @Test("global Skills stays reachable beside Tasks without a selected workspace")
+    func globalSkillsNavigationIsIndependent() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/WorkbenchView.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("case skills"))
+        #expect(source.contains("WorkbenchAccessibility.openSkills"))
+        #expect(source.contains("SkillsView(service: model.skillsService"))
+        let tasks = try #require(source.range(of: "WorkbenchAccessibility.openTaskView"))
+        let skills = try #require(source.range(of: "WorkbenchAccessibility.openSkills"))
+        #expect(tasks.lowerBound < skills.lowerBound)
+    }
+
     @Test("Git error alerts keep long command output compact")
     func gitErrorPresentationIsBounded() {
         let longOutput = (1...80)

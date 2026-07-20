@@ -9,12 +9,14 @@ enum WorkbenchAccessibility {
     static let openSettings = "打开设置"
     static let openGitWorkbench = "打开 Git 工作台"
     static let openTaskView = "打开任务视图"
+    static let openSkills = "打开 Skills"
     static let taskViewPanel = "任务视图面板"
 }
 
 private enum WorkbenchDetailMode: Equatable {
     case sessions
     case tasks
+    case skills
     case gitWorkbench(WorkspaceID)
 }
 
@@ -221,6 +223,14 @@ struct WorkbenchView: View {
                 isSelected: detailMode == .tasks
             ) {
                 detailMode = .tasks
+            }
+
+            sidebarFooterButton(
+                systemName: "sparkles",
+                accessibilityLabel: WorkbenchAccessibility.openSkills,
+                isSelected: detailMode == .skills
+            ) {
+                detailMode = .skills
             }
         }
         .padding(.horizontal, WorkbenchLayout.sidebarFooterHorizontalPadding)
@@ -507,7 +517,9 @@ struct WorkbenchView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if detailMode == .tasks {
+        if detailMode == .skills {
+            SkillsView(service: model.skillsService)
+        } else if detailMode == .tasks {
             Color(nsColor: .windowBackgroundColor)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(localizer.string(WorkbenchAccessibility.taskViewPanel))

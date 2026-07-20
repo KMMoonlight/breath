@@ -93,6 +93,61 @@ public enum AgentIntegrationMechanism: String, Equatable, Sendable {
     case terminalParsing
 }
 
+public struct AgentGlobalSkillsCapability: Equatable, Sendable {
+    public let configurationRootEnvironmentVariable: String?
+    public let defaultConfigurationRootRelativePath: String
+    public let skillsRelativePath: String
+    public let activationHint: String
+
+    public init(
+        configurationRootEnvironmentVariable: String? = nil,
+        defaultConfigurationRootRelativePath: String,
+        skillsRelativePath: String = "skills",
+        activationHint: String
+    ) {
+        self.configurationRootEnvironmentVariable = configurationRootEnvironmentVariable
+        self.defaultConfigurationRootRelativePath = defaultConfigurationRootRelativePath
+        self.skillsRelativePath = skillsRelativePath
+        self.activationHint = activationHint
+    }
+
+    public func resolveDirectory(
+        homeDirectory: URL,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        reliablyResolveDirectory(
+            homeDirectory: homeDirectory,
+            environment: environment
+        ) ?? homeDirectory.appendingPathComponent(
+            defaultConfigurationRootRelativePath,
+            isDirectory: true
+        ).appendingPathComponent(skillsRelativePath, isDirectory: true)
+            .standardizedFileURL
+    }
+
+    public func reliablyResolveDirectory(
+        homeDirectory: URL,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL? {
+        let configurationRoot: URL
+        if let configurationRootEnvironmentVariable,
+           let rawRoot = environment[configurationRootEnvironmentVariable],
+           !rawRoot.isEmpty
+        {
+            guard NSString(string: rawRoot).isAbsolutePath else { return nil }
+            configurationRoot = URL(fileURLWithPath: rawRoot, isDirectory: true)
+        } else {
+            configurationRoot = homeDirectory.appendingPathComponent(
+                defaultConfigurationRootRelativePath,
+                isDirectory: true
+            )
+        }
+        return configurationRoot
+            .appendingPathComponent(skillsRelativePath, isDirectory: true)
+            .standardizedFileURL
+    }
+}
+
 public struct AgentAdapterDescriptor: Equatable, Sendable {
     public let kind: AgentKind
     public let displayName: String
@@ -100,6 +155,7 @@ public struct AgentAdapterDescriptor: Equatable, Sendable {
     public let integrationMechanism: AgentIntegrationMechanism
     public let userConfigurationPath: String
     public let hookRegistrations: [AgentHookRegistration]
+    public let globalSkills: AgentGlobalSkillsCapability?
 
     public init(
         kind: AgentKind,
@@ -107,7 +163,8 @@ public struct AgentAdapterDescriptor: Equatable, Sendable {
         minimumVersion: String,
         integrationMechanism: AgentIntegrationMechanism,
         userConfigurationPath: String,
-        hookRegistrations: [AgentHookRegistration]
+        hookRegistrations: [AgentHookRegistration],
+        globalSkills: AgentGlobalSkillsCapability? = nil
     ) {
         self.kind = kind
         self.displayName = displayName
@@ -115,6 +172,7 @@ public struct AgentAdapterDescriptor: Equatable, Sendable {
         self.integrationMechanism = integrationMechanism
         self.userConfigurationPath = userConfigurationPath
         self.hookRegistrations = hookRegistrations
+        self.globalSkills = globalSkills
     }
 }
 
@@ -132,7 +190,12 @@ public struct AgentAdapterRegistry: Sendable {
             minimumVersion: "0.144.3",
             integrationMechanism: .userHooks,
             userConfigurationPath: "~/.codex/hooks.json",
-            hookRegistrations: standardHooks
+            hookRegistrations: standardHooks,
+            globalSkills: AgentGlobalSkillsCapability(
+                configurationRootEnvironmentVariable: "CODEX_HOME",
+                defaultConfigurationRootRelativePath: ".codex",
+                activationHint: "Start a new Codex session to load changed Skills."
+            )
         ),
         AgentAdapterDescriptor(
             kind: .claudeCode,
@@ -142,7 +205,12 @@ public struct AgentAdapterRegistry: Sendable {
             userConfigurationPath: "~/.claude/settings.json",
             hookRegistrations: [
                 AgentHookRegistration(eventName: "SessionStart", lifecycle: .turnStarted),
-            ] + standardHooks
+            ] + standardHooks,
+            globalSkills: AgentGlobalSkillsCapability(
+                configurationRootEnvironmentVariable: "CLAUDE_CONFIG_DIR",
+                defaultConfigurationRootRelativePath: ".claude",
+                activationHint: "Start a new Claude Code session to load changed Skills."
+            )
         ),
         AgentAdapterDescriptor(
             kind: .geminiCLI,
@@ -155,7 +223,12 @@ public struct AgentAdapterRegistry: Sendable {
                 AgentHookRegistration(eventName: "AfterAgent", lifecycle: .turnCompleted),
                 AgentHookRegistration(eventName: "Notification", lifecycle: .needsAttention),
                 AgentHookRegistration(eventName: "SessionEnd", lifecycle: .sessionEnded),
-            ]
+            ],
+            globalSkills: AgentGlobalSkillsCapability(
+                configurationRootEnvironmentVariable: "GEMINI_CLI_HOME",
+                defaultConfigurationRootRelativePath: ".gemini",
+                activationHint: "Start a new Gemini CLI session to load changed Skills."
+            )
         ),
         AgentAdapterDescriptor(
             kind: .githubCopilotCLI,
@@ -168,7 +241,12 @@ public struct AgentAdapterRegistry: Sendable {
                 AgentHookRegistration(eventName: "permissionRequest", lifecycle: .needsAttention),
                 AgentHookRegistration(eventName: "agentStop", lifecycle: .turnCompleted),
                 AgentHookRegistration(eventName: "sessionEnd", lifecycle: .sessionEnded),
-            ]
+            ],
+            globalSkills: AgentGlobalSkillsCapability(
+                configurationRootEnvironmentVariable: "COPILOT_HOME",
+                defaultConfigurationRootRelativePath: ".copilot",
+                activationHint: "Start a new GitHub Copilot CLI session to load changed Skills."
+            )
         ),
         AgentAdapterDescriptor(
             kind: .qwenCode,
@@ -176,7 +254,12 @@ public struct AgentAdapterRegistry: Sendable {
             minimumVersion: "0.16.2",
             integrationMechanism: .userHooks,
             userConfigurationPath: "~/.qwen/settings.json",
-            hookRegistrations: standardHooks
+            hookRegistrations: standardHooks,
+            globalSkills: AgentGlobalSkillsCapability(
+                configurationRootEnvironmentVariable: "QWEN_CLI_HOME",
+                defaultConfigurationRootRelativePath: ".qwen",
+                activationHint: "Start a new Qwen Code session to load changed Skills."
+            )
         ),
         AgentAdapterDescriptor(
             kind: .cursorAgent,
@@ -189,7 +272,12 @@ public struct AgentAdapterRegistry: Sendable {
                 AgentHookRegistration(eventName: "afterAgentResponse", lifecycle: .turnCompleted),
                 AgentHookRegistration(eventName: "stop", lifecycle: .turnCompleted),
                 AgentHookRegistration(eventName: "sessionEnd", lifecycle: .sessionEnded),
-            ]
+            ],
+            globalSkills: AgentGlobalSkillsCapability(
+                configurationRootEnvironmentVariable: "CURSOR_AGENT_HOME",
+                defaultConfigurationRootRelativePath: ".cursor",
+                activationHint: "Start a new Cursor Agent session to load changed Skills."
+            )
         ),
         AgentAdapterDescriptor(
             kind: .factoryDroid,
@@ -197,7 +285,12 @@ public struct AgentAdapterRegistry: Sendable {
             minimumVersion: "未版本化（2026-07 Hooks 文档）",
             integrationMechanism: .userHooks,
             userConfigurationPath: "~/.factory/settings.json",
-            hookRegistrations: standardHooks
+            hookRegistrations: standardHooks,
+            globalSkills: AgentGlobalSkillsCapability(
+                configurationRootEnvironmentVariable: "FACTORY_HOME",
+                defaultConfigurationRootRelativePath: ".factory",
+                activationHint: "Start a new Factory Droid session to load changed Skills."
+            )
         ),
         AgentAdapterDescriptor(
             kind: .openCode,
@@ -210,7 +303,13 @@ public struct AgentAdapterRegistry: Sendable {
                 AgentHookRegistration(eventName: "session.updated", lifecycle: .metadataUpdated),
                 AgentHookRegistration(eventName: "permission.asked", lifecycle: .needsAttention),
                 AgentHookRegistration(eventName: "session.idle", lifecycle: .turnCompleted),
-            ]
+            ],
+            globalSkills: AgentGlobalSkillsCapability(
+                configurationRootEnvironmentVariable: "XDG_CONFIG_HOME",
+                defaultConfigurationRootRelativePath: ".config",
+                skillsRelativePath: "opencode/skills",
+                activationHint: "Start a new OpenCode session to load changed Skills."
+            )
         ),
         AgentAdapterDescriptor(
             kind: .pi,
@@ -222,7 +321,12 @@ public struct AgentAdapterRegistry: Sendable {
                 AgentHookRegistration(eventName: "agent_start", lifecycle: .turnStarted),
                 AgentHookRegistration(eventName: "agent_end", lifecycle: .turnCompleted),
                 AgentHookRegistration(eventName: "session_shutdown", lifecycle: .sessionEnded),
-            ]
+            ],
+            globalSkills: AgentGlobalSkillsCapability(
+                configurationRootEnvironmentVariable: "PI_CODING_AGENT_DIR",
+                defaultConfigurationRootRelativePath: ".pi/agent",
+                activationHint: "Start a new Pi session to load changed Skills."
+            )
         ),
     ])
 

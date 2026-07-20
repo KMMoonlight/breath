@@ -104,6 +104,58 @@ _Avoid_: Breath 更新服务器、GitHub API 更新器、静默强制更新
 用户在终端窗格中手动启动、并通过终端持续交互的编码 Agent 命令行程序。
 _Avoid_: 内置 Agent、Agent 配置、Agent 实例
 
+**全局 Skill（Global Skill）**：
+不属于任何工作区、可在当前 macOS 用户的所有项目中使用的 Agent 能力说明；同一个全局 Skill 可以面向一个或多个 Agent CLI。它是否属于全局 Skill，不取决于由 Breath、Agent CLI 还是其他工具完成安装；名称相同但内容不同的能力说明属于不同的全局 Skill，但同一个 Agent CLI 中只能安装其中一个，后安装项必须由用户明确选择覆盖或跳过。
+_Avoid_: 项目 Skill、Agent 集成、工作区 Skill
+
+**Skill 安装目标（Skill Installation Target）**：
+用户为一次全局 Skill 安装明确选择、已安装在当前设备上且能可靠解析全局 Skill 目录的受支持 Agent CLI；只有被选择的 Agent CLI 才获得该 Skill。Skill 安装目标与受支持 Agent CLI 使用同一支持矩阵，新增受支持 Agent CLI 时同步纳入候选范围；尚未安装或目录无法确认的 Agent CLI 只显示状态，不能成为安装目标。
+_Avoid_: 默认 Agent、受支持 Agent CLI、自动分发目标
+
+**Skill 来源（Skill Source）**：
+用户用来发现待安装 Skill 的 ZIP 文件、GitHub Repo 或 skills.sh 条目；一个来源可以包含一个或多个候选 Skill，来源本身不等同于全局 Skill。
+_Avoid_: 全局 Skill、Skill 安装目标、Agent 仓库
+
+**候选 Skill（Skill Candidate）**：
+从 Skill 来源中发现、尚未写入 Agent 目录的 Skill；缺少可解析的 `SKILL.md`、`name` 或 `description` 时不能安装，非致命的格式偏差可以带警告进入安装预览。
+_Avoid_: 全局 Skill、无效文件夹、已安装 Skill
+
+**无法识别的 Skill 项目（Unrecognized Skill Item）**：
+位于 Agent Skill 目录中、但无法解析成全局 Skill 的文件夹或链接；它只作为带路径和错误原因的诊断项展示，不计入 Skill 列表，也不由 Breath 直接删除。
+_Avoid_: 全局 Skill、候选 Skill、来源未知 Skill
+
+**Skill 上游（Skill Upstream）**：
+与已安装全局 Skill 关联、且可由安装记录或兼容清单确认的 GitHub Repo 或 skills.sh 远程位置，是检查和获取更新的依据；Breath 不根据名称猜测上游，ZIP 来源和来源未知的 Skill 都没有 Skill 上游。
+_Avoid_: Skill 来源、ZIP 文件、Agent 目录
+
+**Skill 安装记录（Skill Installation Record）**：
+Breath 在本机保存、用于把一个 Agent 目录中的全局 Skill 副本关联到来源、上游版本和安装时内容的记录；它不决定 Skill 是否已安装，记录丢失只会使来源与更新能力不可确认。
+_Avoid_: 全局 Skill、副本目录、安装清单文件
+
+**Skill 安装预览（Skill Installation Review）**：
+全局 Skill 写入 Agent 目录前必须经过的用户确认，呈现来源、说明、文件、安装目标和将被替换的既有内容；检查预览内容不执行其中的脚本。
+_Avoid_: 搜索结果、安装结果、脚本试运行
+
+**Skill 安全审计（Skill Security Audit）**：
+skills.sh 等来源对候选 Skill 提供的辅助风险报告，不构成安全保证，也不能替代 Skill 安装预览；未知状态不表示安全，高风险结果要求额外确认但不永久禁止安装。
+_Avoid_: 安全认证、安装许可、内容预览
+
+**Skill 更新（Skill Update）**：
+从已确认的 Skill 上游取得新内容并替换已安装副本的用户操作；Breath 可以自动检查更新，但只有用户完成内容预览并确认后才写入，失败时保留原版本。
+_Avoid_: 自动同步、重新安装、后台覆盖
+
+**本地修改 Skill（Locally Modified Skill）**：
+实际内容与 Skill 安装记录中的内容摘要不同、但路径与身份仍能确认的远程来源全局 Skill；它保留 Skill 上游，更新前必须明确展示将被替换的本地修改。
+_Avoid_: 来源未知 Skill、可用更新、同名 Skill
+
+**Skill 卸载（Skill Uninstall）**：
+从用户明确选择的一个或多个 Skill 安装目标中移除全局 Skill 副本的操作；各目标独立产生结果，不删除 Skill 来源，也不影响未选择的 Agent。普通目录移入 macOS 废纸篓以便恢复，符号链接只移除链接。
+_Avoid_: 删除来源、全局清理、移除 Agent
+
+**Skill 安装结果（Skill Installation Result）**：
+一个候选 Skill 写入一个 Skill 安装目标的独立结果；批量安装可以部分成功，某个结果失败不回滚其他成功结果，但失败目标不能留下不完整的 Skill 目录。
+_Avoid_: 整批安装事务、部分目录、统一失败
+
 **Agent 对话（Agent Conversation）**：
 由 Agent CLI 自身拥有、可以在原进程结束后续接的交互上下文。它通过 Agent CLI 分配的原生会话标识绑定到 Breath 的一个终端窗格。
 _Avoid_: 工作会话、终端会话、终端进程
