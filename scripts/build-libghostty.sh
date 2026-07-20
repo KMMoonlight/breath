@@ -61,4 +61,26 @@ git -C "${SOURCE_DIR}" checkout --detach "${REVISION}"
 mkdir -p "${VENDOR_DIR}"
 rm -rf "${VENDOR_DIR}/GhosttyKit.xcframework"
 ditto "${SOURCE_DIR}/macos/GhosttyKit.xcframework" "${VENDOR_DIR}/GhosttyKit.xcframework"
+
+GHOSTTY_ARCHIVE="${VENDOR_DIR}/GhosttyKit.xcframework/macos-arm64/libghostty-internal-fat.a"
+EXT_OBJECT_COUNT=$(/usr/bin/ar -t "${GHOSTTY_ARCHIVE}" | /usr/bin/awk '$0 == "ext.o" { count += 1 } END { print count + 0 }')
+if (( EXT_OBJECT_COUNT == 2 )); then
+  # dsymutil resolves archive members by basename, so Ghostty's two ext.o
+  # members must have unique names even though the linker handles them safely.
+  NORMALIZE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/breath-ghostty-archive.XXXXXX")
+  (
+    cd "${NORMALIZE_DIR}"
+    /usr/bin/ar -x "${GHOSTTY_ARCHIVE}" ext.o
+    /bin/chmod u+rw ext.o
+    /bin/mv ext.o macos_text_ext.o
+    /usr/bin/ar -d "${GHOSTTY_ARCHIVE}" ext.o
+    /usr/bin/ar -q "${GHOSTTY_ARCHIVE}" macos_text_ext.o
+    /usr/bin/ranlib "${GHOSTTY_ARCHIVE}"
+  )
+  rm -rf "${NORMALIZE_DIR}"
+elif (( EXT_OBJECT_COUNT != 1 )); then
+  print -u2 "Unexpected ext.o member count in Ghostty archive: ${EXT_OBJECT_COUNT}"
+  exit 1
+fi
+
 print "Built GhosttyKit.xcframework from ${REVISION}"

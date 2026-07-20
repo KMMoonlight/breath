@@ -6,97 +6,183 @@ import SwiftUI
 enum WorkbenchAccessibility {
     static let addWorkspace = "添加工作区"
     static let noSelectedWorkSession = "没有选中的工作会话"
+    static let openSettings = "打开设置"
+    static let openGitWorkbench = "打开 Git 工作台"
+    static let openTaskView = "打开任务视图"
+    static let taskViewPanel = "任务视图面板"
+}
+
+private enum WorkbenchDetailMode: Equatable {
+    case sessions
+    case tasks
+    case gitWorkbench(WorkspaceID)
 }
 
 struct WorkbenchView: View {
     @ObservedObject var model: BreathApplicationModel
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.openSettings) private var openSettings
     @State private var pendingArchive: WorkSession?
     @State private var pendingWorkspaceRemoval: Workspace?
-    @State private var pendingPaneClose: TerminalPaneID?
     @State private var dismissedUnavailableWorkspaces: Set<WorkspaceID> = []
+    @State private var expandedWorkspaceIDs: Set<WorkspaceID> = []
+    @State private var hoveredSessionID: WorkSessionID?
+    @State private var pendingTerminalFocusID: TerminalPaneID?
+    @State private var detailMode = WorkbenchDetailMode.sessions
+    @StateObject private var gitCoordinator = GitWorkbenchCoordinator()
 
     var body: some View {
-        NavigationSplitView {
+        SidebarResizeContainer {
             sidebar
-                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 380)
+                .font(applicationFont(for: model))
         } detail: {
             detail
+                .font(applicationFont(for: model))
         }
+        .ignoresSafeArea(.container, edges: .top)
         .frame(minWidth: 900, minHeight: 600)
         .disabled(!model.isReady)
+        .allowsHitTesting(model.canPerformCommands)
         .overlay {
             if !model.isReady {
-                ProgressView("正在恢复上次工作区…")
+                ProgressView(localizer.string("正在恢复上次工作区…"))
                     .padding(18)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
         }
         .onAppear {
+            model.synchronizeTerminalAppearance(resolvedAppearance)
             model.start()
             offerRemovalForUnavailableWorkspace()
         }
-        .onChange(of: model.snapshot) { _, _ in
-            offerRemovalForUnavailableWorkspace()
+        .onChange(of: colorScheme) { _, _ in
+            model.synchronizeTerminalAppearance(resolvedAppearance)
         }
-        .alert("归档工作会话？", isPresented: archiveAlertPresented, presenting: pendingArchive) { session in
-            Button("取消", role: .cancel) { pendingArchive = nil }
-            Button("停止并归档", role: .destructive) {
+        .onChange(of: model.snapshot) { previousSnapshot, snapshot in
+            updateWorkspaceExpansion(from: previousSnapshot, to: snapshot)
+            offerRemovalForUnavailableWorkspace()
+            focusPendingTerminalAfterViewUpdate()
+            if previousSnapshot.selectedWorkSessionID != snapshot.selectedWorkSessionID {
+                if case .gitWorkbench = detailMode,
+                   let workspaceID = model.currentWorkspaceID
+                {
+                    detailMode = .gitWorkbench(workspaceID)
+                } else {
+                    detailMode = .sessions
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .breathOpenGitWorkbench)) { _ in
+            guard GitWorkbenchReleaseGate.isEnabled else { return }
+            guard let workspaceID = model.currentWorkspaceID else { return }
+            detailMode = .gitWorkbench(workspaceID)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .breathGitCommit)) { _ in
+            guard GitWorkbenchReleaseGate.isEnabled else { return }
+            guard let workspaceID = model.currentWorkspaceID,
+                  let workspace = model.snapshot.workspaces.first(where: {
+                      $0.id == workspaceID
+                  })
+            else {
+                return
+            }
+            detailMode = .gitWorkbench(workspaceID)
+            gitCoordinator.model(for: workspace).shouldFocusCommitMessage = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .breathGitPush)) { _ in
+            guard GitWorkbenchReleaseGate.isEnabled else { return }
+            guard let workspaceID = model.currentWorkspaceID,
+                  let workspace = model.snapshot.workspaces.first(where: {
+                      $0.id == workspaceID
+                  })
+            else {
+                return
+            }
+            detailMode = .gitWorkbench(workspaceID)
+            gitCoordinator.model(for: workspace).shouldPresentPushReview = true
+        }
+        .alert(
+            localizer.string("归档工作会话？"),
+            isPresented: archiveAlertPresented,
+            presenting: pendingArchive
+        ) { session in
+            Button(localizer.string("取消"), role: .cancel) { pendingArchive = nil }
+            Button(localizer.string("停止并归档"), role: .destructive) {
                 model.archive(session.id)
                 pendingArchive = nil
             }
         } message: { _ in
-            Text("该会话中的所有终端进程都会停止。会话之后可在设置的“已归档”中恢复。")
+            Text(localizer.string("该会话中的所有终端进程都会停止。会话之后可在设置的“已归档”中恢复。"))
         }
-        .alert("移除工作区？", isPresented: workspaceAlertPresented, presenting: pendingWorkspaceRemoval) { workspace in
-            Button("取消", role: .cancel) {
+        .alert(
+            localizer.string("移除工作区？"),
+            isPresented: workspaceAlertPresented,
+            presenting: pendingWorkspaceRemoval
+        ) { workspace in
+            Button(localizer.string("取消"), role: .cancel) {
                 dismissedUnavailableWorkspaces.insert(workspace.id)
                 pendingWorkspaceRemoval = nil
             }
-            Button("停止并移除", role: .destructive) {
+            Button(localizer.string("停止并移除"), role: .destructive) {
                 model.removeWorkspace(workspace.id)
                 pendingWorkspaceRemoval = nil
             }
         } message: { workspace in
-            Text("将停止相关终端并删除 Breath 元数据，不会修改 \(workspace.path) 中的任何文件。")
-        }
-        .alert("关闭终端窗格？", isPresented: paneCloseAlertPresented) {
-            Button("取消", role: .cancel) { pendingPaneClose = nil }
-            Button("停止并关闭", role: .destructive) {
-                if let paneID = pendingPaneClose { model.closePane(paneID) }
-                pendingPaneClose = nil
-            }
-        } message: {
-            Text("该终端中的进程会停止。")
+            Text(localizer.format("移除工作区说明 %@", workspace.path))
         }
         .alert("Breath", isPresented: errorAlertPresented) {
-            Button("好") { model.lastError = nil }
+            Button(localizer.string("好")) { model.lastError = nil }
         } message: {
-            Text(model.lastError ?? "未知错误")
+            Text(model.lastError ?? localizer.string("未知错误"))
         }
+    }
+
+    private var localizer: ApplicationLocalizer {
+        ApplicationLocalizer(language: model.settings.application.language)
+    }
+
+    private var resolvedAppearance: ResolvedApplicationAppearance {
+        colorScheme == .dark ? .dark : .light
     }
 
     private var sidebar: some View {
         VStack(spacing: 0) {
+            Color.clear
+                .frame(height: WorkbenchLayout.windowControlsHeight)
+                .accessibilityHidden(true)
+
             HStack {
-                Text("工作区")
-                    .font(.headline)
+                Text(localizer.string("工作区"))
+                    .font(applicationFont(for: model, offset: 1, weight: .semibold))
                 Spacer()
-                Button(action: chooseWorkspace) {
+                Menu {
+                    Button(localizer.string("选择已有文件夹"), systemImage: "folder") {
+                        chooseWorkspace()
+                    }
+                    Button(localizer.string("创建新文件夹"), systemImage: "folder.badge.plus") {
+                        createWorkspace()
+                    }
+                } label: {
                     Image(systemName: "folder.badge.plus")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(WorkbenchAccessibility.addWorkspace)
-                .help(WorkbenchAccessibility.addWorkspace)
+                .tint(.primary)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel(localizer.string(WorkbenchAccessibility.addWorkspace))
+                .help(localizer.string(WorkbenchAccessibility.addWorkspace))
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.vertical, WorkbenchLayout.sidebarHeaderVerticalPadding)
 
             Divider()
 
             if model.snapshot.workspaces.isEmpty {
-                Color.clear
+                Text(localizer.string("添加工作区"))
+                    .font(applicationFont(for: model, offset: -1))
+                    .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityHidden(true)
             } else {
                 List {
                     ForEach(model.snapshot.workspaces) { workspace in
@@ -104,17 +190,81 @@ struct WorkbenchView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+                .font(applicationFont(for: model))
+                .controlSize(.regular)
                 .environment(
                     \.defaultMinListRowHeight,
-                    model.settings.application.sidebarDensity == .compact ? 24 : 30
+                    WorkbenchLayout.sidebarRowHeight
                 )
             }
+
+            sidebarFooter
         }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var sidebarFooter: some View {
+        HStack(spacing: 0) {
+            sidebarFooterButton(
+                systemName: "gearshape",
+                accessibilityLabel: WorkbenchAccessibility.openSettings
+            ) {
+                openSettings()
+            }
+
+            Spacer(minLength: 0)
+
+            sidebarFooterButton(
+                systemName: "checklist",
+                accessibilityLabel: WorkbenchAccessibility.openTaskView,
+                isSelected: detailMode == .tasks
+            ) {
+                detailMode = .tasks
+            }
+        }
+        .padding(.horizontal, WorkbenchLayout.sidebarFooterHorizontalPadding)
+        .frame(height: WorkbenchLayout.bottomBarHeight)
+        .overlay(alignment: .top) {
+            Divider()
+        }
+    }
+
+    private func sidebarFooterButton(
+        systemName: String,
+        accessibilityLabel: String,
+        isSelected: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .symbolRenderingMode(.monochrome)
+                .font(.system(size: WorkbenchLayout.sidebarFooterIconSize, weight: .medium))
+                .foregroundStyle(isSelected ? Color.primary : sidebarActionForegroundColor)
+                .frame(
+                    width: WorkbenchLayout.sidebarFooterSelectionWidth,
+                    height: WorkbenchLayout.sidebarFooterSelectionHeight
+                )
+                .background {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.08))
+                    }
+                }
+                .frame(
+                    width: WorkbenchLayout.bottomBarHeight,
+                    height: WorkbenchLayout.bottomBarHeight
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(SidebarFooterButtonStyle())
+        .accessibilityLabel(localizer.string(accessibilityLabel))
+        .help(localizer.string(accessibilityLabel))
     }
 
     @ViewBuilder
     private func workspaceSection(_ workspace: Workspace) -> some View {
-        DisclosureGroup {
+        DisclosureGroup(isExpanded: workspaceExpansionBinding(for: workspace.id)) {
             let sessions = model.snapshot.activeWorkSessions.filter {
                 $0.workspaceID == workspace.id
             }
@@ -122,7 +272,7 @@ struct WorkbenchView: View {
                 sessionTree(session)
             }
         } label: {
-            HStack(spacing: 7) {
+            HStack(spacing: WorkbenchLayout.sidebarItemSpacing) {
                 Image(systemName: model.isWorkspaceAvailable(workspace) ? "folder" : "folder.badge.questionmark")
                     .foregroundStyle(
                         model.isWorkspaceAvailable(workspace)
@@ -130,25 +280,58 @@ struct WorkbenchView: View {
                             : Color.orange
                     )
                 Text(workspace.displayName)
+                    .font(applicationFont(for: model))
                     .lineLimit(1)
                 Spacer()
-                Button {
-                    model.createWorkSession(in: workspace.id)
+                Menu {
+                    workspaceMenuItems(workspace)
                 } label: {
-                    Image(systemName: "plus")
+                    SidebarActionIcon(
+                        systemName: "ellipsis",
+                        color: sidebarActionForegroundColor
+                    )
                 }
-                .buttonStyle(.plain)
-                .help("新建工作会话")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .tint(sidebarActionForegroundColor)
+                .controlSize(.small)
+                .frame(
+                    width: WorkbenchLayout.sidebarActionFrameSize,
+                    height: WorkbenchLayout.sidebarActionFrameSize
+                )
+                .help(localizer.string("工作区菜单"))
+                Button {
+                    createWorkSession(in: workspace.id)
+                } label: {
+                    SidebarActionIcon(
+                        systemName: "plus",
+                        color: sidebarActionForegroundColor
+                    )
+                }
+                .buttonStyle(.borderless)
+                .tint(sidebarActionForegroundColor)
+                .controlSize(.small)
+                .frame(
+                    width: WorkbenchLayout.sidebarActionFrameSize,
+                    height: WorkbenchLayout.sidebarActionFrameSize
+                )
+                .help(localizer.string("新建工作会话"))
             }
+            .padding(.leading, WorkbenchLayout.sidebarWorkspaceDisclosureSpacing)
             .contextMenu {
-                Button("新建工作会话") {
-                    model.createWorkSession(in: workspace.id)
-                }
-                Divider()
-                Button("移除工作区…", role: .destructive) {
-                    pendingWorkspaceRemoval = workspace
-                }
+                workspaceMenuItems(workspace)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceMenuItems(_ workspace: Workspace) -> some View {
+        Button(localizer.string("新建工作会话")) {
+            createWorkSession(in: workspace.id)
+        }
+        Divider()
+        Button(localizer.string("移除工作区…"), role: .destructive) {
+            pendingWorkspaceRemoval = workspace
         }
     }
 
@@ -161,16 +344,18 @@ struct WorkbenchView: View {
             DisclosureGroup {
                 ForEach(Array(panes.enumerated()), id: \.element.id) { index, pane in
                     Button {
-                        model.selectWorkSession(session.id)
+                        requestTerminalFocus(session: session, pane: pane)
                     } label: {
-                        HStack(spacing: 7) {
+                        HStack(spacing: WorkbenchLayout.sidebarItemSpacing) {
                             StateDot(state: pane.state)
                             if let agent = pane.agentBinding?.agent {
                                 AgentTypeLabel(agent: agent)
                             }
-                            Image(systemName: "rectangle.split.2x1")
-                                .foregroundStyle(.secondary)
-                            Text(pane.agentBinding?.nativeTitle ?? "终端 \(index + 1)")
+                            Text(
+                                pane.agentBinding?.nativeTitle
+                                    ?? localizer.format("终端 %d", index + 1)
+                            )
+                                .font(applicationFont(for: model))
                                 .lineLimit(1)
                             Spacer(minLength: 0)
                         }
@@ -180,7 +365,44 @@ struct WorkbenchView: View {
                     .padding(.leading, 4)
                 }
             } label: {
-                sessionRowContent(session, pane: nil)
+                sessionRowContent(
+                    session,
+                    pane: nil,
+                    selectionBackgroundLeadingPadding: -25,
+                    contentLeadingPadding: WorkbenchLayout.sidebarDisclosureLabelSpacing
+                )
+            }
+            .transaction { transaction in
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
+    }
+
+    private func requestTerminalFocus(session: WorkSession, pane: TerminalPane) {
+        pendingTerminalFocusID = pane.id
+        selectWorkSession(session.id)
+        focusPendingTerminalAfterViewUpdate()
+    }
+
+    private func selectWorkSession(_ sessionID: WorkSessionID) {
+        detailMode = .sessions
+        model.selectWorkSession(sessionID)
+    }
+
+    private func focusPendingTerminalAfterViewUpdate() {
+        guard pendingTerminalFocusID != nil else { return }
+        DispatchQueue.main.async {
+            guard let paneID = pendingTerminalFocusID,
+                  TerminalInputFocus.move(
+                      to: paneID,
+                      using: model.terminalEngine
+                  )
+            else {
+                return
+            }
+            if pendingTerminalFocusID == paneID {
+                pendingTerminalFocusID = nil
             }
         }
     }
@@ -189,19 +411,24 @@ struct WorkbenchView: View {
         sessionRowContent(session, pane: pane)
     }
 
-    private func sessionRowContent(_ session: WorkSession, pane: TerminalPane?) -> some View {
-        HStack(spacing: 7) {
+    private func sessionRowContent(
+        _ session: WorkSession,
+        pane: TerminalPane?,
+        selectionBackgroundLeadingPadding: CGFloat = -5,
+        contentLeadingPadding: CGFloat = 0
+    ) -> some View {
+        let showsArchiveButton = hoveredSessionID == session.id
+        return HStack(spacing: WorkbenchLayout.sidebarItemSpacing) {
             if let pane { StateDot(state: pane.state) }
             if let agent = pane?.agentBinding?.agent {
                 AgentTypeLabel(agent: agent)
             }
             Button {
-                model.selectWorkSession(session.id)
+                selectWorkSession(session.id)
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: "bubble.left.and.text.bubble.right")
-                        .foregroundStyle(.secondary)
                     Text(session.title)
+                        .font(applicationFont(for: model))
                         .lineLimit(1)
                     Spacer(minLength: 4)
                 }
@@ -214,49 +441,163 @@ struct WorkbenchView: View {
                 Image(systemName: "archivebox")
             }
             .buttonStyle(.plain)
-            .help("归档")
+            .help(localizer.string("归档"))
+            .opacity(showsArchiveButton ? 1 : 0)
+            .allowsHitTesting(showsArchiveButton)
         }
         .padding(.vertical, 1)
+        .padding(.leading, contentLeadingPadding)
         .contentShape(Rectangle())
+        .onHover { isHovering in
+            if isHovering {
+                hoveredSessionID = session.id
+            } else if hoveredSessionID == session.id {
+                hoveredSessionID = nil
+            }
+        }
         .background {
             if model.snapshot.selectedWorkSessionID == session.id {
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.accentColor.opacity(0.16))
-                    .padding(.horizontal, -5)
+                    .fill(
+                        Color.accentColor.opacity(
+                            colorScheme == .dark ? 0.28 : 0.16
+                        )
+                    )
+                    .padding(.leading, selectionBackgroundLeadingPadding)
+                    .padding(.trailing, -5)
             }
         }
     }
 
+    private func createWorkSession(in workspaceID: WorkspaceID) {
+        expandedWorkspaceIDs.insert(workspaceID)
+        model.createWorkSession(in: workspaceID)
+    }
+
+    private var sidebarActionForegroundColor: Color {
+        controlActiveState == .inactive ? .secondary : .primary
+    }
+
+    private func updateWorkspaceExpansion(
+        from previousSnapshot: WorkbenchSnapshot,
+        to snapshot: WorkbenchSnapshot
+    ) {
+        let currentWorkspaceIDs = Set(snapshot.workspaces.map(\.id))
+        expandedWorkspaceIDs.formIntersection(currentWorkspaceIDs)
+        guard model.isReady else { return }
+
+        let previousWorkspaceIDs = Set(previousSnapshot.workspaces.map(\.id))
+        expandedWorkspaceIDs.formUnion(
+            currentWorkspaceIDs.subtracting(previousWorkspaceIDs)
+        )
+    }
+
+    private func workspaceExpansionBinding(for workspaceID: WorkspaceID) -> Binding<Bool> {
+        Binding(
+            get: { expandedWorkspaceIDs.contains(workspaceID) },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedWorkspaceIDs.insert(workspaceID)
+                } else {
+                    expandedWorkspaceIDs.remove(workspaceID)
+                }
+            }
+        )
+    }
+
     @ViewBuilder
     private var detail: some View {
-        if let selectedID = model.snapshot.selectedWorkSessionID,
-           let session = model.snapshot.activeWorkSessions.first(where: { $0.id == selectedID })
+        if detailMode == .tasks {
+            Color(nsColor: .windowBackgroundColor)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(localizer.string(WorkbenchAccessibility.taskViewPanel))
+        } else if GitWorkbenchReleaseGate.isEnabled,
+                  case .gitWorkbench(let workspaceID) = detailMode
         {
-            PaneLayoutView(
-                layout: session.layout,
-                workSessionID: session.id,
-                path: [],
-                paneCount: session.layout.paneIDs.count,
+            if let workspace = model.snapshot.workspaces.first(where: {
+                $0.id == workspaceID
+            }) {
+                GitWorkbenchView(
+                    workspace: workspace,
+                    model: gitCoordinator.model(for: workspace),
+                    onClose: { detailMode = .sessions },
+                    onAddWorkspace: { model.addWorkspace($0) }
+                )
+            } else {
+                Color(nsColor: .windowBackgroundColor)
+            }
+        } else {
+            sessionDetail
+        }
+    }
+
+    @ViewBuilder
+    private var sessionDetail: some View {
+        if let selectedID = model.snapshot.selectedWorkSessionID,
+           let session = model.snapshot.activeWorkSessions.first(where: {
+               $0.id == selectedID
+           })
+        {
+            let workspace = model.snapshot.workspaces.first(where: {
+                $0.id == session.workspaceID
+            })
+            WorkSessionTerminalLayoutView(
+                session: session,
+                workspacePath: workspace?.path ?? "",
                 model: model,
-                requestClose: { pendingPaneClose = $0 }
+                onOpenGitDiff: {
+                    if GitWorkbenchReleaseGate.isEnabled {
+                        detailMode = .gitWorkbench(session.workspaceID)
+                    }
+                }
             )
             .id(session.id)
         } else {
-            model.settings.terminal.colorTheme.canvasColor
+            model.effectiveTerminalColorTheme.canvasColor
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(WorkbenchAccessibility.noSelectedWorkSession)
+                .accessibilityLabel(localizer.string(WorkbenchAccessibility.noSelectedWorkSession))
         }
     }
 
     private func chooseWorkspace() {
         let panel = NSOpenPanel()
+        panel.appearance = NSAppearance(
+            named: colorScheme == .dark ? .darkAqua : .aqua
+        )
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "添加"
-        panel.message = "选择一个项目目录"
+        panel.prompt = localizer.string("添加")
+        panel.message = localizer.string("选择一个项目目录")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         model.addWorkspace(url)
+    }
+
+    private func createWorkspace() {
+        let panel = NSSavePanel()
+        panel.appearance = NSAppearance(
+            named: colorScheme == .dark ? .darkAqua : .aqua
+        )
+        panel.title = localizer.string("创建新文件夹")
+        panel.prompt = localizer.string("创建")
+        panel.message = localizer.string("选择位置并输入新文件夹名称")
+        panel.nameFieldLabel = localizer.string("文件夹名称：")
+        panel.nameFieldStringValue = localizer.string("新建文件夹")
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: url,
+                withIntermediateDirectories: false
+            )
+            model.addWorkspace(url)
+        } catch {
+            model.lastError = localizer.format(
+                "无法创建文件夹：%@",
+                error.localizedDescription
+            )
+        }
     }
 
     private func offerRemovalForUnavailableWorkspace() {
@@ -285,13 +626,6 @@ struct WorkbenchView: View {
         )
     }
 
-    private var paneCloseAlertPresented: Binding<Bool> {
-        Binding(
-            get: { pendingPaneClose != nil },
-            set: { if !$0 { pendingPaneClose = nil } }
-        )
-    }
-
     private var errorAlertPresented: Binding<Bool> {
         Binding(
             get: { model.lastError != nil },
@@ -300,13 +634,59 @@ struct WorkbenchView: View {
     }
 }
 
+extension Notification.Name {
+    static let breathOpenGitWorkbench = Notification.Name("Breath.OpenGitWorkbench")
+    static let breathGitCommit = Notification.Name("Breath.GitCommit")
+    static let breathGitPush = Notification.Name("Breath.GitPush")
+    static let breathGitPreviousDifference = Notification.Name(
+        "Breath.GitPreviousDifference"
+    )
+    static let breathGitNextDifference = Notification.Name(
+        "Breath.GitNextDifference"
+    )
+}
+
+private struct SidebarResizeContainer<Sidebar: View, Detail: View>: View {
+    @ViewBuilder let sidebar: Sidebar
+    @ViewBuilder let detail: Detail
+
+    init(
+        @ViewBuilder sidebar: () -> Sidebar,
+        @ViewBuilder detail: () -> Detail
+    ) {
+        self.sidebar = sidebar()
+        self.detail = detail()
+    }
+
+    var body: some View {
+        NativeSplitView(
+            orientation: .horizontal,
+            position: .points(WorkbenchLayout.sidebarDefaultWidth),
+            minimumPosition: .points(WorkbenchLayout.sidebarMinimumWidth),
+            maximumPosition: .points(WorkbenchLayout.sidebarMaximumWidth),
+            minimumSecondLength: 520,
+            updatesPosition: false
+        ) {
+            sidebar
+        } second: {
+            detail
+                .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+        }
+    }
+}
+
 private struct StateDot: View {
     let state: TerminalState
+    @Environment(\.applicationLanguage) private var applicationLanguage
 
     var body: some View {
         Circle()
             .fill(color)
-            .frame(width: 7, height: 7)
+            .frame(
+                width: WorkbenchLayout.sidebarStateDotSize,
+                height: WorkbenchLayout.sidebarStateDotSize
+            )
             .accessibilityLabel(label)
     }
 
@@ -320,11 +700,59 @@ private struct StateDot: View {
     }
 
     private var label: String {
-        switch state {
+        let key = switch state {
         case .idle: "空闲或已退出"
         case .running: "运行中"
         case .needsAttention: "需要处理"
         case .turnCompleted: "回合完成"
+        }
+        return ApplicationLocalizer(language: applicationLanguage).string(key)
+    }
+}
+
+private struct WorkSessionTerminalLayoutView: View {
+    let session: WorkSession
+    let workspacePath: String
+    @ObservedObject var model: BreathApplicationModel
+    let onOpenGitDiff: () -> Void
+    @State private var gitState: GitWorkingTreeState?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PaneLayoutView(
+                layout: session.layout,
+                workSessionID: session.id,
+                path: [],
+                paneOrder: session.layout.paneIDs,
+                model: model
+            )
+            GitWorkingTreeStatusBar(
+                state: gitState,
+                workspacePath: workspacePath,
+                fontSize: max(
+                    9,
+                    CGFloat(model.settings.application.fontSize) - 2
+                ),
+                onOpenDiff: onOpenGitDiff
+            )
+        }
+        .task(id: workspacePath) {
+            guard !workspacePath.isEmpty else {
+                gitState = .unavailable
+                return
+            }
+            while !Task.isCancelled {
+                let nextState = await GitWorkingTreeStatusReader().read(
+                    at: workspacePath
+                )
+                guard !Task.isCancelled else { return }
+                gitState = nextState
+                do {
+                    try await Task.sleep(for: .seconds(3))
+                } catch {
+                    return
+                }
+            }
         }
     }
 }
@@ -333,9 +761,8 @@ private struct PaneLayoutView: View {
     let layout: PaneLayout
     let workSessionID: WorkSessionID
     let path: [SplitBranch]
-    let paneCount: Int
+    let paneOrder: [TerminalPaneID]
     @ObservedObject var model: BreathApplicationModel
-    let requestClose: (TerminalPaneID) -> Void
 
     @ViewBuilder
     var body: some View {
@@ -343,10 +770,11 @@ private struct PaneLayoutView: View {
         case .pane(let pane):
             TerminalPaneView(
                 pane: pane,
-                canClose: paneCount > 1,
-                model: model,
-                requestClose: requestClose
+                shortcutNumber: shortcutNumber(for: pane.id),
+                canClose: paneOrder.count > 1,
+                model: model
             )
+            .id(pane.id)
         case .split(let orientation, let fraction, let first, let second):
             SplitContainer(
                 orientation: orientation,
@@ -363,21 +791,26 @@ private struct PaneLayoutView: View {
                     layout: first,
                     workSessionID: workSessionID,
                     path: path + [.first],
-                    paneCount: paneCount,
-                    model: model,
-                    requestClose: requestClose
+                    paneOrder: paneOrder,
+                    model: model
                 )
             } second: {
                 PaneLayoutView(
                     layout: second,
                     workSessionID: workSessionID,
                     path: path + [.second],
-                    paneCount: paneCount,
-                    model: model,
-                    requestClose: requestClose
+                    paneOrder: paneOrder,
+                    model: model
                 )
             }
         }
+    }
+
+    private func shortcutNumber(for paneID: TerminalPaneID) -> Int? {
+        guard let index = paneOrder.firstIndex(of: paneID), index < 9 else {
+            return nil
+        }
+        return index + 1
     }
 }
 
@@ -387,8 +820,6 @@ private struct SplitContainer<First: View, Second: View>: View {
     let onResize: (Double) -> Void
     @ViewBuilder let first: First
     @ViewBuilder let second: Second
-    @State private var liveFraction: Double
-    @State private var dragOriginFraction: Double?
 
     init(
         orientation: SplitOrientation,
@@ -402,67 +833,522 @@ private struct SplitContainer<First: View, Second: View>: View {
         self.onResize = onResize
         self.first = first()
         self.second = second()
-        _liveFraction = State(initialValue: fraction)
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            if orientation == .horizontal {
-                HStack(spacing: 0) {
-                    first.frame(width: max(1, proxy.size.width * liveFraction - 2))
-                    divider(total: proxy.size.width, cursor: .resizeLeftRight)
-                    second
-                }
+        NativeSplitView(
+            orientation: orientation,
+            position: .fraction(fraction),
+            minimumPosition: .fraction(0.1),
+            maximumPosition: .fraction(0.9),
+            minimumSecondLength: 1,
+            updatesPosition: true,
+            onResize: onResize
+        ) {
+            first
+        } second: {
+            second
+        }
+    }
+}
+
+enum NativeSplitPosition: Equatable {
+    case points(CGFloat)
+    case fraction(Double)
+
+    func coordinate(availableLength: CGFloat) -> CGFloat {
+        switch self {
+        case .points(let points):
+            points
+        case .fraction(let fraction):
+            availableLength * CGFloat(fraction)
+        }
+    }
+}
+
+@MainActor
+protocol SplitDividerTrackingState: AnyObject {
+    var isTrackingDividerForDescendants: Bool { get }
+    func ancestorSplitDividerTrackingDidEnd()
+}
+
+extension SplitDividerTrackingState {
+    func ancestorSplitDividerTrackingDidEnd() {}
+}
+
+@MainActor
+func notifyDescendantSplitDividerTrackingEnded(in view: NSView) {
+    for subview in view.subviews {
+        if let splitView = subview as? SplitDividerTrackingState {
+            splitView.ancestorSplitDividerTrackingDidEnd()
+        }
+        notifyDescendantSplitDividerTrackingEnded(in: subview)
+    }
+}
+
+struct NativeSplitView<First: View, Second: View>: NSViewRepresentable {
+    let orientation: SplitOrientation
+    let position: NativeSplitPosition
+    let minimumPosition: NativeSplitPosition
+    let maximumPosition: NativeSplitPosition
+    let minimumSecondLength: CGFloat
+    let updatesPosition: Bool
+    let onResize: ((Double) -> Void)?
+    @ViewBuilder let first: First
+    @ViewBuilder let second: Second
+
+    init(
+        orientation: SplitOrientation,
+        position: NativeSplitPosition,
+        minimumPosition: NativeSplitPosition,
+        maximumPosition: NativeSplitPosition,
+        minimumSecondLength: CGFloat,
+        updatesPosition: Bool,
+        onResize: ((Double) -> Void)? = nil,
+        @ViewBuilder first: () -> First,
+        @ViewBuilder second: () -> Second
+    ) {
+        self.orientation = orientation
+        self.position = position
+        self.minimumPosition = minimumPosition
+        self.maximumPosition = maximumPosition
+        self.minimumSecondLength = minimumSecondLength
+        self.updatesPosition = updatesPosition
+        self.onResize = onResize
+        self.first = first()
+        self.second = second()
+    }
+
+    func makeNSView(context: Context) -> NativeSplitNSView {
+        let splitView = NativeSplitNSView()
+        splitView.setContent(first: AnyView(first), second: AnyView(second))
+        splitView.configure(
+            orientation: orientation,
+            position: position,
+            minimumPosition: minimumPosition,
+            maximumPosition: maximumPosition,
+            minimumSecondLength: minimumSecondLength,
+            onResize: onResize,
+            appliesPosition: true
+        )
+        return splitView
+    }
+
+    func updateNSView(_ splitView: NativeSplitNSView, context: Context) {
+        splitView.setContent(first: AnyView(first), second: AnyView(second))
+        splitView.configure(
+            orientation: orientation,
+            position: position,
+            minimumPosition: minimumPosition,
+            maximumPosition: maximumPosition,
+            minimumSecondLength: minimumSecondLength,
+            onResize: onResize,
+            appliesPosition: updatesPosition
+        )
+    }
+}
+
+@MainActor
+final class NativeSplitNSView:
+    NSSplitView,
+    NSSplitViewDelegate,
+    SplitDividerTrackingState
+{
+    private let firstHostingView = NativeSplitHostingView(rootView: AnyView(EmptyView()))
+    private let secondHostingView = NativeSplitHostingView(rootView: AnyView(EmptyView()))
+    private var minimumPosition = NativeSplitPosition.fraction(0)
+    private var maximumPosition = NativeSplitPosition.fraction(1)
+    private var minimumSecondLength: CGFloat = 0
+    private var pendingPosition: NativeSplitPosition?
+    private var isApplyingPosition = false
+    private var isTrackingDivider = false
+    private var pendingContent: (first: AnyView, second: AnyView)?
+    private var onResize: ((Double) -> Void)?
+    private var dividerTrackingArea: NSTrackingArea?
+
+    var isTrackingDividerForDescendants: Bool { isTrackingDivider }
+
+    override var isFlipped: Bool { true }
+
+    override var safeAreaInsets: NSEdgeInsets {
+        NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        dividerStyle = .thin
+        delegate = self
+        firstHostingView.wantsLayer = true
+        firstHostingView.layer?.masksToBounds = true
+        secondHostingView.wantsLayer = true
+        secondHostingView.layer?.masksToBounds = true
+        addArrangedSubview(firstHostingView)
+        addArrangedSubview(secondHostingView)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func setContent(first: AnyView, second: AnyView) {
+        guard !isTrackingDivider, !hasTrackingSplitAncestor else {
+            pendingContent = (first, second)
+            return
+        }
+        pendingContent = nil
+        firstHostingView.rootView = first
+        secondHostingView.rootView = second
+    }
+
+    func configure(
+        orientation: SplitOrientation,
+        position: NativeSplitPosition,
+        minimumPosition: NativeSplitPosition,
+        maximumPosition: NativeSplitPosition,
+        minimumSecondLength: CGFloat,
+        onResize: ((Double) -> Void)?,
+        appliesPosition: Bool
+    ) {
+        let updatedIsVertical = orientation == .horizontal
+        let orientationChanged = isVertical != updatedIsVertical
+        isVertical = updatedIsVertical
+        firstHostingView.configureDividerCursor(
+            edge: isVertical ? .trailing : .bottom,
+            cursor: isVertical ? .resizeLeftRight : .resizeUpDown
+        )
+        secondHostingView.configureDividerCursor(
+            edge: isVertical ? .leading : .top,
+            cursor: isVertical ? .resizeLeftRight : .resizeUpDown
+        )
+        self.minimumPosition = minimumPosition
+        self.maximumPosition = maximumPosition
+        self.minimumSecondLength = minimumSecondLength
+        self.onResize = onResize
+        if appliesPosition {
+            if isTrackingDivider {
+                pendingPosition = nil
+            } else if hasTrackingSplitAncestor {
+                pendingPosition = position
+            } else if needsPositionUpdate(for: position) {
+                pendingPosition = position
+                needsLayout = true
             } else {
-                VStack(spacing: 0) {
-                    first.frame(height: max(1, proxy.size.height * liveFraction - 2))
-                    divider(total: proxy.size.height, cursor: .resizeUpDown)
-                    second
-                }
+                pendingPosition = nil
             }
         }
-        .onChange(of: fraction) { _, newValue in
-            liveFraction = newValue
+        if orientationChanged {
+            window?.invalidateCursorRects(for: self)
         }
     }
 
-    private func divider(total: CGFloat, cursor: NSCursor) -> some View {
-        Rectangle()
-            .fill(Color(nsColor: .separatorColor))
-            .frame(
-                width: orientation == .horizontal ? 4 : nil,
-                height: orientation == .vertical ? 4 : nil
+    override func layout() {
+        super.layout()
+        applyPendingPositionIfNeeded()
+        updateTrackingAreas()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        guard effectiveDividerRect.contains(location) else { return }
+        pendingPosition = nil
+        isTrackingDivider = true
+        dividerCursor.set()
+
+        // NSSplitView performs live resizing while it tracks the mouse. Keep
+        // SwiftUI content and persisted layout updates deferred until mouse-up,
+        // but never replace the live resize with a detached guide line.
+        super.mouseDown(with: event)
+
+        isTrackingDivider = false
+        applyPendingContentIfNeeded()
+        notifyDescendantSplitDividerTrackingEnded(in: self)
+        window?.invalidateCursorRects(for: self)
+        onResize?(currentFraction)
+    }
+
+    func ancestorSplitDividerTrackingDidEnd() {
+        guard !isTrackingDivider, !hasTrackingSplitAncestor else { return }
+        applyPendingPositionIfNeeded()
+        applyPendingContentIfNeeded()
+        updateTrackingAreas()
+    }
+
+    override func updateTrackingAreas() {
+        if let dividerTrackingArea {
+            removeTrackingArea(dividerTrackingArea)
+        }
+        super.updateTrackingAreas()
+        guard arrangedSubviews.count > 1, !effectiveDividerRect.isEmpty else {
+            dividerTrackingArea = nil
+            return
+        }
+        let trackingArea = NSTrackingArea(
+            rect: effectiveDividerRect,
+            options: [
+                .cursorUpdate,
+                .activeInKeyWindow,
+                .enabledDuringMouseDrag,
+            ],
+            owner: self,
+            userInfo: nil
+        )
+        dividerTrackingArea = trackingArea
+        addTrackingArea(trackingArea)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        guard event.trackingArea === dividerTrackingArea else {
+            super.cursorUpdate(with: event)
+            return
+        }
+        let location = convert(event.locationInWindow, from: nil)
+        if effectiveDividerRect.contains(location) {
+            dividerCursor.set()
+        } else {
+            NSCursor.arrow.set()
+        }
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard arrangedSubviews.count > 1 else { return }
+        let drawnRect = isVertical
+            ? NSRect(
+                x: currentDividerCoordinate,
+                y: 0,
+                width: dividerThickness,
+                height: bounds.height
             )
-            .contentShape(Rectangle().inset(by: -3))
-            .onHover { hovering in
-                if hovering { cursor.push() } else { NSCursor.pop() }
+            : NSRect(
+                x: 0,
+                y: currentDividerCoordinate,
+                width: bounds.width,
+                height: dividerThickness
+            )
+        let effectiveRect = isVertical
+            ? drawnRect.insetBy(dx: -4, dy: 0)
+            : drawnRect.insetBy(dx: 0, dy: -4)
+        addCursorRect(
+            effectiveRect,
+            cursor: isVertical ? .resizeLeftRight : .resizeUpDown
+        )
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainMinCoordinate proposedMinimumPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        max(proposedMinimumPosition, minimumCoordinate)
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainMaxCoordinate proposedMaximumPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        min(proposedMaximumPosition, maximumCoordinate)
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        effectiveRect proposedEffectiveRect: NSRect,
+        forDrawnRect drawnRect: NSRect,
+        ofDividerAt dividerIndex: Int
+    ) -> NSRect {
+        isVertical
+            ? proposedEffectiveRect.insetBy(dx: -4, dy: 0)
+            : proposedEffectiveRect.insetBy(dx: 0, dy: -4)
+    }
+
+    private var availableLength: CGFloat {
+        max(0, (isVertical ? bounds.width : bounds.height) - dividerThickness)
+    }
+
+    private var minimumCoordinate: CGFloat {
+        min(
+            max(0, minimumPosition.coordinate(availableLength: availableLength)),
+            availableLength
+        )
+    }
+
+    private var maximumCoordinate: CGFloat {
+        let configuredMaximum = maximumPosition.coordinate(availableLength: availableLength)
+        return max(
+            minimumCoordinate,
+            min(
+                availableLength,
+                configuredMaximum,
+                max(0, availableLength - minimumSecondLength)
+            )
+        )
+    }
+
+    private var dividerCursor: NSCursor {
+        isVertical ? .resizeLeftRight : .resizeUpDown
+    }
+
+    private var effectiveDividerRect: NSRect {
+        let drawnRect = isVertical
+            ? NSRect(
+                x: currentDividerCoordinate,
+                y: 0,
+                width: dividerThickness,
+                height: bounds.height
+            )
+            : NSRect(
+                x: 0,
+                y: currentDividerCoordinate,
+                width: bounds.width,
+                height: dividerThickness
+            )
+        return isVertical
+            ? drawnRect.insetBy(dx: -4, dy: 0)
+            : drawnRect.insetBy(dx: 0, dy: -4)
+    }
+
+    private var currentFraction: Double {
+        guard availableLength > 0, let firstSubview = arrangedSubviews.first else {
+            return 0.5
+        }
+        let firstLength = isVertical ? firstSubview.frame.width : firstSubview.frame.height
+        return min(max(Double(firstLength / availableLength), 0.1), 0.9)
+    }
+
+    private func needsPositionUpdate(for position: NativeSplitPosition) -> Bool {
+        guard availableLength > 0 else {
+            return pendingPosition != position
+        }
+        return abs(currentDividerCoordinate - coordinate(for: position)) > 0.5
+    }
+
+    private func coordinate(for position: NativeSplitPosition) -> CGFloat {
+        min(
+            max(
+                position.coordinate(availableLength: availableLength),
+                minimumCoordinate
+            ),
+            maximumCoordinate
+        )
+    }
+
+    private func applyPendingPositionIfNeeded() {
+        guard !isTrackingDivider,
+              !hasTrackingSplitAncestor,
+              !isApplyingPosition,
+              let pendingPosition,
+              availableLength > 0
+        else {
+            return
+        }
+        self.pendingPosition = nil
+        let coordinate = coordinate(for: pendingPosition)
+        guard abs(currentDividerCoordinate - coordinate) > 0.5 else { return }
+        isApplyingPosition = true
+        setPosition(coordinate, ofDividerAt: 0)
+        isApplyingPosition = false
+    }
+
+    private func applyPendingContentIfNeeded() {
+        guard !hasTrackingSplitAncestor, let pendingContent else { return }
+        self.pendingContent = nil
+        firstHostingView.rootView = pendingContent.first
+        secondHostingView.rootView = pendingContent.second
+    }
+
+    private var currentDividerCoordinate: CGFloat {
+        guard let firstSubview = arrangedSubviews.first else { return 0 }
+        return isVertical ? firstSubview.frame.maxX : firstSubview.frame.maxY
+    }
+
+    private var hasTrackingSplitAncestor: Bool {
+        var candidate = superview
+        while let view = candidate {
+            if let splitView = view as? SplitDividerTrackingState,
+               splitView.isTrackingDividerForDescendants
+            {
+                return true
             }
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let origin = dragOriginFraction ?? liveFraction
-                        dragOriginFraction = origin
-                        let translation = orientation == .horizontal
-                            ? value.translation.width
-                            : value.translation.height
-                        liveFraction = min(
-                            max(origin + Double(translation / max(total, 1)), 0.1),
-                            0.9
-                        )
-                    }
-                    .onEnded { _ in
-                        dragOriginFraction = nil
-                        onResize(liveFraction)
-                    }
+            candidate = view.superview
+        }
+        return false
+    }
+}
+
+@MainActor
+final class NativeSplitHostingView: NSHostingView<AnyView> {
+    enum DividerEdge: Equatable {
+        case leading
+        case trailing
+        case top
+        case bottom
+    }
+
+    private var dividerEdge: DividerEdge?
+    private var dividerCursor: NSCursor?
+
+    override var safeAreaInsets: NSEdgeInsets {
+        NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.invalidateCursorRects(for: self)
+    }
+
+    func configureDividerCursor(edge: DividerEdge, cursor: NSCursor) {
+        guard dividerEdge != edge || dividerCursor !== cursor else { return }
+        dividerEdge = edge
+        dividerCursor = cursor
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard let dividerEdge, let dividerCursor else { return }
+        let hitThickness: CGFloat = 5
+        let cursorRect: NSRect = switch dividerEdge {
+        case .leading:
+            NSRect(x: 0, y: 0, width: hitThickness, height: bounds.height)
+        case .trailing:
+            NSRect(
+                x: max(0, bounds.width - hitThickness),
+                y: 0,
+                width: hitThickness,
+                height: bounds.height
             )
+        case .top:
+            NSRect(
+                x: 0,
+                y: isFlipped ? 0 : max(0, bounds.height - hitThickness),
+                width: bounds.width,
+                height: hitThickness
+            )
+        case .bottom:
+            NSRect(
+                x: 0,
+                y: isFlipped ? max(0, bounds.height - hitThickness) : 0,
+                width: bounds.width,
+                height: hitThickness
+            )
+        }
+        addCursorRect(cursorRect, cursor: dividerCursor)
     }
 }
 
 private struct TerminalPaneView: View {
     let pane: TerminalPane
+    let shortcutNumber: Int?
     let canClose: Bool
     @ObservedObject var model: BreathApplicationModel
-    let requestClose: (TerminalPaneID) -> Void
+    @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.applicationLanguage) private var applicationLanguage
+    @State private var hasInputFocus = false
+    @State private var isClosing = false
+
+    private var showsInputFocus: Bool {
+        hasInputFocus && controlActiveState == .key
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -471,39 +1357,309 @@ private struct TerminalPaneView: View {
                 if let agent = pane.agentBinding?.agent {
                     AgentTypeLabel(agent: agent)
                 }
-                Text(pane.agentBinding?.nativeTitle ?? "终端")
-                    .font(.caption)
-                    .lineLimit(1)
+                terminalTitle
                 Spacer()
                 Button {
                     model.split(pane.id, orientation: .horizontal)
                 } label: {
                     Image(systemName: "rectangle.split.2x1")
+                        .foregroundStyle(.primary)
                 }
-                .help("横向分屏")
+                .keyboardShortcut(
+                    hasInputFocus
+                        ? KeyboardShortcut("d", modifiers: [.command])
+                        : nil
+                )
+                .help(localizer.string("横向分屏（⌘D）"))
                 Button {
                     model.split(pane.id, orientation: .vertical)
                 } label: {
                     Image(systemName: "rectangle.split.1x2")
+                        .foregroundStyle(.primary)
                 }
-                .help("纵向分屏")
+                .keyboardShortcut(
+                    hasInputFocus
+                        ? KeyboardShortcut("d", modifiers: [.command, .shift])
+                        : nil
+                )
+                .help(localizer.string("纵向分屏（⌘⇧D）"))
                 if canClose {
                     Button(role: .destructive) {
-                        requestClose(pane.id)
+                        closePane()
                     } label: {
                         Image(systemName: "xmark")
+                            .foregroundStyle(.primary)
                     }
-                    .help("关闭窗格")
+                    .disabled(isClosing)
+                    .help(localizer.string("关闭窗格（⌘W）"))
                 }
             }
             .buttonStyle(.borderless)
             .padding(.horizontal, 9)
             .frame(height: 30)
+            .background(
+                showsInputFocus
+                    ? Color.accentColor.opacity(0.28)
+                    : Color.clear
+            )
             .background(.bar)
 
-            TerminalNativeView(engine: model.terminalEngine, paneID: pane.id)
+            TerminalNativeView(
+                engine: model.terminalEngine,
+                paneID: pane.id,
+                placeholder: localizer.string("终端正在启动…"),
+                onFocusChange: { hasInputFocus = $0 },
+                onCloseShortcut: closeShortcutHandler
+            )
         }
-        .background(Color(nsColor: .black))
+        .background(model.effectiveTerminalColorTheme.canvasColor)
+    }
+
+    @ViewBuilder
+    private var terminalTitle: some View {
+        if let shortcutNumber {
+            Button(action: focusTerminal) {
+                HStack(spacing: 5) {
+                    Text(pane.agentBinding?.nativeTitle ?? localizer.string("终端"))
+                        .lineLimit(1)
+                    Text("⌘\(shortcutNumber)")
+                        .font(
+                            applicationFont(
+                                for: model,
+                                offset: -2,
+                                design: .monospaced
+                            )
+                        )
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .font(applicationFont(for: model, offset: -1))
+            .keyboardShortcut(
+                KeyboardShortcut(
+                    KeyEquivalent(Character(String(shortcutNumber))),
+                    modifiers: [.command]
+                )
+            )
+            .help(
+                localizer.format(
+                    "切换到终端 %d（⌘%d）",
+                    shortcutNumber,
+                    shortcutNumber
+                )
+            )
+        } else {
+            Text(pane.agentBinding?.nativeTitle ?? localizer.string("终端"))
+                .font(applicationFont(for: model, offset: -1))
+                .lineLimit(1)
+        }
+    }
+
+    private func focusTerminal() {
+        guard let terminalView = model.terminalEngine.view(for: pane.id),
+              let window = terminalView.window
+        else {
+            return
+        }
+        window.makeFirstResponder(terminalView)
+    }
+
+    private func closePane() {
+        guard !isClosing else { return }
+        isClosing = true
+        model.closePane(pane.id) { didClose in
+            if !didClose {
+                isClosing = false
+            }
+        }
+    }
+
+    private var closeShortcutHandler: TerminalPaneCloseShortcut? {
+        guard canClose else { return nil }
+        let paneID = pane.id
+        return { completion in
+            model.closePane(paneID, completion: completion)
+        }
+    }
+
+    private var localizer: ApplicationLocalizer {
+        ApplicationLocalizer(language: applicationLanguage)
+    }
+}
+
+private struct GitWorkingTreeStatusBar: View {
+    let state: GitWorkingTreeState?
+    let workspacePath: String
+    let fontSize: CGFloat
+    let onOpenDiff: () -> Void
+    @Environment(\.applicationLanguage) private var applicationLanguage
+
+    var body: some View {
+        HStack(spacing: 10) {
+            content
+            Spacer(minLength: 0)
+            WorkspaceEditorLauncher(
+                workspacePath: workspacePath,
+                barHeight: WorkbenchLayout.bottomBarHeight
+            )
+        }
+        .font(.system(size: fontSize))
+        .padding(.horizontal, 9)
+        .frame(height: WorkbenchLayout.bottomBarHeight)
+        .background(.bar)
+        .overlay(alignment: .top) {
+            Divider()
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        Button(action: onOpenDiff) {
+            HStack(spacing: 7) {
+                GitBranchIcon()
+                    .frame(width: 14, height: 14)
+                    .accessibilityHidden(true)
+                switch state {
+                case nil:
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.mini)
+                        Text(localizer.string("正在读取 Git 状态…"))
+                    }
+                    .foregroundStyle(.secondary)
+                case .some(.notRepository):
+                    Text(localizer.string("非 Git 仓库"))
+                        .foregroundStyle(.secondary)
+                case .some(.unavailable):
+                    Label(
+                        localizer.string("Git 状态不可用"),
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.secondary)
+                case .some(.repository(let status)):
+                    Text(status.branch)
+                        .lineLimit(1)
+                    if status.aheadCount > 0 {
+                        statusItem(
+                            "↑",
+                            count: status.aheadCount,
+                            color: .secondary,
+                            accessibilityKey: "领先 %d"
+                        )
+                    }
+                    if status.behindCount > 0 {
+                        statusItem(
+                            "↓",
+                            count: status.behindCount,
+                            color: .secondary,
+                            accessibilityKey: "落后 %d"
+                        )
+                    }
+                    if status.isClean {
+                        Label(
+                            localizer.string("工作区无改动"),
+                            systemImage: "checkmark.circle.fill"
+                        )
+                        .foregroundStyle(.green)
+                    } else {
+                        statusItem(
+                            "M",
+                            count: status.modifiedCount,
+                            color: .orange,
+                            accessibilityKey: "已修改 %d"
+                        )
+                        statusItem(
+                            "A",
+                            count: status.addedCount,
+                            color: .green,
+                            accessibilityKey: "已新增 %d"
+                        )
+                        statusItem(
+                            "D",
+                            count: status.deletedCount,
+                            color: .red,
+                            accessibilityKey: "已删除 %d"
+                        )
+                        statusItem(
+                            "?",
+                            count: status.untrackedCount,
+                            color: .secondary,
+                            accessibilityKey: "未跟踪 %d"
+                        )
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(localizer.string(WorkbenchAccessibility.openGitWorkbench))
+        .help(localizer.string(WorkbenchAccessibility.openGitWorkbench))
+    }
+
+    @ViewBuilder
+    private func statusItem(
+        _ label: String,
+        count: Int,
+        color: Color,
+        accessibilityKey: String
+    ) -> some View {
+        if count > 0 {
+            HStack(spacing: 3) {
+                Text(label)
+                    .fontWeight(.semibold)
+                Text("\(count)")
+                    .monospacedDigit()
+            }
+            .foregroundStyle(color)
+            .accessibilityLabel(localizer.format(accessibilityKey, count))
+        }
+    }
+
+    private var localizer: ApplicationLocalizer {
+        ApplicationLocalizer(language: applicationLanguage)
+    }
+}
+
+private struct GitBranchIcon: View {
+    var body: some View {
+        Canvas { context, size in
+            let scale = min(size.width, size.height) / 14
+            func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+                CGPoint(x: x * scale, y: y * scale)
+            }
+            var branches = Path()
+            branches.move(to: point(3.5, 4.7))
+            branches.addLine(to: point(3.5, 9.3))
+            branches.move(to: point(5.2, 4.8))
+            branches.addCurve(
+                to: point(10.5, 3.5),
+                control1: point(7.4, 4.8),
+                control2: point(8.5, 3.5)
+            )
+            context.stroke(
+                branches,
+                with: .foreground,
+                style: StrokeStyle(
+                    lineWidth: 1.25 * scale,
+                    lineCap: .round,
+                    lineJoin: .round
+                )
+            )
+            for center in [point(3.5, 3.2), point(10.8, 3.2), point(3.5, 10.8)] {
+                let circle = CGRect(
+                    x: center.x - 1.55 * scale,
+                    y: center.y - 1.55 * scale,
+                    width: 3.1 * scale,
+                    height: 3.1 * scale
+                )
+                context.stroke(
+                    Path(ellipseIn: circle),
+                    with: .foreground,
+                    lineWidth: 1.2 * scale
+                )
+            }
+        }
     }
 }
 
@@ -511,14 +1667,116 @@ private struct AgentTypeLabel: View {
     let agent: AgentKind
 
     var body: some View {
-        Text(agent.displayName)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(.quaternary, in: Capsule())
-            .fixedSize()
+        AgentBrandIcon(agent: agent)
+            .accessibilityLabel(agent.displayName)
+            .help(agent.displayName)
     }
+}
+
+private struct SidebarActionIcon: View {
+    let systemName: String
+    let color: Color
+
+    var body: some View {
+        Image(systemName: systemName)
+            .symbolRenderingMode(.monochrome)
+            .font(.system(size: WorkbenchLayout.sidebarActionIconSize, weight: .medium))
+            .foregroundStyle(color)
+            .frame(
+                width: WorkbenchLayout.sidebarActionFrameSize,
+                height: WorkbenchLayout.sidebarActionFrameSize
+            )
+            .contentShape(Rectangle())
+    }
+}
+
+private struct SidebarFooterButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.95 : 1)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+    }
+}
+
+private struct AgentBrandIcon: View {
+    private static let iconCount: CGFloat = 9
+    private static let sprite = Bundle.module
+        .url(forResource: "AgentBrandIcons", withExtension: "svg")
+        .flatMap(NSImage.init(contentsOf:))
+
+    let agent: AgentKind
+
+    var body: some View {
+        Group {
+            if let sprite = Self.sprite {
+                GeometryReader { _ in
+                    Image(nsImage: sprite)
+                        .resizable()
+                        .renderingMode(.template)
+                        .interpolation(.high)
+                        .frame(
+                            width: WorkbenchLayout.agentIconGlyphSize * Self.iconCount,
+                            height: WorkbenchLayout.agentIconGlyphSize
+                        )
+                        .offset(
+                            x: -CGFloat(agent.brandIconIndex)
+                                * WorkbenchLayout.agentIconGlyphSize
+                        )
+                }
+                .frame(
+                    width: WorkbenchLayout.agentIconGlyphSize,
+                    height: WorkbenchLayout.agentIconGlyphSize
+                )
+                .clipped()
+            } else {
+                Image(systemName: "terminal")
+                    .symbolRenderingMode(.monochrome)
+                    .font(.system(size: 13, weight: .medium))
+            }
+        }
+        .foregroundStyle(.secondary)
+        .frame(
+            width: WorkbenchLayout.agentIconFrameSize,
+            height: WorkbenchLayout.agentIconFrameSize
+        )
+    }
+}
+
+enum WorkbenchLayout {
+    static let windowControlsHeight: CGFloat = 32
+    static let sidebarHeaderVerticalPadding: CGFloat = 8
+    static let sidebarDefaultWidth: CGFloat = 220
+    static let sidebarMinimumWidth: CGFloat = 140
+    static let sidebarMaximumWidth: CGFloat = 380
+    static let sidebarRowHeight: CGFloat = 36
+    static let sidebarItemSpacing: CGFloat = 8
+    static let sidebarDisclosureLabelSpacing: CGFloat = 3
+    static let sidebarWorkspaceDisclosureSpacing: CGFloat = 6
+    static let sidebarStateDotSize: CGFloat = 8
+    static let sidebarActionFrameSize: CGFloat = 20
+    static let sidebarActionIconSize: CGFloat = 12
+    static let bottomBarHeight: CGFloat = 32
+    static let sidebarFooterHorizontalPadding: CGFloat = 4
+    static let sidebarFooterSelectionWidth: CGFloat = 32
+    static let sidebarFooterSelectionHeight: CGFloat = 28
+    static let sidebarFooterIconSize: CGFloat = 14
+    static let agentIconFrameSize: CGFloat = 16
+    static let agentIconGlyphSize: CGFloat = 14
+    static let splitDividerThickness: CGFloat = 1
+}
+
+@MainActor
+private func applicationFont(
+    for model: BreathApplicationModel,
+    offset: CGFloat = 0,
+    weight: Font.Weight = .regular,
+    design: Font.Design = .default
+) -> Font {
+    .system(
+        size: max(1, CGFloat(model.settings.application.fontSize) + offset),
+        weight: weight,
+        design: design
+    )
 }
 
 private extension AgentKind {
@@ -535,6 +1793,20 @@ private extension AgentKind {
         case .pi: "Pi"
         }
     }
+
+    var brandIconIndex: Int {
+        switch self {
+        case .codex: 0
+        case .claudeCode: 1
+        case .geminiCLI: 2
+        case .githubCopilotCLI: 3
+        case .qwenCode: 4
+        case .cursorAgent: 5
+        case .factoryDroid: 6
+        case .openCode: 7
+        case .pi: 8
+        }
+    }
 }
 
 private extension TerminalColorTheme {
@@ -548,29 +1820,105 @@ private extension TerminalColorTheme {
     }
 }
 
+typealias TerminalPaneCloseCompletion = @MainActor @Sendable (Bool) -> Void
+typealias TerminalPaneCloseShortcut = @MainActor (
+    @escaping TerminalPaneCloseCompletion
+) -> Void
+
 private struct TerminalNativeView: NSViewRepresentable {
     let engine: any TerminalViewProviding
     let paneID: TerminalPaneID
+    let placeholder: String
+    let onFocusChange: (Bool) -> Void
+    let onCloseShortcut: TerminalPaneCloseShortcut?
 
     func makeNSView(context: Context) -> TerminalHostView {
         let host = TerminalHostView()
-        host.install(engine.view(for: paneID))
+        host.onFocusChange = onFocusChange
+        host.onCloseShortcut = onCloseShortcut
+        host.install(engine.view(for: paneID), placeholder: placeholder)
         return host
     }
 
     func updateNSView(_ nsView: TerminalHostView, context: Context) {
-        nsView.install(engine.view(for: paneID))
+        nsView.onFocusChange = onFocusChange
+        nsView.onCloseShortcut = onCloseShortcut
+        nsView.install(engine.view(for: paneID), placeholder: placeholder)
+    }
+}
+
+enum TerminalKeyboardShortcut {
+    static func requestsPaneClose(
+        modifiers: NSEvent.ModifierFlags,
+        charactersIgnoringModifiers: String?,
+        isRepeat: Bool
+    ) -> Bool {
+        let shortcutModifiers = modifiers.intersection([
+            .command,
+            .option,
+            .control,
+            .shift,
+        ])
+        return !isRepeat
+            && shortcutModifiers == .command
+            && charactersIgnoringModifiers?.lowercased() == "w"
     }
 }
 
 @MainActor
-private final class TerminalHostView: NSView {
-    private weak var hostedView: NSView?
+enum TerminalInputFocus {
+    @discardableResult
+    static func move(
+        to paneID: TerminalPaneID,
+        using provider: any TerminalViewProviding
+    ) -> Bool {
+        guard let terminalView = provider.view(for: paneID),
+              let window = terminalView.window
+        else {
+            return false
+        }
+        let previousHost = (window.firstResponder as? NSView)?
+            .superview as? TerminalHostView
+        let targetHost = terminalView.superview as? TerminalHostView
+        let didMoveFocus = window.makeFirstResponder(terminalView)
+        if didMoveFocus {
+            previousHost?.synchronizeFocusState()
+            targetHost?.synchronizeFocusState()
+        }
+        return didMoveFocus
+    }
+}
 
-    func install(_ terminalView: NSView?) {
+@MainActor
+final class TerminalHostView: NSView {
+    private weak var hostedView: NSView?
+    private weak var monitoredWindow: NSWindow?
+    private var focusEventMonitor: Any?
+    private var lastReportedFocus: Bool?
+    private var retainsInputFocus = false
+    private var isClosing = false
+    var onFocusChange: ((Bool) -> Void)?
+    var onCloseShortcut: TerminalPaneCloseShortcut?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateFocusMonitoring()
+        reportFocusAfterEvent()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        relinquishInputFocus(in: window)
+    }
+
+    func install(
+        _ terminalView: NSView?,
+        placeholder: String = "终端正在启动…"
+    ) {
         if let terminalView, hostedView === terminalView { return }
+        isClosing = false
         hostedView?.removeFromSuperview()
-        let view = terminalView ?? NSTextField(labelWithString: "终端正在启动…")
+        let view = terminalView ?? NSTextField(labelWithString: placeholder)
         hostedView = view
         view.translatesAutoresizingMaskIntoConstraints = false
         addSubview(view)
@@ -580,5 +1928,207 @@ private final class TerminalHostView: NSView {
             view.topAnchor.constraint(equalTo: topAnchor),
             view.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        reportFocusAfterEvent()
+    }
+
+    func synchronizeFocusState() {
+        if let window,
+           let focusedHost = Self.terminalHost(containing: window.firstResponder),
+           focusedHost !== self
+        {
+            retainsInputFocus = false
+        }
+        reportCurrentFocus()
+    }
+
+    private func updateFocusMonitoring() {
+        guard monitoredWindow !== window else { return }
+        let previousWindow = monitoredWindow
+        if let focusEventMonitor {
+            NSEvent.removeMonitor(focusEventMonitor)
+            self.focusEventMonitor = nil
+        }
+        monitoredWindow = window
+        guard let window else {
+            relinquishInputFocus(in: previousWindow)
+            return
+        }
+        focusEventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .keyDown]
+        ) { [weak self, weak window] event in
+            guard event.window === window else { return event }
+            if self?.handleCloseShortcut(event) == true {
+                return nil
+            }
+            if event.type == .leftMouseDown || event.type == .rightMouseDown {
+                self?.reconcileFocusAfterMouseEvent()
+            } else {
+                self?.reportFocusAfterEvent()
+            }
+            return event
+        }
+    }
+
+    private func reconcileFocusAfterMouseEvent() {
+        DispatchQueue.main.async { [weak self] in
+            self?.reconcileFocusAfterMouseEventDispatch()
+        }
+    }
+
+    private func reconcileFocusAfterMouseEventDispatch() {
+        guard let window,
+              window.isKeyWindow,
+              isVisibleInWindow
+        else {
+            reportFocus(false)
+            return
+        }
+        if hasInputFocus(in: window) {
+            reportFocus(true)
+            return
+        }
+        if let focusedHost = Self.terminalHost(containing: window.firstResponder),
+           focusedHost !== self
+        {
+            retainsInputFocus = false
+            reportFocus(false)
+            return
+        }
+        guard retainsInputFocus,
+              let hostedView,
+              window.makeFirstResponder(hostedView)
+        else {
+            reportFocus(false)
+            return
+        }
+        reportFocus(true)
+    }
+
+    private func reportFocusAfterEvent() {
+        DispatchQueue.main.async { [weak self] in
+            self?.reportCurrentFocus()
+        }
+    }
+
+    private func reportCurrentFocus() {
+        reportFocus(hasInputFocus)
+    }
+
+    private var hasInputFocus: Bool {
+        guard let window,
+              window.isKeyWindow
+        else {
+            return false
+        }
+        return hasInputFocus(in: window)
+    }
+
+    private func hasInputFocus(in window: NSWindow) -> Bool {
+        guard let hostedView,
+              let firstResponder = window.firstResponder as? NSView
+        else {
+            return false
+        }
+        return firstResponder === hostedView
+            || firstResponder.isDescendant(of: hostedView)
+    }
+
+    private var isVisibleInWindow: Bool {
+        guard window != nil else { return false }
+        var view: NSView? = self
+        while let currentView = view {
+            if currentView.isHidden { return false }
+            view = currentView.superview
+        }
+        return true
+    }
+
+    private func relinquishInputFocus(in window: NSWindow?) {
+        retainsInputFocus = false
+        if let window,
+           Self.terminalHost(containing: window.firstResponder) === self
+        {
+            window.makeFirstResponder(nil)
+        }
+        reportFocus(false)
+    }
+
+    private static func terminalHost(containing responder: NSResponder?) -> TerminalHostView? {
+        var view = responder as? NSView
+        while let currentView = view {
+            if let terminalHost = currentView as? TerminalHostView {
+                return terminalHost
+            }
+            view = currentView.superview
+        }
+        return nil
+    }
+
+    private func handleCloseShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              TerminalKeyboardShortcut.requestsPaneClose(
+                  modifiers: event.modifierFlags,
+                  charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+                  isRepeat: event.isARepeat
+              ),
+              hasInputFocus
+        else { return false }
+        guard let onCloseShortcut,
+              let focusDestination = nextFocusableTerminalHost()
+        else {
+            return true
+        }
+        isClosing = true
+        guard focusDestination.focusInput() else {
+            isClosing = false
+            return true
+        }
+        onCloseShortcut { [weak self, weak focusDestination] didClose in
+            guard let self else { return }
+            if didClose {
+                focusDestination?.synchronizeFocusState()
+            } else {
+                isClosing = false
+                if focusDestination?.hasInputFocus == true {
+                    _ = focusInput()
+                }
+            }
+        }
+        return true
+    }
+
+    private func nextFocusableTerminalHost() -> TerminalHostView? {
+        guard let contentView = window?.contentView else { return nil }
+        return Self.terminalHosts(in: contentView).first {
+            $0 !== self
+                && !$0.isClosing
+                && $0.isVisibleInWindow
+        }
+    }
+
+    private static func terminalHosts(in view: NSView) -> [TerminalHostView] {
+        let currentHost = (view as? TerminalHostView).map { [$0] } ?? []
+        return currentHost + view.subviews.flatMap(terminalHosts(in:))
+    }
+
+    @discardableResult
+    private func focusInput() -> Bool {
+        guard let window, let hostedView else { return false }
+        let previousHost = Self.terminalHost(containing: window.firstResponder)
+        let didMoveFocus = window.makeFirstResponder(hostedView)
+        if didMoveFocus {
+            previousHost?.synchronizeFocusState()
+            synchronizeFocusState()
+        }
+        return didMoveFocus
+    }
+
+    private func reportFocus(_ isFocused: Bool) {
+        if isFocused {
+            retainsInputFocus = true
+        }
+        guard lastReportedFocus != isFocused else { return }
+        lastReportedFocus = isFocused
+        onFocusChange?(isFocused)
     }
 }

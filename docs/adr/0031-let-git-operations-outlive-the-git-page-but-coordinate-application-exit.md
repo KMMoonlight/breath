@@ -1,0 +1,3 @@
+# Let Git operations outlive the Git page but coordinate application exit
+
+Leaving the Git workbench for another Breath page does not cancel Git commands; their progress and output remain available in the Git Console. Per-workspace commit drafts, selections, filters, expansion state, and pane proportions are restored, while editable diffs always write through to the working tree or Git Index rather than remaining only in memory. On application exit, read-only loading may be cancelled, but active repository mutations must finish or receive an explicit normal cancellation request before Breath exits. Persisted merge, rebase, cherry-pick, or conflict states do not block exit and are rediscovered on the next launch; credentials and secret prompts are never persisted.

@@ -14,7 +14,10 @@ var targets: [Target] = [
     .target(name: "BreathTestSupport"),
     .target(
         name: "BreathAgents",
-        dependencies: ["BreathCore"]
+        dependencies: [
+            "BreathCore",
+            .product(name: "GRDB", package: "GRDB.swift"),
+        ]
     ),
     .target(
         name: "BreathPersistence",
@@ -61,7 +64,8 @@ targets += [
             "BreathPersistence",
             "BreathTerminal",
             "BreathUpdates",
-        ]
+        ],
+        resources: [.process("Resources")]
     ),
     .testTarget(
         name: "BreathCoreTests",
@@ -73,7 +77,11 @@ targets += [
     ),
     .testTarget(
         name: "BreathAgentsTests",
-        dependencies: ["BreathAgents", "BreathCore"]
+        dependencies: [
+            "BreathAgents",
+            "BreathCore",
+            .product(name: "GRDB", package: "GRDB.swift"),
+        ]
     ),
     .testTarget(
         name: "BreathTerminalTests",
@@ -85,12 +93,18 @@ targets += [
     ),
     .testTarget(
         name: "BreathAppTests",
-        dependencies: ["BreathApp", "BreathCore", "BreathTestSupport"]
+        dependencies: [
+            "BreathApp",
+            "BreathCore",
+            "BreathPersistence",
+            "BreathTestSupport",
+        ]
     ),
 ]
 
 let package = Package(
     name: "Breath",
+    defaultLocalization: "zh-Hans",
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "BreathCore", targets: ["BreathCore"]),

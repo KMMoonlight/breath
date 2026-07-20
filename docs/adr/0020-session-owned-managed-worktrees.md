@@ -1,0 +1,3 @@
+# Use session-owned managed worktrees outside project directories
+
+Breath creates each managed worktree exclusively for one Work Session, starts it from the workspace repository's current `HEAD` in detached-HEAD state, and stores it under `~/Library/Application Support/Breath/worktrees/<workspace-id>/<work-session-id>/`. This keeps parallel Agent work isolated without occupying user branches or adding Breath-owned directories to projects; the trade-off is that Breath must own worktree persistence, safety inspection, and cleanup across archive, deletion, and workspace removal. Initial creation copies only committed `HEAD` content and never transfers staged, unstaged, untracked, or ignored local files.

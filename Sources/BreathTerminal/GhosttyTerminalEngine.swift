@@ -1,5 +1,6 @@
 import AppKit
 import BreathCore
+import CoreText
 import Foundation
 
 #if BREATH_HAS_GHOSTTY && canImport(GhosttyKit)
@@ -13,6 +14,8 @@ private func requestPasteConfirmation(for value: String, in window: NSWindow?) -
     alert.alertStyle = .warning
     alert.addButton(withTitle: "粘贴")
     alert.addButton(withTitle: "取消")
+    alert.window.appearance = window?.effectiveAppearance
+        ?? NSApp.keyWindow?.effectiveAppearance
     if let window {
         // A synchronous sheet would deadlock the libghostty completion callback;
         // use the native modal confirmation while keeping the callback on MainActor.
@@ -124,7 +127,7 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         processExitHandler = handler
     }
 
-    private static func writeConfiguration(
+    static func writeConfiguration(
         _ settings: TerminalSettings,
         synchronizeRendering: Bool,
         to url: URL
@@ -132,7 +135,8 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         let requestedFontFamily = settings.fontFamily
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
-        let fontFamily = NSFontManager.shared.availableFontFamilies
+        let availableFontFamilies = CTFontManagerCopyAvailableFontFamilyNames() as? [String] ?? []
+        let fontFamily = availableFontFamilies
             .contains(requestedFontFamily)
             ? requestedFontFamily
             : "Menlo"
@@ -142,12 +146,19 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         case .bar: "bar"
         case .underline: "underline"
         }
+        let palette = colors.ansiColors.enumerated()
+            .map { "palette = \($0.offset)=\($0.element.ghosttyHex)" }
+            .joined(separator: "\n")
         let contents = """
         font-family = \(fontFamily)
         font-size = \(settings.fontSize)
+        \(palette)
         background = \(colors.background.ghosttyHex)
         foreground = \(colors.foreground.ghosttyHex)
         cursor-color = \(colors.cursor.ghosttyHex)
+        cursor-text = \(colors.cursorText.ghosttyHex)
+        selection-background = \(colors.selectionBackground.ghosttyHex)
+        selection-foreground = \(colors.selectionForeground.ghosttyHex)
         cursor-style = \(cursor)
         window-vsync = \(synchronizeRendering)
         window-decoration = false
@@ -430,6 +441,7 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
             throw GhosttyTerminalError.surfaceCreationFailed
         }
         surface = created
+        setSurfaceFocused(false)
         updateSurfaceGeometry()
         updateTrackingAreas()
     }
@@ -453,6 +465,7 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         layer?.contentsScale = window?.backingScaleFactor ?? 2
+        setSurfaceFocused(window?.firstResponder === self)
         updateSurfaceGeometry()
     }
 
@@ -463,13 +476,18 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
 
     override func becomeFirstResponder() -> Bool {
         guard super.becomeFirstResponder() else { return false }
-        if let surface { ghostty_surface_set_focus(surface, true) }
+        setSurfaceFocused(true)
         return true
     }
 
     override func resignFirstResponder() -> Bool {
-        if let surface { ghostty_surface_set_focus(surface, false) }
+        setSurfaceFocused(false)
         return super.resignFirstResponder()
+    }
+
+    private func setSurfaceFocused(_ isFocused: Bool) {
+        guard let surface else { return }
+        ghostty_surface_set_focus(surface, isFocused)
     }
 
     private func updateSurfaceGeometry() {

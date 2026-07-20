@@ -28,6 +28,7 @@ enum BreathMain {
             )
             return
         }
+        _ = NSApplication.shared.setActivationPolicy(.regular)
         BreathDesktopApp.main()
     }
 }
@@ -35,35 +36,89 @@ enum BreathMain {
 private struct BreathDesktopApp: App {
     @NSApplicationDelegateAdaptor(BreathAppDelegate.self) private var appDelegate
     @StateObject private var model = BreathApplicationModel.makeDefault()
+    @StateObject private var gitPreferencesStore = GitPreferencesStore.shared
     private let updateController = BreathUpdateController()
 
     var body: some Scene {
         Window("Breath", id: "main") {
             WorkbenchView(model: model)
                 .preferredColorScheme(preferredColorScheme)
-                .tint(.indigo)
+                .applicationLanguage(model.settings.application.language)
+                .tint(.primary)
                 .onAppear {
                     appDelegate.model = model
                     model.start()
                 }
         }
         .defaultSize(width: 1240, height: 780)
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
-                OpenMainWindowCommand()
+                OpenMainWindowCommand(language: model.settings.application.language)
+                Button(localizer.string("新建工作会话")) {
+                    guard let workspaceID = model.currentWorkspaceID else { return }
+                    model.createWorkSession(in: workspaceID)
+                }
+                .keyboardShortcut("t", modifiers: [.command])
+                .disabled(!model.canPerformCommands || model.currentWorkspaceID == nil)
             }
             CommandGroup(after: .appInfo) {
-                Button("检查更新…") {
+                Button(localizer.string("检查更新…")) {
                     updateController.checkForUpdates()
                 }
                 .disabled(!updateController.configuration.isReady)
+            }
+            if GitWorkbenchReleaseGate.isEnabled {
+                CommandMenu(localizer.string("Git")) {
+                    Button(localizer.string("打开 Git 工作台")) {
+                        NotificationCenter.default.post(
+                            name: .breathOpenGitWorkbench,
+                            object: nil
+                        )
+                    }
+                    .gitKeyboardShortcut(
+                        "git.open",
+                        preferences: gitPreferencesStore.preferences,
+                        requiredScope: .global
+                    )
+                    .disabled(model.currentWorkspaceID == nil)
+
+                    Divider()
+
+                    Button(localizer.string("Commit")) {
+                        NotificationCenter.default.post(
+                            name: .breathGitCommit,
+                            object: nil
+                        )
+                    }
+                    .gitKeyboardShortcut(
+                        "git.commit",
+                        preferences: gitPreferencesStore.preferences,
+                        requiredScope: .global
+                    )
+                    .disabled(model.currentWorkspaceID == nil)
+
+                    Button(localizer.string("Push")) {
+                        NotificationCenter.default.post(
+                            name: .breathGitPush,
+                            object: nil
+                        )
+                    }
+                    .gitKeyboardShortcut(
+                        "git.push",
+                        preferences: gitPreferencesStore.preferences,
+                        requiredScope: .global
+                    )
+                    .disabled(model.currentWorkspaceID == nil)
+                }
             }
         }
 
         Settings {
             BreathSettingsView(model: model)
                 .preferredColorScheme(preferredColorScheme)
-                .tint(.indigo)
+                .applicationLanguage(model.settings.application.language)
+                .tint(.primary)
                 .onAppear {
                     appDelegate.model = model
                     model.start()
@@ -78,13 +133,18 @@ private struct BreathDesktopApp: App {
         case .dark: .dark
         }
     }
+
+    private var localizer: ApplicationLocalizer {
+        ApplicationLocalizer(language: model.settings.application.language)
+    }
 }
 
 private struct OpenMainWindowCommand: View {
+    let language: ApplicationLanguage
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("打开主窗口") {
+        Button(ApplicationLocalizer(language: language).string("打开主窗口")) {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -95,6 +155,10 @@ private struct OpenMainWindowCommand: View {
 @MainActor
 private final class BreathAppDelegate: NSObject, NSApplicationDelegate {
     weak var model: BreathApplicationModel?
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        model?.repairDetectedAgentIntegrations()
+    }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
@@ -111,12 +175,25 @@ private final class BreathAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let localizer = ApplicationLocalizer(
+            language: model?.settings.application.language ?? .system
+        )
         let alert = NSAlert()
-        alert.messageText = "退出 Breath？"
-        alert.informativeText = "Breath 会先保存布局、最后选择和 Agent 会话标识，再停止所有终端进程。"
+        alert.messageText = localizer.string("退出 Breath？")
+        alert.informativeText = localizer.string(
+            "Breath 会先保存布局、最后选择和 Agent 会话标识，再停止所有终端进程。"
+        )
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "退出")
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: localizer.string("退出"))
+        alert.addButton(withTitle: localizer.string("取消"))
+        switch model?.settings.application.appearance {
+        case .dark:
+            alert.window.appearance = NSAppearance(named: .darkAqua)
+        case .light:
+            alert.window.appearance = NSAppearance(named: .aqua)
+        case .system, nil:
+            alert.window.appearance = sender.keyWindow?.effectiveAppearance
+        }
         guard alert.runModal() == .alertFirstButtonReturn else {
             return .terminateCancel
         }
@@ -124,6 +201,7 @@ private final class BreathAppDelegate: NSObject, NSApplicationDelegate {
             return .terminateNow
         }
         Task { @MainActor in
+            await GitOperationRegistry.shared.prepareForTermination()
             let ready = await model.prepareForTermination()
             sender.reply(toApplicationShouldTerminate: ready)
         }

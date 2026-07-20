@@ -1,0 +1,3 @@
+# Match JetBrains changelist and staging workflows
+
+The Git workbench defaults to JetBrains-style Changelists and also offers an opt-in Git Staging Area mode. Only one workflow is active at a time: Changelists organize pending changes in Breath metadata without treating the grouping as the Git Index, while staging mode exposes the repository's actual unstaged and staged states. Switching modes preserves Changelist metadata so users can return without losing their organization, accepting the additional implementation complexity in exchange for matching both established JetBrains workflows rather than inventing a Breath-specific commit model.

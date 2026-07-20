@@ -45,7 +45,12 @@ struct SQLiteWorkbenchRepositoryTests {
         defer { try? FileManager.default.removeItem(at: databaseURL) }
         let repository = try SQLiteWorkbenchRepository(databaseURL: databaseURL)
         let expected = SettingsSnapshot(
-            application: ApplicationSettings(appearance: .dark, sidebarDensity: .compact),
+            application: ApplicationSettings(
+                appearance: .dark,
+                sidebarDensity: .compact,
+                fontSize: 14,
+                language: .english
+            ),
             terminal: TerminalSettings(
                 fontFamily: "Berkeley Mono",
                 fontSize: 14,

@@ -1,8 +1,9 @@
 import AppKit
 import BreathCore
-import BreathTerminal
+@testable import BreathTerminal
 import BreathTestSupport
 import Foundation
+import ObjectiveC.runtime
 import Testing
 
 @Suite("Terminal engine boundary")
@@ -49,6 +50,51 @@ struct TerminalEngineRuntimeTests {
         defer { NativeUITestGate.shared.release() }
         try await verifyLibghosttySurface()
         try await Task.sleep(for: .milliseconds(100))
+    }
+
+    @Test("writing Ghostty configuration does not instantiate AppKit's shared font manager")
+    @MainActor
+    func configurationDoesNotAccessSharedFontManager() async throws {
+        await NativeUITestGate.shared.acquire()
+        defer { NativeUITestGate.shared.release() }
+
+        let sharedSelector = NSSelectorFromString("sharedFontManager")
+        let probeSelector = #selector(NSFontManager.breath_test_sharedFontManager)
+        let sharedMethod = try #require(class_getClassMethod(NSFontManager.self, sharedSelector))
+        let probeMethod = try #require(class_getClassMethod(NSFontManager.self, probeSelector))
+        FontManagerSharedAccessProbe.accessCount = 0
+        method_exchangeImplementations(sharedMethod, probeMethod)
+        defer { method_exchangeImplementations(sharedMethod, probeMethod) }
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("breath-font-config-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let configurationURL = directory.appendingPathComponent("terminal.ghostty")
+        try GhosttyTerminalEngine.writeConfiguration(
+            TerminalSettings(fontFamily: "Menlo", colorTheme: .dracula),
+            synchronizeRendering: false,
+            to: configurationURL
+        )
+
+        #expect(FontManagerSharedAccessProbe.accessCount == 0)
+        let contents = try String(contentsOf: configurationURL, encoding: .utf8)
+        #expect(contents.contains("palette = 0=#21222C"))
+        #expect(contents.contains("palette = 15=#FFFFFF"))
+        #expect(contents.contains("background = #282A36"))
+        #expect(contents.contains("selection-background = #44475A"))
+    }
+}
+
+private enum FontManagerSharedAccessProbe {
+    nonisolated(unsafe) static var accessCount = 0
+}
+
+private extension NSFontManager {
+    @objc class func breath_test_sharedFontManager() -> NSFontManager {
+        FontManagerSharedAccessProbe.accessCount += 1
+        return breath_test_sharedFontManager()
     }
 }
 

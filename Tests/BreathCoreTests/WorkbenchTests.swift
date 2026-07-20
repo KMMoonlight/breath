@@ -226,6 +226,35 @@ struct WorkbenchTests {
         )
     }
 
+    @Test("cold start exposes saved layout before restoring the selected Agent")
+    func restoreLayoutBeforeAgentMaterialization() async throws {
+        let fixture = recoveryFixture()
+        let runtime = SuspendedLaunchTerminalRuntime()
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(snapshot: fixture.snapshot),
+            terminalRuntime: runtime,
+            agentResumeCommands: FixedAgentResumeCommands(),
+            defaultShell: { "/bin/zsh" }
+        )
+
+        try await workbench.restoreSnapshotFromRepository()
+
+        #expect(await workbench.snapshot() == fixture.snapshot)
+        #expect(await runtime.launchCallCount == 0)
+
+        let materialization = Task {
+            try await workbench.materializeSelectedWorkSession()
+        }
+        for _ in 0..<1_000 {
+            if await runtime.launchCallCount == 1 { break }
+            await Task.yield()
+        }
+
+        #expect(await runtime.launchCallCount == 1)
+        await runtime.allowLaunches()
+        try await materialization.value
+    }
+
     @Test("an unavailable selected workspace is retained but not materialized")
     func unavailableWorkspaceRestore() async throws {
         let workspaceID = WorkspaceID(rawValue: UUID())
@@ -606,6 +635,44 @@ struct WorkbenchTests {
 
         #expect(await workbench.snapshot().workSessions.first?.layout.paneIDs == [firstPaneID])
         #expect(await runtime.stoppedPaneIDs == [secondPaneID])
+    }
+
+    @Test("closing a pane publishes the collapsed layout before destroying its terminal")
+    func closePanePublishesLayoutBeforeStop() async throws {
+        let runtime = SuspendedStopTerminalRuntime()
+        let changes = ChangeRecorder()
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(),
+            terminalRuntime: runtime,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+        _ = try await workbench.createWorkSession(in: workspaceID)
+        let firstPaneID = try #require(
+            await workbench.snapshot().workSessions.first?.pane.id
+        )
+        let secondPaneID = try await workbench.splitPane(
+            firstPaneID,
+            orientation: .vertical
+        )
+        await workbench.setSnapshotChangeHandler {
+            await changes.record()
+        }
+
+        let close = Task {
+            try await workbench.closePane(secondPaneID)
+        }
+        for _ in 0..<1_000 {
+            if await runtime.stopCallCount == 1 { break }
+            await Task.yield()
+        }
+
+        #expect(await runtime.stopCallCount == 1)
+        #expect(await changes.count == 1)
+        await runtime.allowStops()
+        try await close.value
     }
 
     @Test("the last pane cannot be closed independently")
@@ -1069,6 +1136,22 @@ private actor RecordingTerminalRuntime: TerminalRuntime {
     func stop(paneID: TerminalPaneID) async {
         stoppedPaneIDs.append(paneID)
         await effects?.append(.stopped(paneID))
+    }
+}
+
+private actor SuspendedLaunchTerminalRuntime: TerminalRuntime {
+    private(set) var launchCallCount = 0
+    private var launchesAllowed = false
+
+    func launch(_ request: TerminalLaunch) async throws {
+        launchCallCount += 1
+        while !launchesAllowed { await Task.yield() }
+    }
+
+    func stop(paneID: TerminalPaneID) async {}
+
+    func allowLaunches() {
+        launchesAllowed = true
     }
 }
 

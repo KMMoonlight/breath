@@ -1,0 +1,3 @@
+# Treat Git as the source of truth and serialize writes per root
+
+The Git workbench maintains event-driven repository caches but treats the Git CLI and on-disk repository state as authoritative. Breath serializes its own mutating commands within each Git Root while allowing independent roots to run concurrently; Git processes started by terminals or other applications remain outside that queue. Repository and working-tree changes trigger automatic refresh with manual refresh as a fallback. Breath detects ongoing merge, rebase, cherry-pick, revert, and similar states to expose compatible Continue, Skip, or Abort actions, but it never terminates external Git processes or automatically removes `index.lock`; Git errors are shown and the root is refreshed afterward.

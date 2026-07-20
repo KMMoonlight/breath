@@ -532,7 +532,7 @@ public actor Workbench {
     private var materializedWorkSessionIDs: Set<WorkSessionID>
     private var recoveryFallbacks: [TerminalPaneID: RecoveryFallback]
     private var monitorsProcessExits = false
-    private var snapshotChangeHandler: (@Sendable () -> Void)?
+    private var snapshotChangeHandler: (@Sendable () async -> Void)?
 
     public init(
         repository: any WorkbenchRepository,
@@ -626,7 +626,7 @@ public actor Workbench {
     }
 
     public func setSnapshotChangeHandler(
-        _ handler: @escaping @Sendable () -> Void
+        _ handler: @escaping @Sendable () async -> Void
     ) {
         snapshotChangeHandler = handler
     }
@@ -651,8 +651,14 @@ public actor Workbench {
     }
 
     public func restoreFromRepository() async throws {
+        try await restoreSnapshotFromRepository()
+        try await materializeSelectedWorkSession()
+    }
+
+    public func restoreSnapshotFromRepository() async throws {
         currentSnapshot = try await repository.load()
         materializedWorkSessionIDs.removeAll()
+        recoveryFallbacks.removeAll()
 
         guard let selectedID = currentSnapshot.selectedWorkSessionID,
               let selectedSession = currentSnapshot.workSessions.first(where: {
@@ -664,6 +670,14 @@ public actor Workbench {
               workspaceAvailable(selectedWorkspace.path)
         else {
             currentSnapshot.selectedWorkSessionID = nil
+            return
+        }
+    }
+
+    public func materializeSelectedWorkSession() async throws {
+        guard let selectedID = currentSnapshot.selectedWorkSessionID,
+              !materializedWorkSessionIDs.contains(selectedID)
+        else {
             return
         }
         try await materializeWorkSession(selectedID)
@@ -1066,6 +1080,7 @@ public actor Workbench {
         let attemptedSnapshot = currentSnapshot
         do {
             try await repository.save(attemptedSnapshot)
+            await snapshotChangeHandler?()
         } catch {
             if currentSnapshot == attemptedSnapshot {
                 currentSnapshot = previousSnapshot
@@ -1138,12 +1153,11 @@ public actor Workbench {
             }
             try await persistSnapshot(rollingBackTo: previousSnapshot)
             removeRecoveryFallback(paneID, token: fallback.token)
-            snapshotChangeHandler?()
         } catch {
             await terminalRuntime.stop(paneID: paneID)
             removeRecoveryFallback(paneID, token: fallback.token)
             materializedWorkSessionIDs.remove(fallback.workSessionID)
-            snapshotChangeHandler?()
+            await snapshotChangeHandler?()
         }
     }
 

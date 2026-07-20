@@ -46,25 +46,42 @@ public struct BuiltInAgentResumeCommands: AgentResumeCommandProviding, Sendable 
         guard let sessionID = binding.sessionID, !sessionID.isEmpty else {
             return nil
         }
+        let executable = binding.agent.cliExecutableName
         switch binding.agent {
         case .codex:
-            return AgentResumeCommand(executable: "codex", arguments: ["resume", sessionID])
+            return AgentResumeCommand(executable: executable, arguments: ["resume", sessionID])
         case .claudeCode:
-            return AgentResumeCommand(executable: "claude", arguments: ["--resume", sessionID])
+            return AgentResumeCommand(executable: executable, arguments: ["--resume", sessionID])
         case .geminiCLI:
-            return AgentResumeCommand(executable: "gemini", arguments: ["--resume", sessionID])
+            return AgentResumeCommand(executable: executable, arguments: ["--resume", sessionID])
         case .githubCopilotCLI:
-            return AgentResumeCommand(executable: "copilot", arguments: ["--resume", sessionID])
+            return AgentResumeCommand(executable: executable, arguments: ["--resume", sessionID])
         case .qwenCode:
-            return AgentResumeCommand(executable: "qwen", arguments: ["--resume", sessionID])
+            return AgentResumeCommand(executable: executable, arguments: ["--resume", sessionID])
         case .cursorAgent:
-            return AgentResumeCommand(executable: "cursor-agent", arguments: ["--resume", sessionID])
+            return AgentResumeCommand(executable: executable, arguments: ["--resume", sessionID])
         case .factoryDroid:
-            return AgentResumeCommand(executable: "droid", arguments: ["--resume", sessionID])
+            return AgentResumeCommand(executable: executable, arguments: ["--resume", sessionID])
         case .openCode:
-            return AgentResumeCommand(executable: "opencode", arguments: ["--session", sessionID])
+            return AgentResumeCommand(executable: executable, arguments: ["--session", sessionID])
         case .pi:
-            return AgentResumeCommand(executable: "pi", arguments: ["--session", sessionID])
+            return AgentResumeCommand(executable: executable, arguments: ["--session", sessionID])
+        }
+    }
+}
+
+public extension AgentKind {
+    var cliExecutableName: String {
+        switch self {
+        case .codex: "codex"
+        case .claudeCode: "claude"
+        case .geminiCLI: "gemini"
+        case .githubCopilotCLI: "copilot"
+        case .qwenCode: "qwen"
+        case .cursorAgent: "cursor-agent"
+        case .factoryDroid: "droid"
+        case .openCode: "opencode"
+        case .pi: "pi"
         }
     }
 }
@@ -123,7 +140,9 @@ public struct AgentAdapterRegistry: Sendable {
             minimumVersion: "2.1.7",
             integrationMechanism: .userHooks,
             userConfigurationPath: "~/.claude/settings.json",
-            hookRegistrations: standardHooks
+            hookRegistrations: [
+                AgentHookRegistration(eventName: "SessionStart", lifecycle: .turnStarted),
+            ] + standardHooks
         ),
         AgentAdapterDescriptor(
             kind: .geminiCLI,

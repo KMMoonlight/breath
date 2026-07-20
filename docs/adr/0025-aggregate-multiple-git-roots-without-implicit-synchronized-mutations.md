@@ -1,0 +1,3 @@
+# Aggregate multiple Git roots without implicit synchronized mutations
+
+The Git workbench can aggregate Changes and Log data from every Git Root in a Workspace, and a commit action may create a separate commit in each selected root after showing that execution plan explicitly. Branch checkout, merge, rebase, reset, push, and other repository-state mutations target one explicitly selected Git Root by default; optional synchronized branch operations may be added later but are never implicit. This keeps multi-repository projects visible as one workspace without hiding partial-failure boundaries or letting unrelated repositories diverge unexpectedly.

@@ -1,6 +1,7 @@
 import BreathAgents
 import BreathCore
 import Foundation
+import GRDB
 import Testing
 
 @Suite("Supported Agent CLI registry")
@@ -46,8 +47,15 @@ struct AgentAdapterRegistryTests {
         }
     }
 
-    @Test("Gemini and OpenCode map their official lifecycle events")
+    @Test("Claude, Gemini, and OpenCode map their official lifecycle events")
     func officialLifecycleMappings() throws {
+        let claude = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .claudeCode }
+        )
+        #expect(claude.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "SessionStart", lifecycle: .turnStarted)
+        ))
+
         let gemini = try #require(
             AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .geminiCLI }
         )
@@ -487,6 +495,106 @@ struct AgentAdapterRegistryTests {
             #expect(event.nativeTitle == sample.title)
             #expect(event.workingDirectory == sample.workingDirectory)
         }
+    }
+
+    @Test("Codex hook events resolve the generated thread title from its session index")
+    func codexSessionIndexTitle() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("breath-codex-title-\(UUID().uuidString)", isDirectory: true)
+        let codexDirectory = home.appendingPathComponent(".codex", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(
+            at: codexDirectory,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            {"id":"another-session","thread_name":"Other title","updated_at":"2026-07-15T00:00:00Z"}
+            {"id":"codex-session-1","thread_name":"修复会话标题","updated_at":"2026-07-15T00:01:00Z"}
+            """.utf8
+        ).write(to: codexDirectory.appendingPathComponent("session_index.jsonl"))
+
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let workSessionID = WorkSessionID(rawValue: UUID())
+        let paneID = TerminalPaneID(rawValue: UUID())
+        let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
+        let payload = Data(
+            """
+            {"session_id":"codex-session-1","cwd":"/tmp/project","prompt":"private prompt"}
+            """.utf8
+        )
+        let event = try #require(
+            try AgentHookEventFactory(now: { Date(timeIntervalSince1970: 42) }).makeEvent(
+                agent: .codex,
+                lifecycle: .turnCompleted,
+                rawPayload: payload,
+                environment: [
+                    "HOME": home.path,
+                    "BREATH_APPLICATION_INSTANCE_ID": applicationInstanceID.rawValue.uuidString,
+                    "BREATH_WORKSPACE_ID": workspaceID.rawValue.uuidString,
+                    "BREATH_WORK_SESSION_ID": workSessionID.rawValue.uuidString,
+                    "BREATH_TERMINAL_PANE_ID": paneID.rawValue.uuidString,
+                ]
+            )
+        )
+
+        #expect(event.nativeTitle == "修复会话标题")
+        #expect(!String(decoding: try JSONEncoder().encode(event), as: UTF8.self)
+            .contains("private prompt"))
+    }
+
+    @Test("Codex hook events resolve current thread titles from its state database")
+    func codexStateDatabaseTitle() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("breath-codex-state-title-\(UUID().uuidString)", isDirectory: true)
+        let codexDirectory = home.appendingPathComponent(".codex", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(
+            at: codexDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let database = try DatabaseQueue(
+            path: codexDirectory.appendingPathComponent("state_5.sqlite").path
+        )
+        try database.write { db in
+            try db.create(table: "threads") { table in
+                table.column("id", .text).primaryKey()
+                table.column("title", .text).notNull()
+            }
+            try db.execute(
+                sql: "INSERT INTO threads (id, title) VALUES (?, ?)",
+                arguments: ["codex-session-2", "  总结   当前对话  "]
+            )
+        }
+
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let workSessionID = WorkSessionID(rawValue: UUID())
+        let paneID = TerminalPaneID(rawValue: UUID())
+        let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
+        let payload = Data(
+            """
+            {"session_id":"codex-session-2","cwd":"/tmp/project","prompt":"private prompt"}
+            """.utf8
+        )
+        let event = try #require(
+            try AgentHookEventFactory(now: { Date(timeIntervalSince1970: 42) }).makeEvent(
+                agent: .codex,
+                lifecycle: .turnCompleted,
+                rawPayload: payload,
+                environment: [
+                    "HOME": home.path,
+                    "BREATH_APPLICATION_INSTANCE_ID": applicationInstanceID.rawValue.uuidString,
+                    "BREATH_WORKSPACE_ID": workspaceID.rawValue.uuidString,
+                    "BREATH_WORK_SESSION_ID": workSessionID.rawValue.uuidString,
+                    "BREATH_TERMINAL_PANE_ID": paneID.rawValue.uuidString,
+                ]
+            )
+        )
+
+        #expect(event.nativeTitle == "总结 当前对话")
+        #expect(!String(decoding: try JSONEncoder().encode(event), as: UTF8.self)
+            .contains("private prompt"))
     }
 
     @Test("OpenCode plugin and Pi extension installation are private and reversible")

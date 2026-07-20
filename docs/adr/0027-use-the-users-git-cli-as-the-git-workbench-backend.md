@@ -1,0 +1,3 @@
+# Use the user's Git CLI as the Git workbench backend
+
+The Git workbench executes a user-configurable Git CLI instead of embedding libgit2, JGit, or another Git implementation. Breath auto-detects the system Git by default, offers a configured executable path with a test action, and preserves the user's existing Git configuration, hooks, commit signing, credential helpers, SSH setup, and command semantics. Breath does not store Git passwords, access tokens, or SSH private keys; the trade-off is that behavior and available capabilities depend on the installed Git version and the user's environment.

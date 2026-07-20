@@ -69,6 +69,26 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
         require(
+            accessibilityText.contains(WorkbenchAccessibility.openSettings),
+            "sidebar settings action lost its accessibility label: \(accessibilityText)",
+            into: &failures
+        )
+        require(
+            accessibilityText.contains(WorkbenchAccessibility.openTaskView),
+            "sidebar task action lost its accessibility label: \(accessibilityText)",
+            into: &failures
+        )
+        require(
+            fixture.pressAccessibilityElement(named: WorkbenchAccessibility.openTaskView),
+            "sidebar task action could not be pressed through accessibility",
+            into: &failures
+        )
+        require(
+            fixture.accessibilityText().contains(WorkbenchAccessibility.taskViewPanel),
+            "task action did not open the empty task panel",
+            into: &failures
+        )
+        require(
             fixture.terminalLaunchCount == 0,
             "rendering the empty workbench launched a terminal",
             into: &failures
@@ -250,7 +270,7 @@ private final class AppShellFixture {
         }
         return try SolidCanvasInspection(
             image: capturedImage,
-            background: model.settings.terminal.colorTheme.palette.background
+            background: model.effectiveTerminalColorTheme.palette.background
         )
     }
 
@@ -264,12 +284,23 @@ private final class AppShellFixture {
 
     func accessibilityText() -> [String] {
         let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
-        return accessibilityText(in: application, depth: 0)
+        var visited: [AXUIElement] = []
+        return accessibilityText(in: application, depth: 0, visited: &visited)
     }
 
     func expandDisclosure(named name: String) -> Bool {
+        pressAccessibilityElement(named: name)
+    }
+
+    func pressAccessibilityElement(named name: String) -> Bool {
         let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
-        guard pressAccessibilityElement(named: name, in: application, depth: 0) else {
+        var visited: [AXUIElement] = []
+        guard pressAccessibilityElement(
+            named: name,
+            in: application,
+            depth: 0,
+            visited: &visited
+        ) else {
             return false
         }
         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
@@ -282,11 +313,26 @@ private final class AppShellFixture {
         try? FileManager.default.removeItem(at: supportDirectory)
     }
 
-    private func accessibilityText(in element: AXUIElement, depth: Int) -> [String] {
-        guard depth < 20 else { return [] }
+    private func accessibilityText(
+        in element: AXUIElement,
+        depth: Int,
+        visited: inout [AXUIElement]
+    ) -> [String] {
+        guard depth < 20,
+              !visited.contains(where: { CFEqual($0, element) })
+        else {
+            return []
+        }
+        visited.append(element)
         var text = accessibilityStrings(for: element)
         for child in accessibilityChildren(of: element) {
-            text.append(contentsOf: accessibilityText(in: child, depth: depth + 1))
+            text.append(
+                contentsOf: accessibilityText(
+                    in: child,
+                    depth: depth + 1,
+                    visited: &visited
+                )
+            )
         }
         return text
     }
@@ -321,15 +367,26 @@ private final class AppShellFixture {
     private func pressAccessibilityElement(
         named name: String,
         in element: AXUIElement,
-        depth: Int
+        depth: Int,
+        visited: inout [AXUIElement]
     ) -> Bool {
-        guard depth < 20 else { return false }
+        guard depth < 20,
+              !visited.contains(where: { CFEqual($0, element) })
+        else {
+            return false
+        }
+        visited.append(element)
         if accessibilityStrings(for: element).contains(name),
            pressElementOrAncestor(element) {
             return true
         }
         return accessibilityChildren(of: element).contains { child in
-            pressAccessibilityElement(named: name, in: child, depth: depth + 1)
+            pressAccessibilityElement(
+                named: name,
+                in: child,
+                depth: depth + 1,
+                visited: &visited
+            )
         }
     }
 

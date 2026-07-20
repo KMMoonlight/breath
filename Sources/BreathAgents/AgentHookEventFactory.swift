@@ -1,5 +1,6 @@
 import BreathCore
 import Foundation
+import GRDB
 
 public struct AgentHookEventFactory: Sendable {
     private let now: @Sendable () -> Date
@@ -35,6 +36,11 @@ public struct AgentHookEventFactory: Sendable {
         }
 
         let metadata = try metadata(from: rawPayload)
+        let nativeTitle = metadata.title ?? codexThreadTitle(
+            agent: agent,
+            sessionID: metadata.sessionID,
+            environment: environment
+        )
         return AgentEvent(
             applicationInstanceID: applicationInstanceID,
             agent: agent,
@@ -45,7 +51,7 @@ public struct AgentHookEventFactory: Sendable {
             workSessionID: workSessionID,
             paneID: paneID,
             sessionID: metadata.sessionID,
-            nativeTitle: metadata.title,
+            nativeTitle: nativeTitle,
             workingDirectory: metadata.workingDirectory
                 ?? environment["PWD"]
                 ?? ""
@@ -101,6 +107,92 @@ public struct AgentHookEventFactory: Sendable {
             guard let string = value as? String, !string.isEmpty else { return nil }
             return string
         }.first
+    }
+
+    private func codexThreadTitle(
+        agent: AgentKind,
+        sessionID: String?,
+        environment: [String: String]
+    ) -> String? {
+        guard agent == .codex, let sessionID, !sessionID.isEmpty else { return nil }
+        let codexDirectory: URL
+        if let path = environment["CODEX_HOME"], !path.isEmpty {
+            codexDirectory = URL(fileURLWithPath: path, isDirectory: true)
+        } else {
+            let home = environment["HOME"] ?? NSHomeDirectory()
+            codexDirectory = URL(fileURLWithPath: home, isDirectory: true)
+                .appendingPathComponent(".codex", isDirectory: true)
+        }
+
+        if let title = codexStateDatabaseThreadTitle(
+            sessionID: sessionID,
+            codexDirectory: codexDirectory
+        ) {
+            return title
+        }
+
+        return codexSessionIndexThreadTitle(
+            sessionID: sessionID,
+            codexDirectory: codexDirectory
+        )
+    }
+
+    private func codexStateDatabaseThreadTitle(
+        sessionID: String,
+        codexDirectory: URL
+    ) -> String? {
+        let databaseURL = codexDirectory.appendingPathComponent("state_5.sqlite")
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else { return nil }
+
+        var configuration = Configuration()
+        configuration.readonly = true
+        configuration.busyMode = .timeout(0.25)
+
+        do {
+            let database = try DatabaseQueue(
+                path: databaseURL.path,
+                configuration: configuration
+            )
+            let title = try database.read { db in
+                try String.fetchOne(
+                    db,
+                    sql: "SELECT title FROM threads WHERE id = ?",
+                    arguments: [sessionID]
+                )
+            }
+            return normalizedTitle(title)
+        } catch {
+            return nil
+        }
+    }
+
+    private func codexSessionIndexThreadTitle(
+        sessionID: String,
+        codexDirectory: URL
+    ) -> String? {
+        let indexURL = codexDirectory.appendingPathComponent("session_index.jsonl")
+        guard let data = try? Data(contentsOf: indexURL) else { return nil }
+
+        for line in data.split(separator: 0x0A).reversed() {
+            guard let object = try? JSONSerialization.jsonObject(with: Data(line))
+                    as? [String: Any],
+                  object["id"] as? String == sessionID,
+                  let title = object["thread_name"] as? String
+            else {
+                continue
+            }
+            return normalizedTitle(title)
+        }
+        return nil
+    }
+
+    private func normalizedTitle(_ title: String?) -> String? {
+        guard let title else { return nil }
+        let normalized = title
+            .split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+        guard !normalized.isEmpty else { return nil }
+        return String(normalized.prefix(80))
     }
 
     private struct Metadata {
