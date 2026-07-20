@@ -1695,6 +1695,58 @@ struct GitWorkbenchServiceTests {
         #expect(model.errorMessage?.contains("bad") == true)
     }
 
+    @Test("successful Commit and Push opens push review without an error alert")
+    @MainActor
+    func successfulCommitAndPushDoesNotTreatGitOutputAsFailure() async throws {
+        let repository = try GitWorkbenchTestRepository()
+        try repository.write("notes.txt", "seed\n")
+        try repository.run(["add", "notes.txt"])
+        try repository.run(["commit", "-m", "seed"])
+        try repository.write("notes.txt", "ready\n")
+        try repository.run(["add", "notes.txt"])
+        let storage = try TemporaryDirectory()
+        let registry = GitOperationRegistry(
+            store: GitConsoleStore(
+                fileURL: storage.url.appendingPathComponent("console.json")
+            )
+        )
+        let defaults = try #require(
+            UserDefaults(suiteName: "GitWorkbenchServiceTests.\(UUID())")
+        )
+        let model = GitWorkspaceViewModel(
+            workspace: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: repository.url.path,
+                displayName: "Commit and Push"
+            ),
+            operationRegistry: registry,
+            preferencesStore: GitPreferencesStore(
+                defaults: defaults,
+                key: "preferences"
+            ),
+            metadataStore: GitWorkspaceMetadataStore(baseURL: storage.url)
+        )
+        await model.load()
+        model.setWorkflow(.staging)
+        model.currentCommitDraft = "ready to push"
+
+        model.commit(pushAfter: true)
+        for _ in 0..<100 {
+            if model.shouldPresentPushReview || model.errorMessage != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(model.errorMessage == nil)
+        #expect(model.shouldPresentPushReview)
+        #expect(registry.records.first?.output.contains("ready to push") == true)
+        #expect(
+            try repository.output(["log", "-1", "--format=%s"])
+                == "ready to push"
+        )
+    }
+
     @Test("merge conflicts are rediscovered and cannot continue with conflict markers")
     func resolvesMergeConflict() async throws {
         let repository = try GitWorkbenchTestRepository()

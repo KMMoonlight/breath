@@ -147,6 +147,8 @@
 "Git %@ 版本过旧；需要 %@ 或更高版本 · %@" = "Git %@ 版本过旧；需要 %@ 或更高版本 · %@";
 "Git CLI" = "Git CLI";
 "Git Console" = "Git Console";
+"查看 Git Console" = "查看 Git Console";
+"完整输出已省略，请在 Git Console 中查看。" = "完整输出已省略，请在 Git Console 中查看。";
 "Git LFS 未安装" = "Git LFS 未安装";
 "Git LFS 已安装" = "Git LFS 已安装";
 "Git Root" = "Git Root";

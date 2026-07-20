@@ -14,6 +14,34 @@ private enum GitToolbarMetrics {
     static let iconFrameSize: CGFloat = 14
 }
 
+enum GitErrorPresentation {
+    private static let maximumLines = 8
+    private static let maximumCharacters = 640
+
+    static func summary(
+        _ message: String,
+        truncationNotice: String
+    ) -> String {
+        let normalized = message.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let lines = normalized.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        )
+        var visible = lines.prefix(maximumLines).joined(separator: "\n")
+        var wasTruncated = lines.count > maximumLines
+        if visible.count > maximumCharacters {
+            visible = String(visible.prefix(maximumCharacters))
+            wasTruncated = true
+        }
+        guard wasTruncated else { return normalized }
+        return visible.trimmingCharacters(in: .whitespacesAndNewlines)
+            + "\n\n"
+            + truncationNotice
+    }
+}
+
 private struct GitDiffFileRequest: Equatable {
     let id = UUID()
     let path: String
@@ -140,18 +168,29 @@ struct GitWorkbenchView: View {
             localizer.string("Git 操作失败"),
             isPresented: errorPresented
         ) {
+            Button(localizer.string("查看 Git Console")) {
+                model.metadata.layout.isConsoleVisible = true
+                model.saveWorkspaceMetadata()
+                model.errorMessage = nil
+                model.errorGuidanceKey = nil
+            }
             Button(localizer.string("好")) {
                 model.errorMessage = nil
                 model.errorGuidanceKey = nil
             }
         } message: {
             Text(
-                [
-                    model.errorGuidanceKey.map(localizer.string),
-                    model.errorMessage,
-                ]
-                .compactMap { $0 }
-                .joined(separator: "\n\n")
+                GitErrorPresentation.summary(
+                    [
+                        model.errorGuidanceKey.map(localizer.string),
+                        model.errorMessage,
+                    ]
+                    .compactMap { $0 }
+                    .joined(separator: "\n\n"),
+                    truncationNotice: localizer.string(
+                        "完整输出已省略，请在 Git Console 中查看。"
+                    )
+                )
             )
         }
         .sheet(isPresented: $showingBranchCreator) {

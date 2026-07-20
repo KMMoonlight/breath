@@ -255,14 +255,14 @@ extension GitWorkbenchService {
         )
         switch request.selection {
         case .staged:
-            let result = try await runCommitCommand(
+            _ = try await runCommitCommand(
                 rootURL: rootURL,
                 request: request,
                 environment: nil
             )
             return GitCommitOutcome(
                 objectID: try await headObjectID(rootURL: rootURL),
-                warnings: result.combinedOutput.isEmpty ? [] : [result.combinedOutput]
+                warnings: []
             )
         case .changelist(let entries):
             return try await commitChangelist(

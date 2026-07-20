@@ -14,6 +14,29 @@ private final class TestSplitTrackingAncestor:
 
 @Suite("Main window layout source guard")
 struct WindowLayoutSourceTests {
+    @Test("Git error alerts keep long command output compact")
+    func gitErrorPresentationIsBounded() {
+        let longOutput = (1...80)
+            .map { "create mode 100644 file-\($0).md" }
+            .joined(separator: "\n")
+        let notice = "Full output is available in Git Console."
+        let summary = GitErrorPresentation.summary(
+            longOutput,
+            truncationNotice: notice
+        )
+
+        #expect(summary.count <= 900)
+        #expect(summary.contains("file-1.md"))
+        #expect(!summary.contains("file-80.md"))
+        #expect(summary.contains(notice))
+        #expect(
+            GitErrorPresentation.summary(
+                "fatal: remote rejected",
+                truncationNotice: notice
+            ) == "fatal: remote rejected"
+        )
+    }
+
     @Test("Git three-column split keeps the second divider fixed while moving the first")
     @MainActor
     func gitThreeColumnDividersResizeIndependently() {
