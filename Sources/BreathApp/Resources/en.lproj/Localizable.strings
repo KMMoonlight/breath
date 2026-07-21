@@ -520,6 +520,9 @@
 "跳过" = "Skip";
 "安装" = "Install";
 "安装 %@" = "Install %@";
+"检查安装…" = "Review Installation…";
+"检查 %@ 的安装" = "Review %@ Installation";
+"同名 Skill 已安装于 %@" = "A Skill with this name is installed for %@";
 "安装 GitHub Repo" = "Install GitHub Repo";
 "已安装相同内容" = "Same Content Already Installed";
 "不可安装" = "Cannot Install";

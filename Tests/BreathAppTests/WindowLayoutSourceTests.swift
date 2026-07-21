@@ -138,10 +138,12 @@ struct WindowLayoutSourceTests {
         #expect(sourceStep.contains(
             "Button(localizer.string(\"安装\"), action: resolveGitHubInput)"
         ))
-        #expect(sourceStep.contains("Button(localizer.string(\"安装\"))"))
-        #expect(sourceStep.contains(
-            ".accessibilityLabel(localizer.format(\"安装 %@\", item.name))"
-        ))
+        #expect(sourceStep.contains("? localizer.string(\"安装\")"))
+        #expect(sourceStep.contains("localizer.format(\"安装 %@\", item.name)"))
+        #expect(sourceStep.contains("installedAgentNames(matching: item)"))
+        #expect(sourceStep.contains("同名 Skill 已安装于 %@"))
+        #expect(sourceStep.contains("localizer.string(\"检查安装…\")"))
+        #expect(sourceStep.contains("localizer.format(\"检查 %@ 的安装\", item.name)"))
         #expect(sourceStep.contains(".task(id: skillsShInput)"))
         #expect(sourceStep.contains("searchSkillsShAfterDebounce"))
         #expect(!sourceStep.contains("Button(localizer.string(\"搜索\")"))
@@ -175,6 +177,7 @@ struct WindowLayoutSourceTests {
         #expect(guidelines.contains("流程页面不得使用超大提示标题"))
         #expect(guidelines.contains("ContentUnavailableView"))
         #expect(guidelines.contains("下载内容或写入磁盘"))
+        #expect(guidelines.contains("若已发现本地同名 Skill"))
         #expect(guidelines.contains("不得使用导航箭头"))
     }
 

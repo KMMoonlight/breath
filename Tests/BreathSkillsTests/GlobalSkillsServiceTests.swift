@@ -901,6 +901,108 @@ struct GlobalSkillsServiceTests {
         #expect(await catalog.auditedIDs() == ["example/skills/review"])
     }
 
+    @Test("skills.sh selects the slug-matched nested Skill over a repository manifest")
+    func selectsNestedSkillsShCandidate() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let pageURL = try #require(URL(string: "https://skills.sh/example/kami/kami"))
+        let searchResult = SkillsShSearchResult(
+            id: "example/kami/kami",
+            slug: "kami",
+            name: "kami",
+            description: "Typeset documents.",
+            source: "example/kami",
+            installs: 42,
+            sourceType: "github",
+            installURL: try #require(URL(string: "https://github.com/example/kami")),
+            pageURL: pageURL
+        )
+        let archive = StoredZIP.make([
+            "example-kami-commit/SKILL.md": Data(
+                """
+                ---
+                name: kami
+                description: Repository-wide instructions.
+                ---
+                """.utf8
+            ),
+            "example-kami-commit/site/index.html": Data("website".utf8),
+            "example-kami-commit/plugins/kami/skills/kami/SKILL.md": Data(
+                """
+                ---
+                name: kami
+                description: Typeset documents.
+                ---
+                """.utf8
+            ),
+            "example-kami-commit/plugins/kami/skills/kami/references/guide.md": Data(
+                "Guide".utf8
+            ),
+        ])
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            githubProvider: StubGitHubProvider(archiveData: archive),
+            skillsShProvider: StubSkillsShProvider(results: [searchResult], audit: .unknown)
+        )
+
+        let batch = try await service.discoverSkill(fromSkillsSh: searchResult)
+        let candidate = try #require(batch.candidates.first)
+
+        #expect(batch.candidates.count == 1)
+        #expect(candidate.sourceRelativePath == "plugins/kami/skills/kami")
+        #expect(candidate.description == "Typeset documents.")
+        #expect(candidate.files.map(\.relativePath) == ["SKILL.md", "references/guide.md"])
+        #expect(!candidate.warnings.contains { $0.kind == .directoryNameMismatch })
+    }
+
+    @Test("skills.sh does not fall back to a repository manifest when its slug path is invalid")
+    func rejectsInvalidNestedSkillsShCandidate() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let searchResult = SkillsShSearchResult(
+            id: "example/kami/kami",
+            slug: "kami",
+            name: "kami",
+            description: nil,
+            source: "example/kami",
+            installs: 42,
+            sourceType: "github",
+            installURL: try #require(URL(string: "https://github.com/example/kami")),
+            pageURL: try #require(URL(string: "https://skills.sh/example/kami/kami"))
+        )
+        let archive = StoredZIP.make([
+            "example-kami-commit/SKILL.md": Data(
+                """
+                ---
+                name: kami
+                description: Repository-wide instructions.
+                ---
+                """.utf8
+            ),
+            "example-kami-commit/plugins/kami/skills/kami/SKILL.md": Data(
+                """
+                ---
+                name: kami
+                ---
+                """.utf8
+            ),
+        ])
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            githubProvider: StubGitHubProvider(archiveData: archive),
+            skillsShProvider: StubSkillsShProvider(results: [searchResult], audit: .unknown)
+        )
+
+        let batch = try await service.discoverSkill(fromSkillsSh: searchResult)
+
+        #expect(batch.candidates.isEmpty)
+        #expect(batch.rejectedCandidates.map(\.sourceRelativePath) == [
+            "plugins/kami/skills/kami",
+        ])
+    }
+
     @Test("update checks are explicit, ignore unrelated commits, and protect locally modified targets")
     func checksAndInstallsOneUpdate() async throws {
         let fixture = try SkillsFixture()

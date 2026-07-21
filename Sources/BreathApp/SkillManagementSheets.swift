@@ -181,6 +181,7 @@ struct SkillInstallationWizard: View {
             }
             if !searchResults.isEmpty {
                 List(searchResults) { item in
+                    let installedAgents = installedAgentNames(matching: item)
                     HStack(alignment: .center, spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(item.name).fontWeight(.medium)
@@ -195,6 +196,14 @@ struct SkillInstallationWizard: View {
                             Text(item.source)
                                 .font(.caption2.monospaced())
                                 .foregroundStyle(.tertiary)
+                            if !installedAgents.isEmpty {
+                                Text(localizer.format(
+                                    "同名 Skill 已安装于 %@",
+                                    installedAgents.joined(separator: ", ")
+                                ))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            }
                             if item.securityAudit.riskLevel != .unknown {
                                 HStack(spacing: 6) {
                                     RiskBadge(audit: item.securityAudit, localizer: localizer)
@@ -223,13 +232,21 @@ struct SkillInstallationWizard: View {
                             if activity == .downloadingCatalog(item.id) {
                                 progressStatus("正在下载…")
                             } else {
-                                Button(localizer.string("安装")) {
+                                Button(
+                                    installedAgents.isEmpty
+                                        ? localizer.string("安装")
+                                        : localizer.string("检查安装…")
+                                ) {
                                     discoverCatalogResult(item)
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .disabled(isWorking)
-                                .accessibilityLabel(localizer.format("安装 %@", item.name))
+                                .accessibilityLabel(
+                                    installedAgents.isEmpty
+                                        ? localizer.format("安装 %@", item.name)
+                                        : localizer.format("检查 %@ 的安装", item.name)
+                                )
                                 .accessibilityHint(localizer.string(
                                     "从 GitHub 下载来源并进入安装内容检查"
                                 ))
@@ -243,6 +260,18 @@ struct SkillInstallationWizard: View {
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .task(id: skillsShInput) {
             await searchSkillsShAfterDebounce()
+        }
+    }
+
+    private func installedAgentNames(matching item: SkillsShSearchResult) -> [String] {
+        let name = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Array(Set(
+            snapshot.skills
+                .filter { $0.name == name }
+                .flatMap(\.copies)
+                .map(\.agentDisplayName)
+        )).sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
         }
     }
 

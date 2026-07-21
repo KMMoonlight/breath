@@ -1201,13 +1201,21 @@ public actor GlobalSkillsService {
         source: SkillSourceKind,
         sourceLabel: String,
         remoteProvenance: SkillRemoteProvenance?,
-        securityAudit: SkillSecurityAudit = .unknown
+        securityAudit: SkillSecurityAudit = .unknown,
+        includeNestedCandidatesWhenRootManifestExists: Bool = false
     ) throws -> SkillCandidateDiscovery {
         var roots: [URL] = []
         if fileManager.fileExists(
             atPath: sourceRoot.appendingPathComponent("SKILL.md").path
         ) {
             roots = [sourceRoot]
+            if includeNestedCandidatesWhenRootManifestExists {
+                roots.append(contentsOf: try boundedSkillRoots(in: sourceRoot))
+                roots = Array(Dictionary(
+                    roots.map { ($0.standardizedFileURL.path, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                ).values)
+            }
         } else {
             roots = try boundedCandidateRoots(in: sourceRoot)
         }
@@ -1276,7 +1284,14 @@ public actor GlobalSkillsService {
                 message: "The Skill name does not use the recommended lowercase hyphen format."
             ))
         }
-        if root.lastPathComponent != metadata.name {
+        let isTechnicalRemoteRoot = root.standardizedFileURL == sourceRoot.standardizedFileURL
+            && remoteProvenance?.sourceRelativePath.isEmpty == true
+        let isTechnicalZIPRoot = root.standardizedFileURL == sourceRoot.standardizedFileURL
+            && source == .zip
+        if root.lastPathComponent != metadata.name
+            && !isTechnicalRemoteRoot
+            && !isTechnicalZIPRoot
+        {
             warnings.append(SkillCandidateWarning(
                 kind: .directoryNameMismatch,
                 message: "The source directory name differs from the Skill name."
@@ -1386,19 +1401,27 @@ public actor GlobalSkillsService {
                 source: source,
                 sourceLabel: sourceLabel,
                 remoteProvenance: provenance,
-                securityAudit: securityAudit
+                securityAudit: securityAudit,
+                includeNestedCandidatesWhenRootManifestExists: preferredSkillSlug != nil
             )
             if let preferredSkillSlug {
                 let normalizedSlug = preferredSkillSlug.lowercased()
-                let preferred = discovery.candidates.filter {
+                let directoryMatches = discovery.candidates.filter {
+                    $0.sourceRelativePath.split(separator: "/").last?
+                        .lowercased() == normalizedSlug
+                }
+                let nameMatches = discovery.candidates.filter {
                     $0.name.lowercased() == normalizedSlug
-                        || $0.sourceRelativePath.split(separator: "/").last?
-                            .lowercased() == normalizedSlug
                 }
                 let rejected = discovery.rejections.filter {
                     $0.sourceRelativePath.split(separator: "/").last?
                         .lowercased() == normalizedSlug
                 }
+                let hasSlugMatchedDirectory = !directoryMatches.isEmpty
+                    || !rejected.isEmpty
+                let preferred = Self.deduplicatedCandidatesByContent(
+                    hasSlugMatchedDirectory ? directoryMatches : nameMatches
+                )
                 guard !preferred.isEmpty || !rejected.isEmpty else {
                     throw SkillSourceError.noSkillsFound
                 }
@@ -1421,6 +1444,20 @@ public actor GlobalSkillsService {
             try? fileManager.removeItem(at: workspace)
             throw error
         }
+    }
+
+    private static func deduplicatedCandidatesByContent(
+        _ candidates: [SkillCandidate]
+    ) -> [SkillCandidate] {
+        let ordered = candidates.sorted {
+            let leftDepth = $0.sourceRelativePath.split(separator: "/").count
+            let rightDepth = $1.sourceRelativePath.split(separator: "/").count
+            if leftDepth != rightDepth { return leftDepth < rightDepth }
+            return $0.sourceRelativePath.localizedStandardCompare($1.sourceRelativePath)
+                == .orderedAscending
+        }
+        var seenDigests: Set<String> = []
+        return ordered.filter { seenDigests.insert($0.contentDigest).inserted }
     }
 
     private func boundedSkillRoots(in sourceRoot: URL) throws -> [URL] {
