@@ -841,7 +841,7 @@ struct SkillUninstallView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(localizer.format("卸载 %@", skill.name))
                     .font(.title2.weight(.semibold))
-                Text(localizer.string("只会移除明确选择的 Agent 副本。"))
+                Text(localizer.string("只会从明确选择的 Agent 中移除 Skill。"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -127,7 +127,7 @@ struct SkillsView: View {
     }
 
     private var listControls: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .center, spacing: 8) {
             TextField(localizer.string("搜索名称或说明"), text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel(localizer.string("搜索 Skills"))
@@ -141,10 +141,12 @@ struct SkillsView: View {
                         .frame(width: 16, height: 16)
                 } else {
                     Image(systemName: "arrow.clockwise")
+                        .frame(width: 16, height: 16, alignment: .center)
+                        .offset(y: 1)
                 }
             }
             .buttonStyle(.plain)
-            .frame(width: 24, height: 24)
+            .frame(width: 24, height: 24, alignment: .center)
             .contentShape(Rectangle())
             .disabled(model.isRefreshing)
             .accessibilityLabel(localizer.string("刷新 Skills"))
@@ -272,7 +274,7 @@ struct SkillsView: View {
             ContentUnavailableView(
                 localizer.string("选择一个 Skill"),
                 systemImage: "sparkles",
-                description: Text(localizer.string("查看说明、文件、来源和 Agent 副本"))
+                description: Text(localizer.string("查看说明、文件、来源和已安装的 Agent"))
             )
         }
     }
@@ -369,7 +371,7 @@ private struct SkillDetailView: View {
                     Button(localizer.string("卸载…"), role: .destructive, action: uninstall)
                 }
 
-                GroupBox(localizer.string("Agent 副本")) {
+                GroupBox(localizer.string("已安装的 Agent 列表")) {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(skill.copies) { copy in
                             HStack {

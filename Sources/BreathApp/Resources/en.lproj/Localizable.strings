@@ -459,10 +459,10 @@
 "可更新" = "Update Available";
 "本地已修改" = "Locally Modified";
 "选择一个 Skill" = "Select a Skill";
-"查看说明、文件、来源和 Agent 副本" = "View its description, files, source, and Agent copies";
+"查看说明、文件、来源和已安装的 Agent" = "View its description, files, source, and installed Agents";
 "查看更新…" = "Review Update…";
 "卸载…" = "Uninstall…";
-"Agent 副本" = "Agent Copies";
+"已安装的 Agent 列表" = "Installed Agents";
 "Skill 详情" = "Skill Details";
 "SKILL.md" = "SKILL.md";
 "文件（%d）" = "Files (%d)";
@@ -525,7 +525,7 @@
 "返回" = "Back";
 "安装更新" = "Install Update";
 "卸载 %@" = "Uninstall %@";
-"只会移除明确选择的 Agent 副本。" = "Only explicitly selected Agent copies will be removed.";
+"只会从明确选择的 Agent 中移除 Skill。" = "The Skill will only be removed from explicitly selected Agents.";
 "移入 macOS 废纸篓，可恢复" = "Move to macOS Trash; recoverable";
 "只移除链接，共享目标保持不变" = "Remove only the link; keep its shared target";
 "检查卸载" = "Review Uninstall";
