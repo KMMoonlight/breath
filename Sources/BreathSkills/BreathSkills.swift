@@ -1874,7 +1874,7 @@ private struct SharedSkillRegistry {
                 continue
             }
             let repository = entry.source?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let normalizedRepository = repository.flatMap { value in
+            let normalizedRepository: String? = repository.flatMap { value -> String? in
                 let components = value.split(separator: "/")
                 guard components.count == 2 else { return nil }
                 return components.map(String.init).joined(separator: "/").lowercased()
