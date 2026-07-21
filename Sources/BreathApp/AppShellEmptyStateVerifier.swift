@@ -250,14 +250,16 @@ private final class AppShellFixture {
         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         self.window = window
 
-        // This DEBUG-only verifier captures only its own window. The legacy API
-        // avoids prompting developers for Screen Recording permission in tests.
-        guard let image = CGWindowListCreateImage(
-            .null,
-            .optionIncludingWindow,
-            CGWindowID(window.windowNumber),
-            [.boundsIgnoreFraming]
-        ) else {
+        // Render the verifier's own view directly. Screen capture APIs are both
+        // unnecessary here and liable to request Screen Recording permission.
+        let captureBounds = hostingView.bounds
+        guard !captureBounds.isEmpty,
+              let bitmap = hostingView.bitmapImageRepForCachingDisplay(in: captureBounds)
+        else {
+            throw AppShellVerificationError.couldNotCapture
+        }
+        hostingView.cacheDisplay(in: captureBounds, to: bitmap)
+        guard let image = bitmap.cgImage else {
             throw AppShellVerificationError.couldNotCapture
         }
         capturedImage = image

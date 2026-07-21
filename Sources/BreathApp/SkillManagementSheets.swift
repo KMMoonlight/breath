@@ -181,9 +181,17 @@ struct SkillInstallationWizard: View {
             }
             if !searchResults.isEmpty {
                 List(searchResults) { item in
+                    let installedAgents = installedAgentNames(matching: item)
+                    let submitter = catalogSubmitter(for: item)
+                    let isInstalled = !installedAgents.isEmpty
                     HStack(alignment: .center, spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(item.name).fontWeight(.medium)
+                            if let submitter {
+                                Text(localizer.format("提交者：%@", submitter))
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
                             if let description = item.description,
                                !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             {
@@ -211,6 +219,14 @@ struct SkillInstallationWizard: View {
                                     .foregroundStyle(.tertiary)
                                 }
                             }
+                            if isInstalled {
+                                Text(localizer.format(
+                                    "已安装于 %@",
+                                    installedAgents.joined(separator: ", ")
+                                ))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            }
                         }
                         Spacer()
                         VStack(alignment: .trailing, spacing: 6) {
@@ -220,13 +236,16 @@ struct SkillInstallationWizard: View {
                             if activity == .downloadingCatalog(item.id) {
                                 progressStatus("正在下载…")
                             } else {
-                                Button(localizer.string("安装")) {
+                                Button(localizer.string(isInstalled ? "管理安装…" : "安装")) {
                                     discoverCatalogResult(item)
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .disabled(isWorking)
-                                .accessibilityLabel(localizer.format("安装 %@", item.name))
+                                .accessibilityLabel(localizer.format(
+                                    isInstalled ? "管理 %@ 的安装" : "安装 %@",
+                                    item.name
+                                ))
                                 .accessibilityHint(localizer.string(
                                     "从 GitHub 下载来源并进入安装内容检查"
                                 ))
@@ -241,6 +260,31 @@ struct SkillInstallationWizard: View {
         .task(id: skillsShInput) {
             await searchSkillsShAfterDebounce()
         }
+    }
+
+    private func installedAgentNames(matching item: SkillsShSearchResult) -> [String] {
+        guard let identity = SkillSourceIdentity(
+            source: .skillsSh,
+            repository: item.source,
+            sourceRelativePath: item.slug,
+            catalogSkillID: item.id
+        ) else {
+            return []
+        }
+        return Array(Set(
+            snapshot.skills
+                .flatMap(\.copies)
+                .filter { $0.sourceIdentity == identity }
+                .map(\.agentDisplayName)
+        )).sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+    }
+
+    private func catalogSubmitter(for item: SkillsShSearchResult) -> String? {
+        let components = item.source.split(separator: "/", omittingEmptySubsequences: true)
+        guard components.count >= 2 else { return nil }
+        return String(components[0])
     }
 
     private func progressStatus(_ title: String) -> some View {

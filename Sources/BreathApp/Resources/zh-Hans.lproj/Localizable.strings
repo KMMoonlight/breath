@@ -497,6 +497,10 @@
 "从 GitHub 下载来源并进入安装内容检查" = "从 GitHub 下载来源并进入安装内容检查";
 "仅支持无需认证的公开 GitHub Repo；私有 Repo 请改用 ZIP。" = "仅支持无需认证的公开 GitHub Repo；私有 Repo 请改用 ZIP。";
 "%d 次安装" = "%d 次安装";
+"提交者：%@" = "提交者：%@";
+"已安装于 %@" = "已安装于 %@";
+"管理安装…" = "管理安装…";
+"管理 %@ 的安装" = "管理 %@ 的安装";
 "没有找到 skills.sh 结果" = "没有找到 skills.sh 结果";
 "skills.sh 当前无法从 Breath 搜索。请在 skills.sh 查找后，通过 GitHub Repo 安装。" = "skills.sh 当前无法从 Breath 搜索。请在 skills.sh 查找后，通过 GitHub Repo 安装。";
 "只会安装你明确选择的候选 Skill。" = "只会安装你明确选择的候选 Skill。";

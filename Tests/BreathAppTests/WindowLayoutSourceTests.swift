@@ -143,12 +143,15 @@ struct WindowLayoutSourceTests {
         #expect(sourceStep.contains(
             "Button(localizer.string(\"安装\"), action: resolveGitHubInput)"
         ))
-        #expect(sourceStep.contains("Button(localizer.string(\"安装\"))"))
-        #expect(sourceStep.contains("localizer.format(\"安装 %@\", item.name)"))
+        #expect(sourceStep.contains("isInstalled ? \"管理安装…\" : \"安装\""))
+        #expect(sourceStep.contains("isInstalled ? \"管理 %@ 的安装\" : \"安装 %@\""))
         #expect(!sourceStep.contains("Text(item.source)"))
-        #expect(!sourceStep.contains("installedAgentNames(matching: item)"))
-        #expect(!sourceStep.contains("同名 Skill 已安装于 %@"))
-        #expect(!sourceStep.contains("检查安装…"))
+        #expect(sourceStep.contains("installedAgentNames(matching: item)"))
+        #expect(sourceStep.contains("$0.sourceIdentity == identity"))
+        #expect(sourceStep.contains("catalogSkillID: item.id"))
+        #expect(sourceStep.contains("localizer.format(\"提交者：%@\", submitter)"))
+        #expect(sourceStep.contains("已安装于 %@"))
+        #expect(!sourceStep.contains(".filter { $0.name == name }"))
         #expect(sourceStep.contains(".task(id: skillsShInput)"))
         #expect(sourceStep.contains("searchSkillsShAfterDebounce"))
         #expect(!sourceStep.contains("Button(localizer.string(\"搜索\")"))
@@ -186,6 +189,24 @@ struct WindowLayoutSourceTests {
         #expect(guidelines.contains("下载内容或写入磁盘"))
         #expect(guidelines.contains("安装预览"))
         #expect(guidelines.contains("不得使用导航箭头"))
+    }
+
+    @Test("DEBUG app shell verifier captures its own view without deprecated screen APIs")
+    func appShellVerifierAvoidsDeprecatedScreenCapture() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/AppShellEmptyStateVerifier.swift"
+            ),
+            encoding: .utf8
+        )
+
+        #expect(!source.contains("CGWindowListCreateImage"))
+        #expect(source.contains("bitmapImageRepForCachingDisplay"))
+        #expect(source.contains("cacheDisplay(in: captureBounds, to: bitmap)"))
     }
 
     @Test("Git error alerts keep long command output compact")
