@@ -127,6 +127,19 @@ struct WindowLayoutSourceTests {
         #expect(sourceStep.contains(
             ".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)"
         ))
+        #expect(sourceStep.contains(
+            "Button(localizer.string(\"下载并检查…\"))"
+        ))
+        #expect(sourceStep.contains(
+            "Button(localizer.string(\"下载并检查…\"), action: resolveGitHubInput)"
+        ))
+        #expect(!sourceStep.contains(
+            "Button(localizer.string(\"查找\"), action: resolveGitHubInput)"
+        ))
+        #expect(sourceStep.contains("sourceActivity == .catalog(item.id)"))
+        #expect(sourceStep.contains("sourceActivity == .github"))
+        #expect(sourceStep.contains("localizer.string(\"正在下载…\")"))
+        #expect(!sourceStep.contains("Image(systemName: \"chevron.right\")"))
         #expect(source.contains("private func resolveGitHubInput()"))
         #expect(source.contains("private func searchSkillsSh()"))
         #expect(!source.contains("resolveOnlineInput"))
@@ -147,6 +160,8 @@ struct WindowLayoutSourceTests {
         )
         #expect(guidelines.contains("流程页面不得使用超大提示标题"))
         #expect(guidelines.contains("ContentUnavailableView"))
+        #expect(guidelines.contains("下载内容或写入磁盘"))
+        #expect(guidelines.contains("不得使用导航箭头"))
     }
 
     @Test("Git error alerts keep long command output compact")

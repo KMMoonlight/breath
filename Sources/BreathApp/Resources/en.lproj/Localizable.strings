@@ -491,6 +491,10 @@
 "搜索关键词" = "Search Terms";
 "搜索" = "Search";
 "查找" = "Find";
+"下载并检查…" = "Download and Review…";
+"正在下载…" = "Downloading…";
+"选择“下载并检查…”后，Breath 会从 GitHub 下载来源并进入安装内容检查；确认前不会写入任何 Agent 目录。" = "Choose Download and Review to download the source from GitHub and review its contents. No Agent directory is changed before confirmation.";
+"从 GitHub 下载来源并进入安装内容检查" = "Download the source from GitHub and review its installation contents";
 "仅支持无需认证的公开 GitHub Repo；私有 Repo 请改用 ZIP。" = "Only public GitHub repos that need no authentication are supported. Use ZIP for private repos.";
 "%d 次安装" = "%d Installs";
 "没有找到 skills.sh 结果" = "No skills.sh Results Found";
