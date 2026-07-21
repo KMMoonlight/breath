@@ -27,6 +27,19 @@ public enum TerminalPasteSafety {
 @MainActor
 public protocol TerminalViewProviding: AnyObject {
     func view(for paneID: TerminalPaneID) -> NSView?
+    func handleShortcutKeyDown(
+        _ event: NSEvent,
+        for paneID: TerminalPaneID
+    ) -> Bool
+}
+
+public extension TerminalViewProviding {
+    func handleShortcutKeyDown(
+        _ event: NSEvent,
+        for paneID: TerminalPaneID
+    ) -> Bool {
+        false
+    }
 }
 
 public final class TerminalEngineRuntime: TerminalRuntime, @unchecked Sendable {

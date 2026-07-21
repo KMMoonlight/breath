@@ -51,7 +51,10 @@
 "退出" = "Quit";
 "添加工作区" = "Add Workspace";
 "没有选中的工作会话" = "No Work Session Selected";
+"打开工作区" = "Open Workspace";
 "打开设置" = "Open Settings";
+"设置" = "Settings";
+"设置…" = "Settings…";
 "打开任务视图" = "Open Task View";
 "任务视图面板" = "Task View Panel";
 "正在恢复上次工作区…" = "Restoring the previous workspace…";
@@ -88,18 +91,6 @@
 "终端" = "Terminal";
 "切换到终端 %d（⌘%d）" = "Switch to Terminal %d (⌘%d)";
 "终端正在启动…" = "Terminal is starting…";
-"正在读取 Git 状态…" = "Loading Git status…";
-"非 Git 仓库" = "Not a Git Repository";
-"Git 状态不可用" = "Git Status Unavailable";
-"工作区无改动" = "Clean";
-"Git 分支 %@" = "Git branch %@";
-"领先 %d" = "%d ahead";
-"落后 %d" = "%d behind";
-"已修改 %d" = "%d modified";
-"已新增 %d" = "%d added";
-"已删除 %d" = "%d deleted";
-"未跟踪 %d" = "%d untracked";
-"查看 Git 变更" = "View Git Changes";
 "使用 %@ 打开工作区" = "Open Workspace in %@";
 "选择编辑器" = "Choose Editor";
 "未找到编辑器" = "No Editor Found";
@@ -155,7 +146,9 @@
 "Git Stash" = "Git Stash";
 "Git Stash 与 Shelf" = "Git Stash and Shelf";
 "Git 安全快照" = "Git Safety Snapshots";
+"Git 安全快照保留" = "Keep Git Safety Snapshots";
 "Git 安全快照保留：%d 个修改工作日" = "Keep Git Safety Snapshots for %d Working Days";
+"%d 个修改工作日" = "%d Working Days";
 "Git 变更 %@ %@" = "Git Change %@ %@";
 "Git 操作失败" = "Git Operation Failed";
 "Git 操作状态 %d" = "%d Git Operations";
@@ -230,6 +223,8 @@
 "从本地变更或提交历史中选择内容" = "Select a local change or commit";
 "从此提交创建分支…" = "Create Branch from This Commit…";
 "打开 Git 工作台" = "Open Git Workbench";
+"Git 目录" = "Git Directory";
+"请选择" = "Choose…";
 "大小：%d 字节，可使用系统预览。" = "Size: %d bytes. System Preview is available.";
 "当前分支 %@" = "Current Branch %@";
 "第 %d 行，作者 %@，提交 %@" = "Line %d, author %@, commit %@";
@@ -241,7 +236,6 @@
 "复制" = "Copied";
 "更多 Git 操作" = "More Git Actions";
 "工作区 Git 设置" = "Workspace Git Settings";
-"关闭 Git 工作台" = "Close Git Workbench";
 "过滤文件" = "Filter Files";
 "合并展示 Git Stash 与 Shelf" = "Combine Git Stash and Shelf";
 "忽略全部空白" = "Ignore All Whitespace";
@@ -340,6 +334,8 @@
 "重命名分支" = "Rename Branch";
 "自动 Fetch：%d 分钟" = "Auto Fetch: %d Minutes";
 "自动 Fetch：关闭" = "Auto Fetch: Off";
+"自动 Fetch" = "Auto Fetch";
+"%d 分钟" = "%d Minutes";
 "自动换行" = "Soft Wrap";
 "最近提交信息" = "Recent Commit Messages";
 "刷新" = "Refresh";
@@ -453,7 +449,6 @@
 "全局 Skills 列表" = "Global Skills List";
 "尚未发现全局 Skill" = "No Global Skills Found";
 "没有符合筛选条件的 Skill" = "No Skills Match These Filters";
-"无法识别的 Skill 项目" = "Unrecognized Skill Items";
 "在 Finder 中显示" = "Show in Finder";
 "可更新" = "Update Available";
 "本地已修改" = "Locally Modified";
@@ -588,7 +583,6 @@
 "新说明" = "New Description";
 "No security audit is available." = "No security audit is available.";
 "目录无法解析" = "Directory Could Not Be Resolved";
-"复制诊断" = "Copy Diagnostic";
 "暂无说明" = "No Description Available";
 "无法安装的候选 Skill" = "Candidates That Cannot Be Installed";
 "The Skill name does not use the recommended lowercase hyphen format." = "The Skill name does not use the recommended lowercase hyphen format.";

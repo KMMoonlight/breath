@@ -54,13 +54,25 @@ private struct BreathDesktopApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
-                OpenMainWindowCommand(language: model.settings.application.language)
+                OpenMainWindowCommand(
+                    language: model.settings.application.language,
+                    shortcutPriority: model.shortcutPriority
+                )
                 Button(localizer.string("新建工作会话")) {
                     guard let workspaceID = model.currentWorkspaceID else { return }
                     model.createWorkSession(in: workspaceID)
                 }
-                .keyboardShortcut("t", modifiers: [.command])
+                .breathKeyboardShortcut(
+                    BreathShortcutCatalog.newWorkSession,
+                    priority: model.shortcutPriority
+                )
                 .disabled(!model.canPerformCommands || model.currentWorkspaceID == nil)
+            }
+            CommandGroup(replacing: .appSettings) {
+                OpenSettingsPageCommand(
+                    language: model.settings.application.language,
+                    shortcutPriority: model.shortcutPriority
+                )
             }
             CommandGroup(after: .appInfo) {
                 Button(localizer.string("检查更新…")) {
@@ -81,7 +93,6 @@ private struct BreathDesktopApp: App {
                         preferences: gitPreferencesStore.preferences,
                         requiredScope: .global
                     )
-                    .disabled(model.currentWorkspaceID == nil)
 
                     Divider()
 
@@ -113,17 +124,6 @@ private struct BreathDesktopApp: App {
                 }
             }
         }
-
-        Settings {
-            BreathSettingsView(model: model)
-                .preferredColorScheme(preferredColorScheme)
-                .applicationLanguage(model.settings.application.language)
-                .tint(.primary)
-                .onAppear {
-                    appDelegate.model = model
-                    model.start()
-                }
-        }
     }
 
     private var preferredColorScheme: ColorScheme? {
@@ -141,6 +141,7 @@ private struct BreathDesktopApp: App {
 
 private struct OpenMainWindowCommand: View {
     let language: ApplicationLanguage
+    let shortcutPriority: BreathShortcutPriority
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -148,7 +149,33 @@ private struct OpenMainWindowCommand: View {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
         }
-        .keyboardShortcut("n", modifiers: [.command])
+        .breathKeyboardShortcut(
+            BreathShortcutCatalog.openMainWindow,
+            priority: shortcutPriority
+        )
+    }
+}
+
+private struct OpenSettingsPageCommand: View {
+    let language: ApplicationLanguage
+    let shortcutPriority: BreathShortcutPriority
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button(ApplicationLocalizer(language: language).string("设置…")) {
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .breathOpenSettings,
+                    object: nil
+                )
+            }
+        }
+        .breathKeyboardShortcut(
+            BreathShortcutCatalog.openSettings,
+            priority: shortcutPriority
+        )
     }
 }
 

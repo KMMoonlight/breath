@@ -7,153 +7,66 @@ import Testing
 
 @Suite("Terminal keyboard shortcuts")
 struct TerminalKeyboardShortcutTests {
-    @Test("Command-W requests closing the focused terminal pane")
-    func commandWClosesFocusedPane() {
-        #expect(
-            TerminalKeyboardShortcut.requestsPaneClose(
-                modifiers: [.command],
-                charactersIgnoringModifiers: "w",
-                isRepeat: false
-            )
-        )
-        #expect(
-            TerminalKeyboardShortcut.requestsPaneClose(
-                modifiers: [.command, .capsLock],
-                charactersIgnoringModifiers: "W",
-                isRepeat: false
-            )
-        )
-        #expect(
-            !TerminalKeyboardShortcut.requestsPaneClose(
-                modifiers: [.command, .shift],
-                charactersIgnoringModifiers: "w",
-                isRepeat: false
-            )
-        )
-        #expect(
-            !TerminalKeyboardShortcut.requestsPaneClose(
-                modifiers: [.command],
-                charactersIgnoringModifiers: "w",
-                isRepeat: true
-            )
-        )
+    @Test("terminal focus gives terminal shortcuts priority")
+    func terminalFocusGivesTerminalPriority() {
+        let paneID = TerminalPaneID(rawValue: UUID())
+        var priority = BreathShortcutPriority()
+
+        #expect(priority.allowsBreathShortcut())
+        #expect(!priority.allowsBreathShortcut(targeting: paneID))
+
+        priority.updateTerminalFocus(paneID: paneID, isFocused: true)
+
+        #expect(priority.allowsBreathShortcut())
+        #expect(priority.allowsBreathShortcut(targeting: paneID))
+
+        priority.updateTerminalFocus(paneID: paneID, isFocused: false)
+
+        #expect(priority.allowsBreathShortcut())
+        #expect(priority.allowsBreathShortcut(targeting: paneID))
     }
 
-    @MainActor
-    @Test("Command-W transfers focus so it can close terminals consecutively")
-    func commandWTransfersFocusForConsecutiveCloses() async throws {
-        let firstTerminalView = FocusableTerminalTestView()
-        let secondTerminalView = FocusableTerminalTestView()
-        let thirdTerminalView = FocusableTerminalTestView()
-        let firstHost = TerminalHostView()
-        let secondHost = TerminalHostView()
-        let thirdHost = TerminalHostView()
-        firstHost.install(firstTerminalView)
-        secondHost.install(secondTerminalView)
-        thirdHost.install(thirdTerminalView)
+    @Test("stale blur from another terminal does not clear the focused terminal")
+    func staleTerminalBlurPreservesCurrentFocus() {
+        let firstPaneID = TerminalPaneID(rawValue: UUID())
+        let secondPaneID = TerminalPaneID(rawValue: UUID())
+        var priority = BreathShortcutPriority()
 
-        let contentView = NSView(
-            frame: NSRect(x: 0, y: 0, width: 960, height: 180)
-        )
-        firstHost.frame = NSRect(x: 0, y: 0, width: 320, height: 180)
-        secondHost.frame = NSRect(x: 320, y: 0, width: 320, height: 180)
-        thirdHost.frame = NSRect(x: 640, y: 0, width: 320, height: 180)
-        contentView.addSubview(firstHost)
-        contentView.addSubview(secondHost)
-        contentView.addSubview(thirdHost)
-        let window = TerminalFocusTestWindow(
-            contentRect: contentView.bounds,
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: false
-        )
-        window.contentView = contentView
-        var closedTerminalCount = 0
-        firstHost.onCloseShortcut = { completion in
-            closedTerminalCount += 1
-            firstHost.removeFromSuperview()
-            completion(true)
-        }
-        secondHost.onCloseShortcut = { completion in
-            closedTerminalCount += 1
-            secondHost.removeFromSuperview()
-            completion(true)
-        }
-        thirdHost.onCloseShortcut = { completion in
-            closedTerminalCount += 1
-            thirdHost.removeFromSuperview()
-            completion(true)
-        }
+        priority.updateTerminalFocus(paneID: firstPaneID, isFocused: true)
+        priority.updateTerminalFocus(paneID: secondPaneID, isFocused: true)
+        priority.updateTerminalFocus(paneID: firstPaneID, isFocused: false)
 
-        #expect(window.makeFirstResponder(firstTerminalView))
-        NSApp.sendEvent(try commandWEvent(for: window, eventNumber: 1))
-        await Task.yield()
-
-        #expect(closedTerminalCount == 1)
-        #expect(window.firstResponder === secondTerminalView)
-
-        NSApp.sendEvent(try commandWEvent(for: window, eventNumber: 2))
-        await Task.yield()
-
-        #expect(closedTerminalCount == 2)
-        #expect(window.firstResponder === thirdTerminalView)
-
-        NSApp.sendEvent(try commandWEvent(for: window, eventNumber: 3))
-        await Task.yield()
-
-        #expect(closedTerminalCount == 2)
-        #expect(window.firstResponder === thirdTerminalView)
+        #expect(priority.focusedTerminalPaneID == secondPaneID)
+        #expect(priority.allowsBreathShortcut(targeting: secondPaneID))
+        #expect(!priority.allowsBreathShortcut(targeting: firstPaneID))
     }
 
-    @MainActor
-    @Test("Command-W cannot queue closing the final terminal while the prior close is pending")
-    func commandWDoesNotQueueClosingFinalTerminal() async throws {
-        let firstTerminalView = FocusableTerminalTestView()
-        let secondTerminalView = FocusableTerminalTestView()
-        let firstHost = TerminalHostView()
-        let secondHost = TerminalHostView()
-        firstHost.install(firstTerminalView)
-        secondHost.install(secondTerminalView)
+    @Test("terminal-consumed shortcut does not reach Breath")
+    func terminalConsumedShortcutStopsRouting() {
+        let event = "shift-tab"
 
-        let contentView = NSView(
-            frame: NSRect(x: 0, y: 0, width: 640, height: 180)
+        let forwarded = TerminalShortcutArbitrator.eventToForward(
+            event,
+            terminalHasInputFocus: true,
+            matchesBreathShortcut: { _ in true },
+            terminalHandler: { _ in true }
         )
-        firstHost.frame = NSRect(x: 0, y: 0, width: 320, height: 180)
-        secondHost.frame = NSRect(x: 320, y: 0, width: 320, height: 180)
-        contentView.addSubview(firstHost)
-        contentView.addSubview(secondHost)
-        let window = TerminalFocusTestWindow(
-            contentRect: contentView.bounds,
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: false
+
+        #expect(forwarded == nil)
+    }
+
+    @Test("unhandled terminal shortcut falls back to Breath")
+    func unhandledTerminalShortcutFallsBackToBreath() {
+        let event = "command-t"
+
+        let forwarded = TerminalShortcutArbitrator.eventToForward(
+            event,
+            terminalHasInputFocus: true,
+            matchesBreathShortcut: { _ in true },
+            terminalHandler: { _ in false }
         )
-        window.contentView = contentView
-        var closeRequestCount = 0
-        var pendingCompletion: TerminalPaneCloseCompletion?
-        firstHost.onCloseShortcut = { completion in
-            closeRequestCount += 1
-            pendingCompletion = completion
-        }
-        secondHost.onCloseShortcut = { completion in
-            closeRequestCount += 1
-            completion(true)
-        }
 
-        #expect(window.makeFirstResponder(firstTerminalView))
-        NSApp.sendEvent(try commandWEvent(for: window, eventNumber: 1))
-        await Task.yield()
-        #expect(closeRequestCount == 1)
-        #expect(window.firstResponder === secondTerminalView)
-
-        NSApp.sendEvent(try commandWEvent(for: window, eventNumber: 2))
-        await Task.yield()
-
-        #expect(closeRequestCount == 1)
-        #expect(window.firstResponder === secondTerminalView)
-
-        firstHost.removeFromSuperview()
-        pendingCompletion?(true)
+        #expect(forwarded == event)
     }
 
     @MainActor
@@ -307,27 +220,6 @@ struct TerminalKeyboardShortcutTests {
         #expect(window.firstResponder !== terminalView)
         #expect(!terminalHasInputFocus)
     }
-}
-
-@MainActor
-private func commandWEvent(
-    for window: NSWindow,
-    eventNumber: Int
-) throws -> NSEvent {
-    try #require(
-        NSEvent.keyEvent(
-            with: .keyDown,
-            location: .zero,
-            modifierFlags: [.command],
-            timestamp: 0,
-            windowNumber: window.windowNumber,
-            context: nil,
-            characters: "w",
-            charactersIgnoringModifiers: "w",
-            isARepeat: false,
-            keyCode: 13
-        )
-    )
 }
 
 @MainActor

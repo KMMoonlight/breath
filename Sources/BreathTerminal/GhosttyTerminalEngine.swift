@@ -121,6 +121,13 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         views[paneID]
     }
 
+    public func handleShortcutKeyDown(
+        _ event: NSEvent,
+        for paneID: TerminalPaneID
+    ) -> Bool {
+        views[paneID]?.handleShortcutKeyDown(event) ?? false
+    }
+
     public func setProcessExitHandler(
         _ handler: @escaping @Sendable (TerminalPaneID) -> Void
     ) async {
@@ -601,6 +608,16 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
 
     override func keyUp(with event: NSEvent) {
         _ = sendKey(event, action: GHOSTTY_ACTION_RELEASE, text: nil, composing: false)
+    }
+
+    func handleShortcutKeyDown(_ event: NSEvent) -> Bool {
+        guard surface != nil else { return false }
+        return sendKey(
+            event,
+            action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS,
+            text: event.terminalCharacters,
+            composing: false
+        )
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

@@ -69,23 +69,44 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
         require(
+            accessibilityText.contains(WorkbenchAccessibility.openWorkspace),
+            "activity bar workspace action lost its accessibility label: \(accessibilityText)",
+            into: &failures
+        )
+        require(
             accessibilityText.contains(WorkbenchAccessibility.openSettings),
-            "sidebar settings action lost its accessibility label: \(accessibilityText)",
+            "activity bar settings action lost its accessibility label: \(accessibilityText)",
             into: &failures
         )
         require(
             accessibilityText.contains(WorkbenchAccessibility.openTaskView),
-            "sidebar task action lost its accessibility label: \(accessibilityText)",
+            "activity bar task action lost its accessibility label: \(accessibilityText)",
             into: &failures
         )
         require(
             fixture.pressAccessibilityElement(named: WorkbenchAccessibility.openTaskView),
-            "sidebar task action could not be pressed through accessibility",
+            "activity bar task action could not be pressed through accessibility",
+            into: &failures
+        )
+        let taskAccessibilityText = fixture.accessibilityText()
+        require(
+            taskAccessibilityText.contains(WorkbenchAccessibility.taskViewPanel),
+            "task action did not open the empty task panel",
             into: &failures
         )
         require(
-            fixture.accessibilityText().contains(WorkbenchAccessibility.taskViewPanel),
-            "task action did not open the empty task panel",
+            !taskAccessibilityText.contains(WorkbenchAccessibility.addWorkspace),
+            "workspace sidebar remained visible beside the task page",
+            into: &failures
+        )
+        require(
+            fixture.pressAccessibilityElement(named: WorkbenchAccessibility.openWorkspace),
+            "activity bar workspace action could not be pressed through accessibility",
+            into: &failures
+        )
+        require(
+            fixture.accessibilityText().contains(WorkbenchAccessibility.addWorkspace),
+            "workspace action did not restore the workspace sidebar",
             into: &failures
         )
         require(

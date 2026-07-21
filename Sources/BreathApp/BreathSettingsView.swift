@@ -4,13 +4,46 @@ import BreathCore
 import CoreText
 import SwiftUI
 
-enum BreathSettingsTab: Hashable {
+enum BreathSettingsTab: Hashable, CaseIterable {
     case application
     case terminal
     case git
     case agentIntegrations
     case shortcuts
     case archives
+}
+
+private extension BreathSettingsTab {
+    var title: String {
+        switch self {
+        case .application: "应用配置"
+        case .terminal: "终端配置"
+        case .git: "Git"
+        case .agentIntegrations: "Agent 集成"
+        case .shortcuts: "快捷键"
+        case .archives: "已归档"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .application: "paintbrush"
+        case .terminal: "terminal"
+        case .git: "point.topleft.down.to.point.bottomright.curvepath"
+        case .agentIntegrations: "point.3.connected.trianglepath.dotted"
+        case .shortcuts: "keyboard"
+        case .archives: "archivebox"
+        }
+    }
+}
+
+private enum SettingsLayout {
+    static let tabVisualHeight: CGFloat = 24
+    static let contentInset: CGFloat = 12
+    static let rowVerticalPadding: CGFloat = 3
+    static let controlColumnWidth: CGFloat = 160
+    static let controlHeight: CGFloat = 24
+    static let gitExecutableControlWidth: CGFloat = 320
 }
 
 private struct ShortcutReference: Identifiable {
@@ -53,230 +86,18 @@ struct BreathSettingsView: View {
     }
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            VStack {
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
-                    GridRow {
-                        Text(localizer.string("外观"))
-                            .gridColumnAlignment(.trailing)
-                        Picker("", selection: applicationAppearance) {
-                            Text(localizer.string("跟随系统")).tag(ApplicationAppearance.system)
-                            Text(localizer.string("浅色")).tag(ApplicationAppearance.light)
-                            Text(localizer.string("深色")).tag(ApplicationAppearance.dark)
-                        }
-                        .labelsHidden()
-                        .frame(width: 160, alignment: .leading)
-                        .foregroundStyle(settingsControlForegroundColor)
-                        .id(colorScheme)
-                        .accessibilityLabel(localizer.string("外观"))
-                    }
-                    GridRow {
-                        Text(localizer.string("语言"))
-                        Picker("", selection: applicationLanguage) {
-                            Text(localizer.string("系统")).tag(ApplicationLanguage.system)
-                            Text(localizer.string("中文")).tag(ApplicationLanguage.chinese)
-                            Text(localizer.string("英文")).tag(ApplicationLanguage.english)
-                        }
-                        .labelsHidden()
-                        .frame(width: 160, alignment: .leading)
-                        .foregroundStyle(settingsControlForegroundColor)
-                        .id(model.settings.application.language)
-                        .accessibilityLabel(localizer.string("语言"))
-                    }
-                    GridRow {
-                        Text(localizer.string("字体大小"))
-                        Stepper(
-                            value: applicationFontSize,
-                            in: ApplicationSettings.fontSizeRange,
-                            step: 1
-                        ) {
-                            Text("\(Int(applicationFontSize.wrappedValue)) px")
-                                .monospacedDigit()
-                        }
-                        .frame(width: 160, alignment: .leading)
-                        .accessibilityLabel(localizer.string("应用字体大小"))
-                    }
-                }
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.top, 32)
-            .padding(.horizontal, 24)
-            .tabItem { Label(localizer.string("应用配置"), systemImage: "paintbrush") }
-            .tag(BreathSettingsTab.application)
-
-            VStack {
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
-                    GridRow {
-                        Text(localizer.string("字体"))
-                            .gridColumnAlignment(.trailing)
-                        Picker("", selection: terminalFontFamily) {
-                            ForEach(Self.availableFontFamilies, id: \.self) { family in
-                                Text(family).tag(family)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 200)
-                        .accessibilityLabel(localizer.string("字体"))
-                    }
-                    GridRow {
-                        Text(localizer.string("字号"))
-                        TextField(
-                            "",
-                            value: terminalFontSize,
-                            format: .number.precision(.fractionLength(0))
-                        )
-                        .frame(width: 64)
-                        .accessibilityLabel(localizer.string("字号"))
-                    }
-                    GridRow {
-                        Text(localizer.string("颜色主题"))
-                        Picker("", selection: terminalColorTheme) {
-                            ForEach(
-                                TerminalColorTheme.compatible(with: resolvedAppearance),
-                                id: \.rawValue
-                            ) { theme in
-                                Text(localizer.string(theme.displayName)).tag(theme)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 160, alignment: .leading)
-                        .accessibilityLabel(localizer.string("颜色主题"))
-                    }
-                    GridRow {
-                        Text(localizer.string("光标"))
-                        Picker("", selection: terminalCursorStyle) {
-                            Text(localizer.string("方块")).tag(TerminalCursorStyle.block)
-                            Text(localizer.string("竖线")).tag(TerminalCursorStyle.bar)
-                            Text(localizer.string("下划线")).tag(TerminalCursorStyle.underline)
-                        }
-                        .labelsHidden()
-                        .frame(width: 160, alignment: .leading)
-                        .accessibilityLabel(localizer.string("光标"))
-                    }
-                }
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.top, 32)
-            .padding(.horizontal, 24)
-            .tabItem { Label(localizer.string("终端配置"), systemImage: "terminal") }
-            .tag(BreathSettingsTab.terminal)
-
-            gitSettings
-                .tabItem {
-                    Label(
-                        localizer.string("Git"),
-                        systemImage: "point.topleft.down.to.point.bottomright.curvepath"
-                    )
-                }
-                .tag(BreathSettingsTab.git)
-
-            List(model.adapters, id: \.kind) { adapter in
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(adapter.displayName)
-                        Text(integrationDescription(adapter))
-                            .font(applicationFont(offset: -1))
-                            .foregroundStyle(.secondary)
-                        Text(adapter.userConfigurationPath)
-                            .font(applicationFont(offset: -2, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                    }
-                    Spacer()
-                    HStack(spacing: 8) {
-                        agentInstallationStatus(adapter)
-                        Toggle("", isOn: integrationBinding(adapter))
-                            .labelsHidden()
-                            .disabled(!model.canToggleAgentIntegration(adapter))
-                    }
-                }
-                .padding(.vertical, 3)
-            }
-            .padding(12)
-            .onAppear {
-                model.refreshAgentCLIStatuses()
-            }
-            .tabItem {
-                Label(localizer.string("Agent 集成"), systemImage: "point.3.connected.trianglepath.dotted")
-            }
-            .tag(BreathSettingsTab.agentIntegrations)
-
-            List {
-                Section(localizer.string("Breath")) {
-                    ForEach(Self.supportedShortcuts) { shortcut in
-                        HStack {
-                            Text(localizer.string(shortcut.action))
-                            Spacer()
-                            Text(shortcut.keys)
-                                .font(applicationFont(design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .frame(minWidth: 96, alignment: .trailing)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-                Section(localizer.string("Git 工作台")) {
-                    ForEach(gitPreferencesStore.preferences.shortcuts) { shortcut in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(localizer.string(gitShortcutTitle(shortcut.commandID)))
-                                Text(localizer.string(gitShortcutScopeTitle(shortcut.scope)))
-                                    .font(applicationFont(offset: -2))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            TextField(
-                                localizer.string("快捷键"),
-                                text: gitShortcutBinding(shortcut.commandID)
-                            )
-                            .font(applicationFont(design: .monospaced))
-                            .frame(width: 110)
-                            if conflictingGitShortcutIDs.contains(shortcut.commandID) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
-                                    .help(localizer.string("快捷键冲突"))
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-            }
-            .padding(12)
-            .tabItem { Label(localizer.string("快捷键"), systemImage: "keyboard") }
-            .tag(BreathSettingsTab.shortcuts)
-
-            List {
-                if model.snapshot.archivedWorkSessions.isEmpty {
-                    Text(localizer.string("暂无已归档工作会话"))
-                        .font(applicationFont(offset: -1))
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.snapshot.archivedWorkSessions) { session in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(session.title)
-                                Text(workspaceName(for: session))
-                                    .font(applicationFont(offset: -1))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button(localizer.string("恢复")) {
-                                model.restoreArchive(session.id)
-                            }
-                            Button(localizer.string("永久删除"), role: .destructive) {
-                                archiveToDelete = session
-                            }
-                        }
-                        .padding(.vertical, 3)
-                    }
-                }
-            }
-            .padding(12)
-            .tabItem { Label(localizer.string("已归档"), systemImage: "archivebox") }
-            .tag(BreathSettingsTab.archives)
+        VStack(spacing: 0) {
+            settingsTabBar
+            Divider()
+            selectedSettingsContent
         }
-        .frame(width: 650, height: 440)
+        .frame(
+            minWidth: 0,
+            maxWidth: .infinity,
+            minHeight: 0,
+            maxHeight: .infinity
+        )
+        .background(Color(nsColor: .windowBackgroundColor))
         .font(applicationFont())
         .disabled(!model.isReady)
         .onAppear {
@@ -300,6 +121,342 @@ struct BreathSettingsView: View {
         }
     }
 
+    private var settingsTabBar: some View {
+        HStack(spacing: 12) {
+            Text(localizer.string("设置"))
+                .font(.headline)
+                .fixedSize()
+
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(BreathSettingsTab.allCases, id: \.self) { tab in
+                            settingsTabButton(tab)
+                                .id(tab)
+                        }
+                    }
+                }
+                .onAppear {
+                    proxy.scrollTo(selectedTab, anchor: .center)
+                }
+                .onChange(of: selectedTab) { _, tab in
+                    proxy.scrollTo(tab, anchor: .center)
+                }
+            }
+        }
+        .padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)
+        .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
+        .frame(height: WorkbenchLayout.pageToolbarHeight)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func settingsTabButton(_ tab: BreathSettingsTab) -> some View {
+        let isSelected = selectedTab == tab
+        return Button {
+            selectedTab = tab
+        } label: {
+            Label(
+                localizer.string(tab.title),
+                systemImage: tab.systemImage
+            )
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .frame(height: SettingsLayout.tabVisualHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .font(applicationFont(offset: -1, weight: .medium))
+        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.08))
+            }
+        }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private var selectedSettingsContent: some View {
+        switch selectedTab {
+        case .application:
+            applicationSettings
+        case .terminal:
+            terminalSettings
+        case .git:
+            gitSettings
+        case .agentIntegrations:
+            agentIntegrationsSettings
+        case .shortcuts:
+            shortcutsSettings
+        case .archives:
+            archivesSettings
+        }
+    }
+
+    private var applicationSettings: some View {
+        settingsList {
+            settingsControlRow("外观") {
+                settingsMenuPicker(
+                    selection: applicationAppearance,
+                    options: [
+                        (localizer.string("跟随系统"), ApplicationAppearance.system),
+                        (localizer.string("浅色"), ApplicationAppearance.light),
+                        (localizer.string("深色"), ApplicationAppearance.dark),
+                    ],
+                    accessibilityLabel: localizer.string("外观")
+                )
+                .foregroundStyle(settingsControlForegroundColor)
+                .id(colorScheme)
+            }
+            settingsControlRow("语言") {
+                settingsMenuPicker(
+                    selection: applicationLanguage,
+                    options: [
+                        (localizer.string("系统"), ApplicationLanguage.system),
+                        (localizer.string("中文"), ApplicationLanguage.chinese),
+                        (localizer.string("英文"), ApplicationLanguage.english),
+                    ],
+                    accessibilityLabel: localizer.string("语言")
+                )
+                .foregroundStyle(settingsControlForegroundColor)
+                .id(model.settings.application.language)
+            }
+            settingsControlRow("字体大小") {
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    Text("\(Int(applicationFontSize.wrappedValue)) px")
+                        .monospacedDigit()
+                    Stepper(
+                        "",
+                        value: applicationFontSize,
+                        in: ApplicationSettings.fontSizeRange,
+                        step: 1
+                    )
+                    .labelsHidden()
+                }
+                .frame(width: SettingsLayout.controlColumnWidth)
+                .accessibilityLabel(localizer.string("应用字体大小"))
+            }
+        }
+    }
+
+    private var terminalSettings: some View {
+        settingsList {
+            settingsControlRow("字体") {
+                settingsMenuPicker(
+                    selection: terminalFontFamily,
+                    options: Self.availableFontFamilies.map { ($0, $0) },
+                    accessibilityLabel: localizer.string("字体")
+                )
+            }
+            settingsControlRow("字号") {
+                TextField(
+                    "",
+                    value: terminalFontSize,
+                    format: .number.precision(.fractionLength(0))
+                )
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .frame(width: SettingsLayout.controlColumnWidth)
+                .accessibilityLabel(localizer.string("字号"))
+            }
+            settingsControlRow("颜色主题") {
+                settingsMenuPicker(
+                    selection: terminalColorTheme,
+                    options: TerminalColorTheme.compatible(with: resolvedAppearance).map {
+                        (localizer.string($0.displayName), $0)
+                    },
+                    accessibilityLabel: localizer.string("颜色主题")
+                )
+            }
+            settingsControlRow("光标") {
+                settingsMenuPicker(
+                    selection: terminalCursorStyle,
+                    options: [
+                        (localizer.string("方块"), TerminalCursorStyle.block),
+                        (localizer.string("竖线"), TerminalCursorStyle.bar),
+                        (localizer.string("下划线"), TerminalCursorStyle.underline),
+                    ],
+                    accessibilityLabel: localizer.string("光标")
+                )
+            }
+        }
+    }
+
+    private func settingsList<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        List {
+            content()
+        }
+        .padding(SettingsLayout.contentInset)
+    }
+
+    private func settingsMenuPicker<Value: Hashable>(
+        selection: Binding<Value>,
+        options: [(title: String, value: Value)],
+        accessibilityLabel: String
+    ) -> some View {
+        let selectedTitle = options.first(where: { $0.value == selection.wrappedValue })?
+            .title ?? ""
+
+        return Menu {
+            ForEach(options.indices, id: \.self) { index in
+                let option = options[index]
+                Button {
+                    selection.wrappedValue = option.value
+                } label: {
+                    HStack {
+                        Text(option.title)
+                        if option.value == selection.wrappedValue {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Text(selectedTitle)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(
+                width: SettingsLayout.controlColumnWidth,
+                height: SettingsLayout.controlHeight
+            )
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.08))
+            }
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func settingsControlRow<Control: View>(
+        _ title: String,
+        controlWidth: CGFloat = SettingsLayout.controlColumnWidth,
+        @ViewBuilder control: () -> Control
+    ) -> some View {
+        HStack {
+            Text(localizer.string(title))
+                .lineLimit(1)
+            Spacer(minLength: 24)
+            control()
+                .frame(width: controlWidth, alignment: .trailing)
+        }
+        .padding(.vertical, SettingsLayout.rowVerticalPadding)
+    }
+
+    private var agentIntegrationsSettings: some View {
+        settingsList {
+            ForEach(model.adapters, id: \.kind) { adapter in
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(adapter.displayName)
+                        Text(integrationDescription(adapter))
+                            .font(applicationFont(offset: -1))
+                            .foregroundStyle(.secondary)
+                        Text(adapter.userConfigurationPath)
+                            .font(applicationFont(offset: -2, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    HStack(spacing: 8) {
+                        agentInstallationStatus(adapter)
+                        Toggle("", isOn: integrationBinding(adapter))
+                            .labelsHidden()
+                            .disabled(!model.canToggleAgentIntegration(adapter))
+                    }
+                }
+                .padding(.vertical, SettingsLayout.rowVerticalPadding)
+            }
+        }
+        .onAppear {
+            model.refreshAgentCLIStatuses()
+        }
+    }
+
+    private var shortcutsSettings: some View {
+        settingsList {
+            Section(localizer.string("Breath")) {
+                ForEach(Self.supportedShortcuts) { shortcut in
+                    HStack {
+                        Text(localizer.string(shortcut.action))
+                        Spacer()
+                        Text(shortcut.keys)
+                            .font(applicationFont(design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: 96, alignment: .trailing)
+                    }
+                    .padding(.vertical, SettingsLayout.rowVerticalPadding)
+                }
+            }
+            Section(localizer.string("Git 工作台")) {
+                ForEach(gitPreferencesStore.preferences.shortcuts) { shortcut in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(localizer.string(gitShortcutTitle(shortcut.commandID)))
+                            Text(localizer.string(gitShortcutScopeTitle(shortcut.scope)))
+                                .font(applicationFont(offset: -2))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        TextField(
+                            localizer.string("快捷键"),
+                            text: gitShortcutBinding(shortcut.commandID)
+                        )
+                        .font(applicationFont(design: .monospaced))
+                        .frame(width: 110)
+                        if conflictingGitShortcutIDs.contains(shortcut.commandID) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .help(localizer.string("快捷键冲突"))
+                        }
+                    }
+                    .padding(.vertical, SettingsLayout.rowVerticalPadding)
+                }
+            }
+        }
+    }
+
+    private var archivesSettings: some View {
+        settingsList {
+            if model.snapshot.archivedWorkSessions.isEmpty {
+                Text(localizer.string("暂无已归档工作会话"))
+                    .font(applicationFont(offset: -1))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(model.snapshot.archivedWorkSessions) { session in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(session.title)
+                            Text(workspaceName(for: session))
+                                .font(applicationFont(offset: -1))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(localizer.string("恢复")) {
+                            model.restoreArchive(session.id)
+                        }
+                        Button(localizer.string("永久删除"), role: .destructive) {
+                            archiveToDelete = session
+                        }
+                    }
+                    .padding(.vertical, SettingsLayout.rowVerticalPadding)
+                }
+            }
+        }
+    }
+
     private var applicationAppearance: Binding<ApplicationAppearance> {
         Binding(
             get: { model.settings.application.appearance },
@@ -312,145 +469,179 @@ struct BreathSettingsView: View {
     }
 
     private var gitSettings: some View {
-        Form {
+        settingsList {
             Section(localizer.string("Git CLI")) {
-                HStack {
-                    TextField(
-                        localizer.string("Git 可执行文件"),
-                        text: Binding(
-                            get: {
-                                gitPreferencesStore.preferences.gitExecutablePath
-                                    ?? gitPreferencesStore.resolvedGitExecutableURL.path
-                            },
-                            set: { path in
-                                var preferences = gitPreferencesStore.preferences
-                                preferences.gitExecutablePath = path.isEmpty ? nil : path
-                                gitPreferencesStore.preferences = preferences
-                            }
+                settingsControlRow(
+                    "Git 可执行文件",
+                    controlWidth: SettingsLayout.gitExecutableControlWidth
+                ) {
+                    HStack(spacing: 8) {
+                        TextField(
+                            "",
+                            text: Binding(
+                                get: {
+                                    gitPreferencesStore.preferences.gitExecutablePath
+                                        ?? gitPreferencesStore.resolvedGitExecutableURL.path
+                                },
+                                set: { path in
+                                    var preferences = gitPreferencesStore.preferences
+                                    preferences.gitExecutablePath = path.isEmpty ? nil : path
+                                    gitPreferencesStore.preferences = preferences
+                                }
+                            )
                         )
-                    )
-                    Button(localizer.string("选择…")) {
-                        chooseGitExecutable()
-                    }
-                    Button(localizer.string("测试")) {
-                        testGitExecutable()
+                        .frame(maxWidth: .infinity)
+                        .accessibilityLabel(localizer.string("Git 可执行文件"))
+                        Button(localizer.string("选择…")) {
+                            chooseGitExecutable()
+                        }
+                        Button(localizer.string("测试")) {
+                            testGitExecutable()
+                        }
                     }
                 }
                 if let gitExecutableTestResult {
-                    Text(gitExecutableTestResult)
-                        .font(applicationFont(offset: -1))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                    settingsControlRow(
+                        "",
+                        controlWidth: SettingsLayout.gitExecutableControlWidth
+                    ) {
+                        Text(gitExecutableTestResult)
+                            .font(applicationFont(offset: -1))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
                 }
             }
 
             Section(localizer.string("Remote 同步")) {
-                Stepper(
-                    value: Binding(
-                        get: { gitPreferencesStore.preferences.autoFetchMinutes },
-                        set: { value in
-                            var preferences = gitPreferencesStore.preferences
-                            preferences.autoFetchMinutes = max(0, value)
-                            gitPreferencesStore.preferences = preferences
-                        }
-                    ),
-                    in: 0...240
-                ) {
-                    Text(
-                        gitPreferencesStore.preferences.autoFetchMinutes == 0
-                            ? localizer.string("自动 Fetch：关闭")
-                            : localizer.format(
-                                "自动 Fetch：%d 分钟",
-                                gitPreferencesStore.preferences.autoFetchMinutes
-                            )
-                    )
+                settingsControlRow("自动 Fetch") {
+                    HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+                        Text(
+                            gitPreferencesStore.preferences.autoFetchMinutes == 0
+                                ? localizer.string("关闭")
+                                : localizer.format(
+                                    "%d 分钟",
+                                    gitPreferencesStore.preferences.autoFetchMinutes
+                                )
+                        )
+                        .monospacedDigit()
+                        Stepper(
+                            "",
+                            value: Binding(
+                                get: { gitPreferencesStore.preferences.autoFetchMinutes },
+                                set: { value in
+                                    var preferences = gitPreferencesStore.preferences
+                                    preferences.autoFetchMinutes = max(0, value)
+                                    gitPreferencesStore.preferences = preferences
+                                }
+                            ),
+                            in: 0...240
+                        )
+                        .labelsHidden()
+                    }
                 }
             }
 
             Section(localizer.string("Diff")) {
-                Picker(
-                    localizer.string("默认布局"),
-                    selection: Binding(
-                        get: { gitPreferencesStore.preferences.diff.layout },
-                        set: { value in
-                            var preferences = gitPreferencesStore.preferences
-                            preferences.diff.layout = value
-                            gitPreferencesStore.preferences = preferences
-                        }
+                settingsControlRow("默认布局") {
+                    settingsMenuPicker(
+                        selection: Binding(
+                            get: { gitPreferencesStore.preferences.diff.layout },
+                            set: { value in
+                                var preferences = gitPreferencesStore.preferences
+                                preferences.diff.layout = value
+                                gitPreferencesStore.preferences = preferences
+                            }
+                        ),
+                        options: [
+                            (localizer.string("并排"), GitDiffLayout.sideBySide),
+                            (localizer.string("统一"), GitDiffLayout.unified),
+                        ],
+                        accessibilityLabel: localizer.string("默认布局")
                     )
-                ) {
-                    Text(localizer.string("并排")).tag(GitDiffLayout.sideBySide)
-                    Text(localizer.string("统一")).tag(GitDiffLayout.unified)
                 }
-                Toggle(
-                    localizer.string("忽略全部空白"),
-                    isOn: gitDiffPreference(\.ignoreWhitespace)
-                )
-                Toggle(
-                    localizer.string("显示空白字符"),
-                    isOn: gitDiffPreference(\.showWhitespace)
-                )
-                Toggle(
-                    localizer.string("自动换行"),
-                    isOn: gitDiffPreference(\.softWrap)
-                )
-                Toggle(
-                    localizer.string("折叠未变更区域"),
-                    isOn: gitDiffPreference(\.foldUnchanged)
-                )
+                settingsControlRow("忽略全部空白") {
+                    Toggle("", isOn: gitDiffPreference(\.ignoreWhitespace))
+                        .labelsHidden()
+                }
+                settingsControlRow("显示空白字符") {
+                    Toggle("", isOn: gitDiffPreference(\.showWhitespace))
+                        .labelsHidden()
+                }
+                settingsControlRow("自动换行") {
+                    Toggle("", isOn: gitDiffPreference(\.softWrap))
+                        .labelsHidden()
+                }
+                settingsControlRow("折叠未变更区域") {
+                    Toggle("", isOn: gitDiffPreference(\.foldUnchanged))
+                        .labelsHidden()
+                }
             }
 
             Section(localizer.string("本地恢复与诊断")) {
-                Stepper(
-                    value: Binding(
-                        get: {
-                            gitPreferencesStore.preferences.snapshotRetentionWorkingDays
-                        },
-                        set: { value in
-                            var preferences = gitPreferencesStore.preferences
-                            preferences.snapshotRetentionWorkingDays = max(0, value)
-                            gitPreferencesStore.preferences = preferences
-                        }
-                    ),
-                    in: 0...30
-                ) {
-                    Text(
-                        localizer.format(
-                            "Git 安全快照保留：%d 个修改工作日",
-                            gitPreferencesStore.preferences.snapshotRetentionWorkingDays
+                settingsControlRow("Git 安全快照保留") {
+                    HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+                        Text(
+                            localizer.format(
+                                "%d 个修改工作日",
+                                gitPreferencesStore.preferences.snapshotRetentionWorkingDays
+                            )
+                        )
+                        .monospacedDigit()
+                        Stepper(
+                            "",
+                            value: Binding(
+                                get: {
+                                    gitPreferencesStore.preferences
+                                        .snapshotRetentionWorkingDays
+                                },
+                                set: { value in
+                                    var preferences = gitPreferencesStore.preferences
+                                    preferences.snapshotRetentionWorkingDays = max(0, value)
+                                    gitPreferencesStore.preferences = preferences
+                                }
+                            ),
+                            in: 0...30
+                        )
+                        .labelsHidden()
+                    }
+                }
+                settingsControlRow("跨重启保存 Git Console") {
+                    Toggle(
+                        "",
+                        isOn: Binding(
+                            get: { gitPreferencesStore.preferences.persistConsole },
+                            set: { value in
+                                var preferences = gitPreferencesStore.preferences
+                                preferences.persistConsole = value
+                                gitPreferencesStore.preferences = preferences
+                                Task {
+                                    await GitOperationRegistry.shared
+                                        .setPersistenceEnabled(value)
+                                }
+                            }
                         )
                     )
+                    .labelsHidden()
                 }
-                Toggle(
-                    localizer.string("跨重启保存 Git Console"),
-                    isOn: Binding(
-                        get: { gitPreferencesStore.preferences.persistConsole },
-                        set: { value in
-                            var preferences = gitPreferencesStore.preferences
-                            preferences.persistConsole = value
-                            gitPreferencesStore.preferences = preferences
-                            Task {
-                                await GitOperationRegistry.shared
-                                    .setPersistenceEnabled(value)
+                settingsControlRow("合并展示 Git Stash 与 Shelf") {
+                    Toggle(
+                        "",
+                        isOn: Binding(
+                            get: { gitPreferencesStore.preferences.combineStashAndShelf },
+                            set: { value in
+                                var preferences = gitPreferencesStore.preferences
+                                preferences.combineStashAndShelf = value
+                                gitPreferencesStore.preferences = preferences
                             }
-                        }
+                        )
                     )
-                )
-                Toggle(
-                    localizer.string("合并展示 Git Stash 与 Shelf"),
-                    isOn: Binding(
-                        get: { gitPreferencesStore.preferences.combineStashAndShelf },
-                        set: { value in
-                            var preferences = gitPreferencesStore.preferences
-                            preferences.combineStashAndShelf = value
-                            gitPreferencesStore.preferences = preferences
-                        }
-                    )
-                )
+                    .labelsHidden()
+                }
             }
         }
-        .formStyle(.grouped)
-        .padding(12)
     }
 
     private var applicationLanguage: Binding<ApplicationLanguage> {

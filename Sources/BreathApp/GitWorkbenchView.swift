@@ -72,11 +72,61 @@ private struct GitDialogRequest: Identifiable {
     let content: GitDialogContent
 }
 
+struct GitWorkbenchUnselectedView: View {
+    let workspaces: [Workspace]
+    let onSelectWorkspace: (WorkspaceID) -> Void
+
+    @Environment(\.applicationLanguage) private var applicationLanguage
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(localizer.string("Git 工作台"))
+                    .font(.headline)
+
+                Picker("", selection: workspaceSelection) {
+                    Text(localizer.string("请选择")).tag(WorkspaceID?.none)
+                    ForEach(workspaces) { workspace in
+                        Text(workspace.displayName).tag(Optional(workspace.id))
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+                .accessibilityLabel(localizer.string("Git 目录"))
+
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)
+            .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
+            .frame(height: WorkbenchLayout.pageToolbarHeight)
+
+            Divider()
+            Color(nsColor: .windowBackgroundColor)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(localizer.string("Git 工作台"))
+    }
+
+    private var workspaceSelection: Binding<WorkspaceID?> {
+        Binding(
+            get: { nil },
+            set: { workspaceID in
+                guard let workspaceID else { return }
+                onSelectWorkspace(workspaceID)
+            }
+        )
+    }
+
+    private var localizer: ApplicationLocalizer {
+        ApplicationLocalizer(language: applicationLanguage)
+    }
+}
+
 struct GitWorkbenchView: View {
     let workspace: Workspace
     @ObservedObject var model: GitWorkspaceViewModel
     @ObservedObject private var preferencesStore: GitPreferencesStore
-    let onClose: () -> Void
     let onAddWorkspace: (URL) -> Void
 
     @Environment(\.applicationLanguage) private var applicationLanguage
@@ -113,7 +163,6 @@ struct GitWorkbenchView: View {
     init(
         workspace: Workspace,
         model: GitWorkspaceViewModel,
-        onClose: @escaping () -> Void,
         onAddWorkspace: @escaping (URL) -> Void
     ) {
         self.workspace = workspace
@@ -121,7 +170,6 @@ struct GitWorkbenchView: View {
         _preferencesStore = ObservedObject(
             wrappedValue: model.preferencesStore
         )
-        self.onClose = onClose
         self.onAddWorkspace = onAddWorkspace
     }
 
@@ -272,13 +320,6 @@ struct GitWorkbenchView: View {
 
     private var toolbar: some View {
         HStack(spacing: 8) {
-            Button(action: onClose) {
-                toolbarIcon("xmark")
-            }
-            .buttonStyle(.plain)
-            .help(localizer.string("关闭 Git 工作台"))
-            .accessibilityLabel(localizer.string("关闭 Git 工作台"))
-
             Text(localizer.string("Git 工作台"))
                 .font(.headline)
 
@@ -395,8 +436,9 @@ struct GitWorkbenchView: View {
             .fixedSize()
             .accessibilityLabel(localizer.string("更多 Git 操作"))
         }
-        .padding(.horizontal, 12)
-        .frame(height: 42)
+        .padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)
+        .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
+        .frame(height: WorkbenchLayout.pageToolbarHeight)
     }
 
     private var preferredPullStrategy: GitPullStrategy {

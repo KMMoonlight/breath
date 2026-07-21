@@ -6,6 +6,7 @@ import SwiftUI
 enum WorkbenchAccessibility {
     static let addWorkspace = "添加工作区"
     static let noSelectedWorkSession = "没有选中的工作会话"
+    static let openWorkspace = "打开工作区"
     static let openSettings = "打开设置"
     static let openGitWorkbench = "打开 Git 工作台"
     static let openTaskView = "打开任务视图"
@@ -14,33 +15,30 @@ enum WorkbenchAccessibility {
 }
 
 private enum WorkbenchDetailMode: Equatable {
-    case sessions
+    case workspace
     case tasks
     case skills
-    case gitWorkbench(WorkspaceID)
+    case settings
+    case gitWorkbench(WorkspaceID?)
 }
 
 struct WorkbenchView: View {
     @ObservedObject var model: BreathApplicationModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.controlActiveState) private var controlActiveState
-    @Environment(\.openSettings) private var openSettings
     @State private var pendingArchive: WorkSession?
     @State private var pendingWorkspaceRemoval: Workspace?
     @State private var dismissedUnavailableWorkspaces: Set<WorkspaceID> = []
     @State private var expandedWorkspaceIDs: Set<WorkspaceID> = []
     @State private var hoveredSessionID: WorkSessionID?
     @State private var pendingTerminalFocusID: TerminalPaneID?
-    @State private var detailMode = WorkbenchDetailMode.sessions
+    @State private var detailMode = WorkbenchDetailMode.workspace
     @StateObject private var gitCoordinator = GitWorkbenchCoordinator()
 
     var body: some View {
-        SidebarResizeContainer {
-            sidebar
-                .font(applicationFont(for: model))
-        } detail: {
-            detail
-                .font(applicationFont(for: model))
+        HStack(spacing: 0) {
+            activityBar
+            workbenchContent
         }
         .ignoresSafeArea(.container, edges: .top)
         .frame(minWidth: 900, minHeight: 600)
@@ -66,19 +64,17 @@ struct WorkbenchView: View {
             offerRemovalForUnavailableWorkspace()
             focusPendingTerminalAfterViewUpdate()
             if previousSnapshot.selectedWorkSessionID != snapshot.selectedWorkSessionID {
-                if case .gitWorkbench = detailMode,
-                   let workspaceID = model.currentWorkspaceID
-                {
-                    detailMode = .gitWorkbench(workspaceID)
-                } else {
-                    detailMode = .sessions
+                if case .gitWorkbench = detailMode {
+                    detailMode = .gitWorkbench(model.currentWorkspaceID)
                 }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .breathOpenGitWorkbench)) { _ in
             guard GitWorkbenchReleaseGate.isEnabled else { return }
-            guard let workspaceID = model.currentWorkspaceID else { return }
-            detailMode = .gitWorkbench(workspaceID)
+            detailMode = .gitWorkbench(model.currentWorkspaceID)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .breathOpenSettings)) { _ in
+            detailMode = .settings
         }
         .onReceive(NotificationCenter.default.publisher(for: .breathGitCommit)) { _ in
             guard GitWorkbenchReleaseGate.isEnabled else { return }
@@ -148,12 +144,137 @@ struct WorkbenchView: View {
         colorScheme == .dark ? .dark : .light
     }
 
-    private var sidebar: some View {
+    @ViewBuilder
+    private var workbenchContent: some View {
+        if detailMode == .workspace {
+            SidebarResizeContainer {
+                sidebar
+                    .font(applicationFont(for: model))
+            } detail: {
+                sessionDetail
+                    .font(applicationFont(for: model))
+            }
+        } else {
+            detail
+                .font(applicationFont(for: model))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+        }
+    }
+
+    private var activityBar: some View {
         VStack(spacing: 0) {
             Color.clear
                 .frame(height: WorkbenchLayout.windowControlsHeight)
                 .accessibilityHidden(true)
 
+            activityBarButton(
+                systemName: "folder",
+                accessibilityLabel: WorkbenchAccessibility.openWorkspace,
+                isSelected: detailMode == .workspace
+            ) {
+                detailMode = .workspace
+            }
+
+            activityBarButton(
+                systemName: "checklist",
+                accessibilityLabel: WorkbenchAccessibility.openTaskView,
+                isSelected: detailMode == .tasks
+            ) {
+                detailMode = .tasks
+            }
+
+            if GitWorkbenchReleaseGate.isEnabled {
+                activityBarButton(
+                    accessibilityLabel: WorkbenchAccessibility.openGitWorkbench,
+                    isSelected: isGitWorkbenchSelected,
+                    action: openGitWorkbenchForCurrentWorkspace
+                ) {
+                    GitBranchIcon()
+                }
+            }
+
+            activityBarButton(
+                accessibilityLabel: WorkbenchAccessibility.openSkills,
+                isSelected: detailMode == .skills,
+                action: { detailMode = .skills }
+            ) {
+                SkillActivityIcon()
+            }
+
+            activityBarButton(
+                systemName: "gearshape",
+                accessibilityLabel: WorkbenchAccessibility.openSettings,
+                isSelected: detailMode == .settings
+            ) {
+                detailMode = .settings
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(width: WorkbenchLayout.activityBarWidth)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .overlay(alignment: .trailing) {
+            Color(nsColor: .separatorColor)
+                .frame(width: WorkbenchLayout.splitDividerThickness)
+                .padding(.top, WorkbenchLayout.windowControlsHeight)
+        }
+    }
+
+    private func activityBarButton(
+        systemName: String,
+        accessibilityLabel: String,
+        isSelected: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        activityBarButton(
+            accessibilityLabel: accessibilityLabel,
+            isSelected: isSelected,
+            action: action
+        ) {
+            Image(systemName: systemName)
+        }
+    }
+
+    private func activityBarButton<Icon: View>(
+        accessibilityLabel: String,
+        isSelected: Bool = false,
+        action: @escaping () -> Void,
+        @ViewBuilder icon: () -> Icon
+    ) -> some View {
+        Button(action: action) {
+            icon()
+                .symbolRenderingMode(.monochrome)
+                .font(.system(size: WorkbenchLayout.activityBarIconSize, weight: .medium))
+                .foregroundStyle(isSelected ? Color.primary : sidebarActionForegroundColor)
+                .frame(
+                    width: WorkbenchLayout.activityBarIconSize,
+                    height: WorkbenchLayout.activityBarIconSize
+                )
+                .frame(
+                    width: WorkbenchLayout.activityBarSelectionSize,
+                    height: WorkbenchLayout.activityBarSelectionSize
+                )
+                .background {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.08))
+                    }
+                }
+                .frame(
+                    width: WorkbenchLayout.activityBarItemSize,
+                    height: WorkbenchLayout.activityBarItemSize
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(ActivityBarButtonStyle())
+        .accessibilityLabel(localizer.string(accessibilityLabel))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .help(localizer.string(accessibilityLabel))
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
             HStack {
                 Text(localizer.string("工作区"))
                     .font(applicationFont(for: model, offset: 1, weight: .semibold))
@@ -175,8 +296,9 @@ struct WorkbenchView: View {
                 .accessibilityLabel(localizer.string(WorkbenchAccessibility.addWorkspace))
                 .help(localizer.string(WorkbenchAccessibility.addWorkspace))
             }
-            .padding(.horizontal, 14)
-            .frame(height: WorkbenchLayout.sidebarHeaderRowHeight)
+            .padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)
+            .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
+            .frame(height: WorkbenchLayout.pageToolbarHeight)
 
             Divider()
 
@@ -201,75 +323,8 @@ struct WorkbenchView: View {
                 )
             }
 
-            sidebarFooter
         }
         .background(Color(nsColor: .windowBackgroundColor))
-    }
-
-    private var sidebarFooter: some View {
-        HStack(spacing: 0) {
-            sidebarFooterButton(
-                systemName: "gearshape",
-                accessibilityLabel: WorkbenchAccessibility.openSettings
-            ) {
-                openSettings()
-            }
-
-            Spacer(minLength: 0)
-
-            sidebarFooterButton(
-                systemName: "checklist",
-                accessibilityLabel: WorkbenchAccessibility.openTaskView,
-                isSelected: detailMode == .tasks
-            ) {
-                detailMode = .tasks
-            }
-
-            sidebarFooterButton(
-                systemName: "sparkles",
-                accessibilityLabel: WorkbenchAccessibility.openSkills,
-                isSelected: detailMode == .skills
-            ) {
-                detailMode = .skills
-            }
-        }
-        .padding(.horizontal, WorkbenchLayout.sidebarFooterHorizontalPadding)
-        .frame(height: WorkbenchLayout.bottomBarHeight)
-        .overlay(alignment: .top) {
-            Divider()
-        }
-    }
-
-    private func sidebarFooterButton(
-        systemName: String,
-        accessibilityLabel: String,
-        isSelected: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .symbolRenderingMode(.monochrome)
-                .font(.system(size: WorkbenchLayout.sidebarFooterIconSize, weight: .medium))
-                .foregroundStyle(isSelected ? Color.primary : sidebarActionForegroundColor)
-                .frame(
-                    width: WorkbenchLayout.sidebarFooterSelectionWidth,
-                    height: WorkbenchLayout.sidebarFooterSelectionHeight
-                )
-                .background {
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.08))
-                    }
-                }
-                .frame(
-                    width: WorkbenchLayout.bottomBarHeight,
-                    height: WorkbenchLayout.bottomBarHeight
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(SidebarFooterButtonStyle())
-        .accessibilityLabel(localizer.string(accessibilityLabel))
-        .help(localizer.string(accessibilityLabel))
     }
 
     @ViewBuilder
@@ -396,7 +451,7 @@ struct WorkbenchView: View {
     }
 
     private func selectWorkSession(_ sessionID: WorkSessionID) {
-        detailMode = .sessions
+        detailMode = .workspace
         model.selectWorkSession(sessionID)
     }
 
@@ -484,6 +539,17 @@ struct WorkbenchView: View {
         model.createWorkSession(in: workspaceID)
     }
 
+    private var isGitWorkbenchSelected: Bool {
+        if case .gitWorkbench = detailMode {
+            return true
+        }
+        return false
+    }
+
+    private func openGitWorkbenchForCurrentWorkspace() {
+        detailMode = .gitWorkbench(model.currentWorkspaceID)
+    }
+
     private var sidebarActionForegroundColor: Color {
         controlActiveState == .inactive ? .secondary : .primary
     }
@@ -517,7 +583,9 @@ struct WorkbenchView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if detailMode == .skills {
+        if detailMode == .settings {
+            BreathSettingsView(model: model)
+        } else if detailMode == .skills {
             SkillsView(service: model.skillsService)
         } else if detailMode == .tasks {
             Color(nsColor: .windowBackgroundColor)
@@ -526,17 +594,23 @@ struct WorkbenchView: View {
         } else if GitWorkbenchReleaseGate.isEnabled,
                   case .gitWorkbench(let workspaceID) = detailMode
         {
-            if let workspace = model.snapshot.workspaces.first(where: {
-                $0.id == workspaceID
-            }) {
+            if let workspaceID,
+               let workspace = model.snapshot.workspaces.first(where: {
+                   $0.id == workspaceID
+               })
+            {
                 GitWorkbenchView(
                     workspace: workspace,
                     model: gitCoordinator.model(for: workspace),
-                    onClose: { detailMode = .sessions },
                     onAddWorkspace: { model.addWorkspace($0) }
                 )
             } else {
-                Color(nsColor: .windowBackgroundColor)
+                GitWorkbenchUnselectedView(
+                    workspaces: model.snapshot.workspaces,
+                    onSelectWorkspace: { workspaceID in
+                        detailMode = .gitWorkbench(workspaceID)
+                    }
+                )
             }
         } else {
             sessionDetail
@@ -556,12 +630,7 @@ struct WorkbenchView: View {
             WorkSessionTerminalLayoutView(
                 session: session,
                 workspacePath: workspace?.path ?? "",
-                model: model,
-                onOpenGitDiff: {
-                    if GitWorkbenchReleaseGate.isEnabled {
-                        detailMode = .gitWorkbench(session.workspaceID)
-                    }
-                }
+                model: model
             )
             .id(session.id)
         } else {
@@ -647,6 +716,7 @@ struct WorkbenchView: View {
 }
 
 extension Notification.Name {
+    static let breathOpenSettings = Notification.Name("Breath.OpenSettings")
     static let breathOpenGitWorkbench = Notification.Name("Breath.OpenGitWorkbench")
     static let breathGitCommit = Notification.Name("Breath.GitCommit")
     static let breathGitPush = Notification.Name("Breath.GitPush")
@@ -726,8 +796,6 @@ private struct WorkSessionTerminalLayoutView: View {
     let session: WorkSession
     let workspacePath: String
     @ObservedObject var model: BreathApplicationModel
-    let onOpenGitDiff: () -> Void
-    @State private var gitState: GitWorkingTreeState?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -738,33 +806,7 @@ private struct WorkSessionTerminalLayoutView: View {
                 paneOrder: session.layout.paneIDs,
                 model: model
             )
-            GitWorkingTreeStatusBar(
-                state: gitState,
-                workspacePath: workspacePath,
-                fontSize: max(
-                    9,
-                    CGFloat(model.settings.application.fontSize) - 2
-                ),
-                onOpenDiff: onOpenGitDiff
-            )
-        }
-        .task(id: workspacePath) {
-            guard !workspacePath.isEmpty else {
-                gitState = .unavailable
-                return
-            }
-            while !Task.isCancelled {
-                let nextState = await GitWorkingTreeStatusReader().read(
-                    at: workspacePath
-                )
-                guard !Task.isCancelled else { return }
-                gitState = nextState
-                do {
-                    try await Task.sleep(for: .seconds(3))
-                } catch {
-                    return
-                }
-            }
+            WorkSessionBottomBar(workspacePath: workspacePath)
         }
     }
 }
@@ -1377,10 +1419,10 @@ private struct TerminalPaneView: View {
                     Image(systemName: "rectangle.split.2x1")
                         .foregroundStyle(.primary)
                 }
-                .keyboardShortcut(
-                    hasInputFocus
-                        ? KeyboardShortcut("d", modifiers: [.command])
-                        : nil
+                .breathKeyboardShortcut(
+                    BreathShortcutCatalog.splitHorizontally,
+                    priority: model.shortcutPriority,
+                    targeting: pane.id
                 )
                 .help(localizer.string("横向分屏（⌘D）"))
                 Button {
@@ -1389,10 +1431,10 @@ private struct TerminalPaneView: View {
                     Image(systemName: "rectangle.split.1x2")
                         .foregroundStyle(.primary)
                 }
-                .keyboardShortcut(
-                    hasInputFocus
-                        ? KeyboardShortcut("d", modifiers: [.command, .shift])
-                        : nil
+                .breathKeyboardShortcut(
+                    BreathShortcutCatalog.splitVertically,
+                    priority: model.shortcutPriority,
+                    targeting: pane.id
                 )
                 .help(localizer.string("纵向分屏（⌘⇧D）"))
                 if canClose {
@@ -1403,6 +1445,11 @@ private struct TerminalPaneView: View {
                             .foregroundStyle(.primary)
                     }
                     .disabled(isClosing)
+                    .breathKeyboardShortcut(
+                        BreathShortcutCatalog.closePane,
+                        priority: model.shortcutPriority,
+                        targeting: pane.id
+                    )
                     .help(localizer.string("关闭窗格（⌘W）"))
                 }
             }
@@ -1420,8 +1467,21 @@ private struct TerminalPaneView: View {
                 engine: model.terminalEngine,
                 paneID: pane.id,
                 placeholder: localizer.string("终端正在启动…"),
-                onFocusChange: { hasInputFocus = $0 },
-                onCloseShortcut: closeShortcutHandler
+                onFocusChange: { isFocused in
+                    hasInputFocus = isFocused
+                    model.updateTerminalInputFocus(
+                        paneID: pane.id,
+                        isFocused: isFocused
+                    )
+                },
+                isBreathShortcut: { event in
+                    BreathShortcutCatalog.matches(event)
+                        || GitShortcutResolver.commandID(
+                            matching: event,
+                            preferences: GitPreferencesStore.shared.preferences,
+                            requiredScope: .global
+                        ) != nil
+                }
             )
         }
         .background(model.effectiveTerminalColorTheme.canvasColor)
@@ -1447,11 +1507,9 @@ private struct TerminalPaneView: View {
             }
             .buttonStyle(.plain)
             .font(applicationFont(for: model, offset: -1))
-            .keyboardShortcut(
-                KeyboardShortcut(
-                    KeyEquivalent(Character(String(shortcutNumber))),
-                    modifiers: [.command]
-                )
+            .breathKeyboardShortcut(
+                BreathShortcutCatalog.selectPane(shortcutNumber),
+                priority: model.shortcutPriority
             )
             .help(
                 localizer.format(
@@ -1486,150 +1544,28 @@ private struct TerminalPaneView: View {
         }
     }
 
-    private var closeShortcutHandler: TerminalPaneCloseShortcut? {
-        guard canClose else { return nil }
-        let paneID = pane.id
-        return { completion in
-            model.closePane(paneID, completion: completion)
-        }
-    }
-
     private var localizer: ApplicationLocalizer {
         ApplicationLocalizer(language: applicationLanguage)
     }
 }
 
-private struct GitWorkingTreeStatusBar: View {
-    let state: GitWorkingTreeState?
+private struct WorkSessionBottomBar: View {
     let workspacePath: String
-    let fontSize: CGFloat
-    let onOpenDiff: () -> Void
-    @Environment(\.applicationLanguage) private var applicationLanguage
 
     var body: some View {
-        HStack(spacing: 10) {
-            content
+        HStack(spacing: 0) {
             Spacer(minLength: 0)
             WorkspaceEditorLauncher(
                 workspacePath: workspacePath,
                 barHeight: WorkbenchLayout.bottomBarHeight
             )
         }
-        .font(.system(size: fontSize))
         .padding(.horizontal, 9)
         .frame(height: WorkbenchLayout.bottomBarHeight)
         .background(.bar)
         .overlay(alignment: .top) {
             Divider()
         }
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        Button(action: onOpenDiff) {
-            HStack(spacing: 7) {
-                GitBranchIcon()
-                    .frame(width: 14, height: 14)
-                    .accessibilityHidden(true)
-                switch state {
-                case nil:
-                    HStack(spacing: 6) {
-                        ProgressView()
-                            .controlSize(.mini)
-                        Text(localizer.string("正在读取 Git 状态…"))
-                    }
-                    .foregroundStyle(.secondary)
-                case .some(.notRepository):
-                    Text(localizer.string("非 Git 仓库"))
-                        .foregroundStyle(.secondary)
-                case .some(.unavailable):
-                    Label(
-                        localizer.string("Git 状态不可用"),
-                        systemImage: "exclamationmark.triangle"
-                    )
-                    .foregroundStyle(.secondary)
-                case .some(.repository(let status)):
-                    Text(status.branch)
-                        .lineLimit(1)
-                    if status.aheadCount > 0 {
-                        statusItem(
-                            "↑",
-                            count: status.aheadCount,
-                            color: .secondary,
-                            accessibilityKey: "领先 %d"
-                        )
-                    }
-                    if status.behindCount > 0 {
-                        statusItem(
-                            "↓",
-                            count: status.behindCount,
-                            color: .secondary,
-                            accessibilityKey: "落后 %d"
-                        )
-                    }
-                    if status.isClean {
-                        Label(
-                            localizer.string("工作区无改动"),
-                            systemImage: "checkmark.circle.fill"
-                        )
-                        .foregroundStyle(.green)
-                    } else {
-                        statusItem(
-                            "M",
-                            count: status.modifiedCount,
-                            color: .orange,
-                            accessibilityKey: "已修改 %d"
-                        )
-                        statusItem(
-                            "A",
-                            count: status.addedCount,
-                            color: .green,
-                            accessibilityKey: "已新增 %d"
-                        )
-                        statusItem(
-                            "D",
-                            count: status.deletedCount,
-                            color: .red,
-                            accessibilityKey: "已删除 %d"
-                        )
-                        statusItem(
-                            "?",
-                            count: status.untrackedCount,
-                            color: .secondary,
-                            accessibilityKey: "未跟踪 %d"
-                        )
-                    }
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(localizer.string(WorkbenchAccessibility.openGitWorkbench))
-        .help(localizer.string(WorkbenchAccessibility.openGitWorkbench))
-    }
-
-    @ViewBuilder
-    private func statusItem(
-        _ label: String,
-        count: Int,
-        color: Color,
-        accessibilityKey: String
-    ) -> some View {
-        if count > 0 {
-            HStack(spacing: 3) {
-                Text(label)
-                    .fontWeight(.semibold)
-                Text("\(count)")
-                    .monospacedDigit()
-            }
-            .foregroundStyle(color)
-            .accessibilityLabel(localizer.format(accessibilityKey, count))
-        }
-    }
-
-    private var localizer: ApplicationLocalizer {
-        ApplicationLocalizer(language: applicationLanguage)
     }
 }
 
@@ -1640,6 +1576,7 @@ private struct GitBranchIcon: View {
             func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
                 CGPoint(x: x * scale, y: y * scale)
             }
+
             var branches = Path()
             branches.move(to: point(3.5, 4.7))
             branches.addLine(to: point(3.5, 9.3))
@@ -1658,6 +1595,7 @@ private struct GitBranchIcon: View {
                     lineJoin: .round
                 )
             )
+
             for center in [point(3.5, 3.2), point(10.8, 3.2), point(3.5, 10.8)] {
                 let circle = CGRect(
                     x: center.x - 1.55 * scale,
@@ -1671,6 +1609,20 @@ private struct GitBranchIcon: View {
                     lineWidth: 1.2 * scale
                 )
             }
+        }
+    }
+}
+
+private struct SkillActivityIcon: View {
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Image(systemName: "wrench.adjustable")
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 14, height: 14)
+                .offset(x: 1, y: 1)
+            Image(systemName: "sparkle")
+                .font(.system(size: 7, weight: .semibold))
+                .offset(x: -2, y: -2)
         }
     }
 }
@@ -1702,7 +1654,7 @@ private struct SidebarActionIcon: View {
     }
 }
 
-private struct SidebarFooterButtonStyle: ButtonStyle {
+private struct ActivityBarButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.95 : 1)
@@ -1756,7 +1708,13 @@ private struct AgentBrandIcon: View {
 
 enum WorkbenchLayout {
     static let windowControlsHeight: CGFloat = 32
-    static let sidebarHeaderRowHeight: CGFloat = 32
+    static let activityBarWidth: CGFloat = 44
+    static let activityBarItemSize: CGFloat = 44
+    static let activityBarSelectionSize: CGFloat = 32
+    static let activityBarIconSize: CGFloat = 16
+    static let pageToolbarHeight: CGFloat = 32
+    static let pageToolbarLeadingInset: CGFloat = 44
+    static let pageToolbarTrailingInset: CGFloat = 12
     static let sidebarDefaultWidth: CGFloat = 220
     static let sidebarMinimumWidth: CGFloat = 140
     static let sidebarMaximumWidth: CGFloat = 380
@@ -1768,10 +1726,6 @@ enum WorkbenchLayout {
     static let sidebarActionFrameSize: CGFloat = 20
     static let sidebarActionIconSize: CGFloat = 12
     static let bottomBarHeight: CGFloat = 32
-    static let sidebarFooterHorizontalPadding: CGFloat = 4
-    static let sidebarFooterSelectionWidth: CGFloat = 32
-    static let sidebarFooterSelectionHeight: CGFloat = 28
-    static let sidebarFooterIconSize: CGFloat = 14
     static let agentIconFrameSize: CGFloat = 16
     static let agentIconGlyphSize: CGFloat = 14
     static let splitDividerThickness: CGFloat = 1
@@ -1832,48 +1786,31 @@ private extension TerminalColorTheme {
     }
 }
 
-typealias TerminalPaneCloseCompletion = @MainActor @Sendable (Bool) -> Void
-typealias TerminalPaneCloseShortcut = @MainActor (
-    @escaping TerminalPaneCloseCompletion
-) -> Void
-
 private struct TerminalNativeView: NSViewRepresentable {
     let engine: any TerminalViewProviding
     let paneID: TerminalPaneID
     let placeholder: String
     let onFocusChange: (Bool) -> Void
-    let onCloseShortcut: TerminalPaneCloseShortcut?
+    let isBreathShortcut: (NSEvent) -> Bool
 
     func makeNSView(context: Context) -> TerminalHostView {
         let host = TerminalHostView()
         host.onFocusChange = onFocusChange
-        host.onCloseShortcut = onCloseShortcut
+        host.isBreathShortcut = isBreathShortcut
+        host.handleTerminalShortcut = { event in
+            engine.handleShortcutKeyDown(event, for: paneID)
+        }
         host.install(engine.view(for: paneID), placeholder: placeholder)
         return host
     }
 
     func updateNSView(_ nsView: TerminalHostView, context: Context) {
         nsView.onFocusChange = onFocusChange
-        nsView.onCloseShortcut = onCloseShortcut
+        nsView.isBreathShortcut = isBreathShortcut
+        nsView.handleTerminalShortcut = { event in
+            engine.handleShortcutKeyDown(event, for: paneID)
+        }
         nsView.install(engine.view(for: paneID), placeholder: placeholder)
-    }
-}
-
-enum TerminalKeyboardShortcut {
-    static func requestsPaneClose(
-        modifiers: NSEvent.ModifierFlags,
-        charactersIgnoringModifiers: String?,
-        isRepeat: Bool
-    ) -> Bool {
-        let shortcutModifiers = modifiers.intersection([
-            .command,
-            .option,
-            .control,
-            .shift,
-        ])
-        return !isRepeat
-            && shortcutModifiers == .command
-            && charactersIgnoringModifiers?.lowercased() == "w"
     }
 }
 
@@ -1908,9 +1845,9 @@ final class TerminalHostView: NSView {
     private var focusEventMonitor: Any?
     private var lastReportedFocus: Bool?
     private var retainsInputFocus = false
-    private var isClosing = false
     var onFocusChange: ((Bool) -> Void)?
-    var onCloseShortcut: TerminalPaneCloseShortcut?
+    var isBreathShortcut: ((NSEvent) -> Bool)?
+    var handleTerminalShortcut: ((NSEvent) -> Bool)?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -1928,7 +1865,6 @@ final class TerminalHostView: NSView {
         placeholder: String = "终端正在启动…"
     ) {
         if let terminalView, hostedView === terminalView { return }
-        isClosing = false
         hostedView?.removeFromSuperview()
         let view = terminalView ?? NSTextField(labelWithString: placeholder)
         hostedView = view
@@ -1968,14 +1904,21 @@ final class TerminalHostView: NSView {
         focusEventMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .keyDown]
         ) { [weak self, weak window] event in
-            guard event.window === window else { return event }
-            if self?.handleCloseShortcut(event) == true {
-                return nil
-            }
+            guard let self, let window, event.window === window else { return event }
             if event.type == .leftMouseDown || event.type == .rightMouseDown {
-                self?.reconcileFocusAfterMouseEvent()
+                self.reconcileFocusAfterMouseEvent()
             } else {
-                self?.reportFocusAfterEvent()
+                // Preflight only collisions before SwiftUI/menu equivalents.
+                // Ordinary terminal input must keep using keyDown and the IME path.
+                let eventToForward = TerminalShortcutArbitrator.eventToForward(
+                    event,
+                    terminalHasInputFocus: self.hasInputFocus(in: window),
+                    matchesBreathShortcut: self.isBreathShortcut ?? { _ in false },
+                    terminalHandler: self.handleTerminalShortcut ?? { _ in false }
+                )
+                guard let eventToForward else { return nil }
+                self.reportFocusAfterEvent()
+                return eventToForward
             }
             return event
         }
@@ -2074,65 +2017,6 @@ final class TerminalHostView: NSView {
             view = currentView.superview
         }
         return nil
-    }
-
-    private func handleCloseShortcut(_ event: NSEvent) -> Bool {
-        guard event.type == .keyDown,
-              TerminalKeyboardShortcut.requestsPaneClose(
-                  modifiers: event.modifierFlags,
-                  charactersIgnoringModifiers: event.charactersIgnoringModifiers,
-                  isRepeat: event.isARepeat
-              ),
-              hasInputFocus
-        else { return false }
-        guard let onCloseShortcut,
-              let focusDestination = nextFocusableTerminalHost()
-        else {
-            return true
-        }
-        isClosing = true
-        guard focusDestination.focusInput() else {
-            isClosing = false
-            return true
-        }
-        onCloseShortcut { [weak self, weak focusDestination] didClose in
-            guard let self else { return }
-            if didClose {
-                focusDestination?.synchronizeFocusState()
-            } else {
-                isClosing = false
-                if focusDestination?.hasInputFocus == true {
-                    _ = focusInput()
-                }
-            }
-        }
-        return true
-    }
-
-    private func nextFocusableTerminalHost() -> TerminalHostView? {
-        guard let contentView = window?.contentView else { return nil }
-        return Self.terminalHosts(in: contentView).first {
-            $0 !== self
-                && !$0.isClosing
-                && $0.isVisibleInWindow
-        }
-    }
-
-    private static func terminalHosts(in view: NSView) -> [TerminalHostView] {
-        let currentHost = (view as? TerminalHostView).map { [$0] } ?? []
-        return currentHost + view.subviews.flatMap(terminalHosts(in:))
-    }
-
-    @discardableResult
-    private func focusInput() -> Bool {
-        guard let window, let hostedView else { return false }
-        let previousHost = Self.terminalHost(containing: window.firstResponder)
-        let didMoveFocus = window.makeFirstResponder(hostedView)
-        if didMoveFocus {
-            previousHost?.synchronizeFocusState()
-            synchronizeFocusState()
-        }
-        return didMoveFocus
     }
 
     private func reportFocus(_ isFocused: Bool) {

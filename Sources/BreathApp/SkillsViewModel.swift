@@ -119,18 +119,6 @@ final class SkillsViewModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    func copyDiagnostic(
-        _ item: UnrecognizedSkillItem,
-        localizedReason: String
-    ) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(
-            "\(item.agentDisplayName) · \(item.path.lastPathComponent): \(localizedReason)",
-            forType: .string
-        )
-    }
-
     private func checkForUpdates(force: Bool) async {
         updateCheck = await service.checkForUpdates(force: force)
         snapshot = await service.scan()

@@ -16,6 +16,7 @@ final class BreathApplicationModel: ObservableObject {
     @Published private(set) var updatingAgents: Set<AgentKind> = []
     @Published private(set) var isReady = false
     @Published private(set) var isRestoringSelectedSession = false
+    @Published private(set) var shortcutPriority = BreathShortcutPriority()
     @Published var lastError: String?
 
     let terminalEngine: any TerminalEngine & TerminalViewProviding
@@ -146,6 +147,18 @@ final class BreathApplicationModel: ObservableObject {
 
     var canPerformCommands: Bool {
         isReady && !isRestoringSelectedSession
+    }
+
+    func updateTerminalInputFocus(
+        paneID: TerminalPaneID,
+        isFocused: Bool
+    ) {
+        var priority = shortcutPriority
+        priority.updateTerminalFocus(
+            paneID: paneID,
+            isFocused: isFocused
+        )
+        shortcutPriority = priority
     }
 
     func start() {

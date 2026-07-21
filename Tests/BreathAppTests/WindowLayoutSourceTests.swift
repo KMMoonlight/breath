@@ -14,6 +14,122 @@ private final class TestSplitTrackingAncestor:
 
 @Suite("Main window layout source guard")
 struct WindowLayoutSourceTests {
+    @Test("terminal focus centrally arbitrates Breath shortcuts")
+    func terminalFocusCentrallyArbitratesBreathShortcuts() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let prioritySource = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/BreathShortcutPriority.swift"
+            ),
+            encoding: .utf8
+        )
+        let appSource = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/BreathApp.swift"),
+            encoding: .utf8
+        )
+        let workbenchSource = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/WorkbenchView.swift"),
+            encoding: .utf8
+        )
+
+        #expect(
+            prioritySource.contains(
+                "focusedTerminalPaneID ?? lastFocusedTerminalPaneID"
+            )
+        )
+        #expect(prioritySource.contains("func breathKeyboardShortcut("))
+        #expect(prioritySource.contains("enum BreathShortcutCatalog"))
+        #expect(appSource.contains(".breathKeyboardShortcut("))
+        #expect(!appSource.contains("allowsShortcut:"))
+        #expect(workbenchSource.contains("model.updateTerminalInputFocus("))
+        #expect(workbenchSource.contains("BreathShortcutCatalog.closePane"))
+        #expect(workbenchSource.contains("TerminalShortcutArbitrator.eventToForward("))
+        #expect(workbenchSource.contains("engine.handleShortcutKeyDown(event, for: paneID)"))
+        #expect(!workbenchSource.contains("enum TerminalKeyboardShortcut"))
+        #expect(!workbenchSource.contains("handleCloseShortcut"))
+    }
+
+    @Test("Skill selection does not let List reposition the scroll view")
+    func skillSelectionDoesNotOwnListScrolling() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/SkillsView.swift"),
+            encoding: .utf8
+        )
+
+        let listStart = try #require(
+            source.range(of: "private func skillList(navigatesToDetail: Bool)")
+        )
+        let detailStart = try #require(
+            source.range(
+                of: "private func detail(for skill: GlobalSkill?)",
+                range: listStart.upperBound..<source.endIndex
+            )
+        )
+        let listSource = source[listStart.lowerBound..<detailStart.lowerBound]
+
+        #expect(!listSource.contains("List(selection: $selectedSkillID)"))
+        #expect(listSource.contains("selectSkill(skill.id)"))
+        #expect(listSource.contains("isSelected: selectedSkillID == skill.id"))
+    }
+
+    @Test("selected Skill row keeps content inset from its highlight")
+    func selectedSkillRowHasHorizontalBreathingRoom() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/SkillsView.swift"),
+            encoding: .utf8
+        )
+        let rowStart = try #require(
+            source.range(of: "private struct SkillListRow: View")
+        )
+        let detailStart = try #require(
+            source.range(
+                of: "private struct SkillDetailView: View",
+                range: rowStart.upperBound..<source.endIndex
+            )
+        )
+        let rowSource = source[rowStart.lowerBound..<detailStart.lowerBound]
+        let horizontalPadding = try #require(
+            rowSource.range(of: ".padding(.horizontal, 8)")
+        )
+        let selectionBackground = try #require(
+            rowSource.range(of: "isSelected ? Color.accentColor.opacity(0.16)")
+        )
+
+        #expect(horizontalPadding.lowerBound < selectionBackground.lowerBound)
+    }
+
+    @Test("Skills page omits unrecognized items and their diagnostic action")
+    func skillsPageOmitsUnrecognizedItems() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let viewSource = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/SkillsView.swift"),
+            encoding: .utf8
+        )
+        let modelSource = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/SkillsViewModel.swift"),
+            encoding: .utf8
+        )
+
+        #expect(!viewSource.contains("snapshot.unrecognizedItems"))
+        #expect(!viewSource.contains("无法识别的 Skill 项目"))
+        #expect(!viewSource.contains("复制诊断"))
+        #expect(!modelSource.contains("func copyDiagnostic("))
+    }
+
     @Test("global Skills stays reachable beside Tasks without a selected workspace")
     func globalSkillsNavigationIsIndependent() throws {
         let root = URL(
@@ -28,9 +144,41 @@ struct WindowLayoutSourceTests {
         #expect(source.contains("case skills"))
         #expect(source.contains("WorkbenchAccessibility.openSkills"))
         #expect(source.contains("SkillsView(service: model.skillsService"))
-        let tasks = try #require(source.range(of: "WorkbenchAccessibility.openTaskView"))
-        let skills = try #require(source.range(of: "WorkbenchAccessibility.openSkills"))
-        #expect(tasks.lowerBound < skills.lowerBound)
+        #expect(source.contains("SkillActivityIcon()"))
+        #expect(!source.contains("systemName: \"sparkles\","))
+        #expect(source.contains("Image(systemName: \"sparkle\")"))
+        #expect(source.contains(".font(.system(size: 7, weight: .semibold))"))
+        let activityBarStart = try #require(
+            source.range(of: "private var activityBar: some View")
+        )
+        let activityButtonStart = try #require(
+            source.range(
+                of: "private func activityBarButton(",
+                range: activityBarStart.upperBound..<source.endIndex
+            )
+        )
+        let activityBar = source[
+            activityBarStart.lowerBound..<activityButtonStart.lowerBound
+        ]
+        let workspace = try #require(
+            activityBar.range(of: "WorkbenchAccessibility.openWorkspace")
+        )
+        let tasks = try #require(
+            activityBar.range(of: "WorkbenchAccessibility.openTaskView")
+        )
+        let git = try #require(
+            activityBar.range(of: "WorkbenchAccessibility.openGitWorkbench")
+        )
+        let skills = try #require(
+            activityBar.range(of: "WorkbenchAccessibility.openSkills")
+        )
+        let settings = try #require(
+            activityBar.range(of: "WorkbenchAccessibility.openSettings")
+        )
+        #expect(workspace.lowerBound < tasks.lowerBound)
+        #expect(tasks.lowerBound < git.lowerBound)
+        #expect(git.lowerBound < skills.lowerBound)
+        #expect(skills.lowerBound < settings.lowerBound)
 
         let skillsSource = try String(
             contentsOf: root.appendingPathComponent("Sources/BreathApp/SkillsView.swift"),
@@ -90,9 +238,12 @@ struct WindowLayoutSourceTests {
         #expect(headerSource.contains(
             "HStack(alignment: .firstTextBaseline, spacing: 8)"
         ))
-        #expect(headerSource.contains(".font(.title2.weight(.semibold))"))
-        #expect(headerSource.contains("WorkbenchLayout.windowControlsHeight"))
-        #expect(headerSource.contains("WorkbenchLayout.sidebarHeaderRowHeight"))
+        #expect(headerSource.contains(".font(.headline)"))
+        #expect(!headerSource.contains(".font(.title2"))
+        #expect(!headerSource.contains("WorkbenchLayout.windowControlsHeight"))
+        #expect(headerSource.contains("WorkbenchLayout.pageToolbarHeight"))
+        #expect(headerSource.contains("WorkbenchLayout.pageToolbarLeadingInset"))
+        #expect(headerSource.contains("WorkbenchLayout.pageToolbarTrailingInset"))
         #expect(!headerSource.contains("WorkbenchLayout.sidebarHeaderVerticalPadding"))
         #expect(!headerSource.contains("VStack(alignment: .leading"))
         #expect(!headerSource.contains(".padding(.top, 32)"))
@@ -114,6 +265,80 @@ struct WindowLayoutSourceTests {
         #expect(managementSource.contains("item.securityAudit.checkedAt"))
         #expect(managementSource.contains("confirmedRiskCandidateIDs"))
         #expect(managementSource.contains("confirmedRiskCandidateIDs: confirmedRiskCandidateIDs"))
+    }
+
+    @Test("activity bar shows workspace chrome only for the workspace destination")
+    func activityBarSeparatesWorkspaceFromGlobalPages() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/WorkbenchView.swift"),
+            encoding: .utf8
+        )
+        let contentStart = try #require(
+            source.range(of: "private var workbenchContent: some View")
+        )
+        let activityBarStart = try #require(
+            source.range(
+                of: "private var activityBar: some View",
+                range: contentStart.upperBound..<source.endIndex
+            )
+        )
+        let content = source[
+            contentStart.lowerBound..<activityBarStart.lowerBound
+        ]
+        let snapshotObserverStart = try #require(
+            source.range(of: ".onChange(of: model.snapshot)")
+        )
+        let gitNotificationStart = try #require(
+            source.range(
+                of: ".onReceive(NotificationCenter.default.publisher(for: .breathOpenGitWorkbench)",
+                range: snapshotObserverStart.upperBound..<source.endIndex
+            )
+        )
+        let snapshotObserver = source[
+            snapshotObserverStart.lowerBound..<gitNotificationStart.lowerBound
+        ]
+        let sidebarStart = try #require(
+            source.range(of: "private var sidebar: some View")
+        )
+        let workspaceSectionStart = try #require(
+            source.range(
+                of: "private func workspaceSection",
+                range: sidebarStart.upperBound..<source.endIndex
+            )
+        )
+        let sidebarSource = source[
+            sidebarStart.lowerBound..<workspaceSectionStart.lowerBound
+        ]
+
+        #expect(source.contains("@State private var detailMode = WorkbenchDetailMode.workspace"))
+        #expect(source.contains("activityBar\n            workbenchContent"))
+        #expect(!source.contains("activityBar\n            Divider()\n            workbenchContent"))
+        #expect(content.contains("if detailMode == .workspace"))
+        #expect(content.contains("SidebarResizeContainer"))
+        #expect(content.contains("} else {\n            detail"))
+        #expect(!content.contains("Color.clear"))
+        #expect(!content.contains(".frame(height: WorkbenchLayout.windowControlsHeight)"))
+        #expect(content.contains("detail\n                .font(applicationFont(for: model))"))
+        #expect(!snapshotObserver.contains("detailMode = .workspace"))
+        #expect(source.contains("private func selectWorkSession"))
+        #expect(source.contains("detailMode = .workspace\n        model.selectWorkSession"))
+        #expect(source.contains("activityBarWidth: CGFloat = 44"))
+        #expect(source.contains("activityBarIconSize: CGFloat = 16"))
+        #expect(source.contains("pageToolbarHeight: CGFloat = 32"))
+        #expect(source.contains("pageToolbarLeadingInset: CGFloat = 44"))
+        #expect(source.contains("pageToolbarTrailingInset: CGFloat = 12"))
+        #expect(!source.contains("sidebarHeaderRowHeight"))
+        #expect(!sidebarSource.contains("Color.clear"))
+        #expect(sidebarSource.contains("WorkbenchLayout.pageToolbarHeight"))
+        #expect(sidebarSource.contains("WorkbenchLayout.pageToolbarLeadingInset"))
+        #expect(sidebarSource.contains("WorkbenchLayout.pageToolbarTrailingInset"))
+        #expect(source.contains(".overlay(alignment: .trailing)"))
+        #expect(source.contains(".padding(.top, WorkbenchLayout.windowControlsHeight)"))
+        #expect(!source.contains("sidebarFooter"))
     }
 
     @Test("Skill installer uses compact explicit source tabs and inline source errors")
@@ -595,8 +820,8 @@ struct WindowLayoutSourceTests {
         )
     }
 
-    @Test("sidebar footer omits Git while the terminal status opens the workbench")
-    func terminalStatusOwnsTheGitEntry() throws {
+    @Test("activity bar opens Git for the currently selected workspace")
+    func activityBarOwnsTheGitEntry() throws {
         let root = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
             isDirectory: true
@@ -611,6 +836,10 @@ struct WindowLayoutSourceTests {
             ),
             encoding: .utf8
         )
+        let appSource = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/BreathApp.swift"),
+            encoding: .utf8
+        )
         let taskPanelStart = try #require(
             source.range(of: "if detailMode == .tasks")
         )
@@ -623,29 +852,17 @@ struct WindowLayoutSourceTests {
         let taskPanel = source[
             taskPanelStart.lowerBound..<gitWorkbenchDetailStart.lowerBound
         ]
-        let sidebarFooterStart = try #require(
-            source.range(of: "private var sidebarFooter: some View")
+        let activityBarStart = try #require(
+            source.range(of: "private var activityBar: some View")
         )
-        let sidebarButtonFunctionStart = try #require(
+        let activityButtonFunctionStart = try #require(
             source.range(
-                of: "private func sidebarFooterButton(",
-                range: sidebarFooterStart.upperBound..<source.endIndex
+                of: "private func activityBarButton(",
+                range: activityBarStart.upperBound..<source.endIndex
             )
         )
-        let sidebarFooter = source[
-            sidebarFooterStart.lowerBound..<sidebarButtonFunctionStart.lowerBound
-        ]
-        let gitStatusStart = try #require(
-            source.range(of: "private struct GitWorkingTreeStatusBar")
-        )
-        let gitIconStart = try #require(
-            source.range(
-                of: "private struct GitBranchIcon",
-                range: gitStatusStart.upperBound..<source.endIndex
-            )
-        )
-        let gitStatus = source[
-            gitStatusStart.lowerBound..<gitIconStart.lowerBound
+        let activityBar = source[
+            activityBarStart.lowerBound..<activityButtonFunctionStart.lowerBound
         ]
         let gitColumnsStart = try #require(
             gitSource.range(of: "private struct GitThreeColumnLayout")
@@ -678,15 +895,57 @@ struct WindowLayoutSourceTests {
             nativeSplitStart.lowerBound..<splitHostingStart.lowerBound
         ]
 
-        #expect(source.contains("private var sidebarFooter: some View"))
-        #expect(source.contains("@Environment(\\.openSettings) private var openSettings"))
-        #expect(source.contains("openSettings()"))
+        #expect(source.contains("private var activityBar: some View"))
+        #expect(!source.contains("@Environment(\\.openSettings) private var openSettings"))
+        #expect(!source.contains("openSettings()"))
         #expect(source.contains("detailMode = .tasks"))
-        #expect(sidebarFooter.contains("WorkbenchAccessibility.openTaskView"))
-        #expect(!sidebarFooter.contains("WorkbenchAccessibility.openGitWorkbench"))
-        #expect(gitStatus.contains("Button(action: onOpenDiff)"))
-        #expect(gitStatus.contains("GitBranchIcon()"))
-        #expect(gitStatus.contains("WorkbenchAccessibility.openGitWorkbench"))
+        #expect(activityBar.contains("GitBranchIcon()"))
+        #expect(!activityBar.contains("systemName: \"arrow.triangle.branch\""))
+        #expect(source.contains("width: WorkbenchLayout.activityBarIconSize"))
+        #expect(source.contains("height: WorkbenchLayout.activityBarIconSize"))
+        #expect(activityBar.contains("WorkbenchAccessibility.openGitWorkbench"))
+        #expect(!activityBar.contains("isEnabled: model.currentWorkspaceID != nil"))
+        #expect(activityBar.contains("openGitWorkbenchForCurrentWorkspace"))
+        #expect(activityBar.contains("WorkbenchAccessibility.openTaskView"))
+        #expect(source.contains("case gitWorkbench(WorkspaceID?)"))
+        #expect(source.contains("detailMode = .gitWorkbench(model.currentWorkspaceID)"))
+        #expect(source.contains("GitWorkbenchUnselectedView("))
+        #expect(gitSource.contains("struct GitWorkbenchUnselectedView: View"))
+        #expect(!gitSource.contains("let onClose: () -> Void"))
+        #expect(!gitSource.contains("toolbarIcon(\"xmark\")"))
+        #expect(!gitSource.contains("关闭 Git 工作台"))
+        #expect(gitSource.contains("Text(localizer.string(\"请选择\"))"))
+        #expect(gitSource.contains(".accessibilityLabel(localizer.string(\"Git 目录\"))"))
+        #expect(
+            gitSource.components(
+                separatedBy: ".padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)"
+            ).count == 3
+        )
+        #expect(
+            gitSource.components(
+                separatedBy: ".frame(height: WorkbenchLayout.pageToolbarHeight)"
+            ).count == 3
+        )
+        #expect(
+            gitSource.components(
+                separatedBy: ".padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)"
+            ).count == 3
+        )
+        let openGitCommandStart = try #require(
+            appSource.range(of: "Button(localizer.string(\"打开 Git 工作台\"))")
+        )
+        let commitCommandStart = try #require(
+            appSource.range(
+                of: "Button(localizer.string(\"Commit\"))",
+                range: openGitCommandStart.upperBound..<appSource.endIndex
+            )
+        )
+        let openGitCommand = appSource[
+            openGitCommandStart.lowerBound..<commitCommandStart.lowerBound
+        ]
+        #expect(!openGitCommand.contains(".disabled(model.currentWorkspaceID == nil)"))
+        #expect(!source.contains("GitWorkingTreeStatusBar"))
+        #expect(source.contains("private struct GitBranchIcon"))
         #expect(gitSource.contains("preferencesStore.setDiffLayout(layout)"))
         #expect(gitSource.contains("GitShortcutEventHost("))
         #expect(!gitSource.contains("private var shortcutCommandHost: some View {\n        VStack"))
@@ -791,6 +1050,94 @@ struct WindowLayoutSourceTests {
         #expect(!workbenchSource.contains("settings.application.sidebarDensity"))
     }
 
+    @Test("settings open as a main-window detail page")
+    func settingsUseMainWindowDetailMode() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let workbenchSource = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/WorkbenchView.swift"),
+            encoding: .utf8
+        )
+        let appSource = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/BreathApp.swift"),
+            encoding: .utf8
+        )
+        let settingsSource = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/BreathSettingsView.swift"
+            ),
+            encoding: .utf8
+        )
+        let activityBarStart = try #require(
+            workbenchSource.range(of: "private var activityBar: some View")
+        )
+        let activityButtonStart = try #require(
+            workbenchSource.range(
+                of: "private func activityBarButton(",
+                range: activityBarStart.upperBound..<workbenchSource.endIndex
+            )
+        )
+        let activityBar = workbenchSource[
+            activityBarStart.lowerBound..<activityButtonStart.lowerBound
+        ]
+
+        #expect(workbenchSource.contains("case settings"))
+        #expect(workbenchSource.contains("BreathSettingsView(model: model)"))
+        #expect(workbenchSource.contains("publisher(for: .breathOpenSettings)"))
+        #expect(activityBar.contains("isSelected: detailMode == .settings"))
+        #expect(activityBar.contains("detailMode = .settings"))
+        #expect(!appSource.contains("Settings {"))
+        #expect(appSource.contains("CommandGroup(replacing: .appSettings)"))
+        #expect(appSource.contains("OpenSettingsPageCommand("))
+        #expect(appSource.contains("name: .breathOpenSettings"))
+        #expect(!settingsSource.contains(".frame(width: 650, height: 440)"))
+        #expect(!settingsSource.contains("TabView(selection: $selectedTab)"))
+        #expect(!settingsSource.contains(".tabItem"))
+        #expect(settingsSource.contains("private var settingsTabBar: some View"))
+        #expect(settingsSource.contains("ScrollView(.horizontal, showsIndicators: false)"))
+        #expect(settingsSource.contains("ForEach(BreathSettingsTab.allCases"))
+        #expect(settingsSource.contains("Text(localizer.string(\"设置\"))"))
+        #expect(settingsSource.contains("static let tabVisualHeight: CGFloat = 24"))
+        #expect(settingsSource.contains(".frame(height: SettingsLayout.tabVisualHeight)"))
+        #expect(!settingsSource.contains(".frame(height: 30)"))
+        #expect(settingsSource.contains(
+            ".frame(height: WorkbenchLayout.pageToolbarHeight)"
+        ))
+        #expect(settingsSource.contains(
+            ".padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)"
+        ))
+        #expect(settingsSource.contains(
+            ".padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)"
+        ))
+        #expect(settingsSource.contains("private var selectedSettingsContent: some View"))
+        #expect(settingsSource.contains("maxWidth: .infinity"))
+        #expect(settingsSource.contains("maxHeight: .infinity"))
+        #expect(settingsSource.contains("static let contentInset: CGFloat = 12"))
+        #expect(settingsSource.contains("static let rowVerticalPadding: CGFloat = 3"))
+        #expect(settingsSource.contains("static let controlColumnWidth: CGFloat = 160"))
+        #expect(settingsSource.contains("static let controlHeight: CGFloat = 24"))
+        #expect(settingsSource.contains("static let gitExecutableControlWidth: CGFloat = 320"))
+        #expect(settingsSource.contains("Spacer(minLength: 24)"))
+        #expect(settingsSource.contains(
+            ".frame(width: controlWidth, alignment: .trailing)"
+        ))
+        #expect(settingsSource.components(separatedBy: "settingsMenuPicker(").count == 7)
+        #expect(settingsSource.contains(".menuStyle(.button)"))
+        #expect(settingsSource.contains(".buttonStyle(.plain)"))
+        #expect(settingsSource.contains(".menuIndicator(.hidden)"))
+        #expect(settingsSource.contains(".multilineTextAlignment(.trailing)"))
+        #expect(settingsSource.components(separatedBy: "Spacer(minLength: 0)").count == 4)
+        #expect(!settingsSource.contains("Picker(\"\", selection:"))
+        #expect(settingsSource.contains("settingsControlRow(\"忽略全部空白\")"))
+        #expect(settingsSource.contains("settingsControlRow(\"跨重启保存 Git Console\")"))
+        #expect(settingsSource.components(separatedBy: "settingsList {").count == 7)
+        #expect(!settingsSource.contains("Grid(alignment:"))
+        #expect(!settingsSource.contains("Form {"))
+        #expect(!settingsSource.contains(".formStyle(.grouped)"))
+    }
+
     @Test("workspace disclosure keeps balanced icon spacing")
     func workspaceDisclosureKeepsBalancedIconSpacing() throws {
         let root = URL(
@@ -810,8 +1157,8 @@ struct WindowLayoutSourceTests {
         #expect(source.contains("sidebarWorkspaceDisclosureSpacing: CGFloat = 6"))
     }
 
-    @Test("Git status is one workspace-wide bar below the terminal layout")
-    func gitStatusIsWorkspaceWide() throws {
+    @Test("terminal bottom bar keeps the workspace editor without Git status")
+    func terminalBottomBarOmitsGitStatus() throws {
         let root = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
             isDirectory: true
@@ -829,27 +1176,33 @@ struct WindowLayoutSourceTests {
                 range: workspaceLayoutStart.upperBound..<source.endIndex
             )
         )
-        let terminalPaneStart = try #require(
-            source.range(of: "private struct TerminalPaneView")
-        )
-        let gitBarStart = try #require(
+        let bottomBarStart = try #require(
             source.range(
-                of: "private struct GitWorkingTreeStatusBar",
-                range: terminalPaneStart.upperBound..<source.endIndex
+                of: "private struct WorkSessionBottomBar",
+                range: paneLayoutStart.upperBound..<source.endIndex
+            )
+        )
+        let agentLabelStart = try #require(
+            source.range(
+                of: "private struct AgentTypeLabel",
+                range: bottomBarStart.upperBound..<source.endIndex
             )
         )
         let workspaceLayout = source[
             workspaceLayoutStart.lowerBound..<paneLayoutStart.lowerBound
         ]
-        let terminalPane = source[
-            terminalPaneStart.lowerBound..<gitBarStart.lowerBound
+        let bottomBar = source[
+            bottomBarStart.lowerBound..<agentLabelStart.lowerBound
         ]
 
-        #expect(workspaceLayout.contains("GitWorkingTreeStatusBar("))
-        #expect(!terminalPane.contains("GitWorkingTreeStatusBar("))
+        #expect(workspaceLayout.contains("WorkSessionBottomBar(workspacePath: workspacePath)"))
+        #expect(bottomBar.contains("WorkspaceEditorLauncher("))
+        #expect(!bottomBar.contains("Git"))
+        #expect(!source.contains("GitWorkingTreeStatusReader"))
+        #expect(!source.contains("onOpenGitDiff"))
     }
 
-    @Test("sidebar and workspace status bars share one height")
+    @Test("editor and Git console bars share one height")
     func bottomBarsShareOneHeight() throws {
         let root = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
@@ -887,38 +1240,14 @@ struct WindowLayoutSourceTests {
         let consoleLayout = gitSource[
             consoleLayoutStart.lowerBound..<graphMetricsStart.lowerBound
         ]
-        let sidebarStart = try #require(
-            source.range(of: "private var sidebar: some View")
-        )
-        let sidebarFooterStart = try #require(
-            source.range(
-                of: "private var sidebarFooter: some View",
-                range: sidebarStart.upperBound..<source.endIndex
-            )
-        )
-        let sidebar = source[
-            sidebarStart.lowerBound..<sidebarFooterStart.lowerBound
-        ]
-        let sidebarFooterButtonStart = try #require(
-            source.range(
-                of: "private func sidebarFooterButton(",
-                range: sidebarFooterStart.upperBound..<source.endIndex
-            )
-        )
-        let sidebarFooter = source[
-            sidebarFooterStart.lowerBound..<sidebarFooterButtonStart.lowerBound
-        ]
-
         #expect(source.contains("bottomBarHeight: CGFloat = 32"))
-        #expect(!sidebar.contains("Divider()\n            sidebarFooter"))
-        #expect(sidebarFooter.contains(".overlay(alignment: .top)"))
+        #expect(source.contains("activityBarWidth: CGFloat = 44"))
+        #expect(!source.contains("sidebarFooter"))
         #expect(consoleHeader.contains(".frame(height: WorkbenchLayout.bottomBarHeight)"))
         #expect(!consoleHeader.contains(".frame(height: 30)"))
         #expect(!consoleLayout.contains("Divider()\n            header"))
         #expect(consoleLayout.contains(".overlay(alignment: .top)"))
-        #expect(!source.contains("sidebarFooterHeight"))
         #expect(!source.contains("terminalGitStatusBarHeight"))
-        #expect(!source.contains("sidebarFooterHitArea"))
     }
 
     @Test("Git Console disclosure icon and label share one hit target")

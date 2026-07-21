@@ -100,30 +100,25 @@ struct SkillsView: View {
     }
 
     private var header: some View {
-        VStack(spacing: 0) {
-            Color.clear
-                .frame(height: WorkbenchLayout.windowControlsHeight)
-                .accessibilityHidden(true)
-
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(localizer.string("Skills"))
-                    .font(.title2.weight(.semibold))
-                Text(localizer.format("%d 个全局 Skill", model.snapshot.skills.count))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    showsInstaller = true
-                } label: {
-                    Label(localizer.string("安装 Skill…"), systemImage: "plus")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .accessibilityLabel(localizer.string("安装 Skill"))
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(localizer.string("Skills"))
+                .font(.headline)
+            Text(localizer.format("%d 个全局 Skill", model.snapshot.skills.count))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                showsInstaller = true
+            } label: {
+                Label(localizer.string("安装 Skill…"), systemImage: "plus")
             }
-            .padding(.horizontal, 18)
-            .frame(height: WorkbenchLayout.sidebarHeaderRowHeight)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .accessibilityLabel(localizer.string("安装 Skill"))
         }
+        .padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)
+        .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
+        .frame(height: WorkbenchLayout.pageToolbarHeight)
     }
 
     private var listControls: some View {
@@ -199,7 +194,7 @@ struct SkillsView: View {
     }
 
     private func skillList(navigatesToDetail: Bool) -> some View {
-        List(selection: $selectedSkillID) {
+        List {
             if model.filteredSkills.isEmpty {
                 Text(model.snapshot.skills.isEmpty
                     ? localizer.string("尚未发现全局 Skill")
@@ -209,40 +204,23 @@ struct SkillsView: View {
                 ForEach(model.filteredSkills) { skill in
                     if navigatesToDetail {
                         NavigationLink(value: skill.id) {
-                            SkillListRow(skill: skill, localizer: localizer)
+                            SkillListRow(
+                                skill: skill,
+                                localizer: localizer,
+                                isSelected: false
+                            )
                         }
                     } else {
-                        SkillListRow(skill: skill, localizer: localizer)
-                            .tag(skill.id)
-                    }
-                }
-            }
-            if !model.snapshot.unrecognizedItems.isEmpty {
-                Section(localizer.string("无法识别的 Skill 项目")) {
-                    ForEach(model.snapshot.unrecognizedItems) { item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.path.lastPathComponent)
-                                .font(.body.weight(.medium))
-                            Text("\(item.agentDisplayName) · \(localizedSkillMessage(item.reason, localizer: localizer))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                            HStack {
-                                Button(localizer.string("在 Finder 中显示")) {
-                                    model.reveal(item.path)
-                                }
-                                Button(localizer.string("复制诊断")) {
-                                    model.copyDiagnostic(
-                                        item,
-                                        localizedReason: localizedSkillMessage(
-                                            item.reason,
-                                            localizer: localizer
-                                        )
-                                    )
-                                }
-                            }
-                            .buttonStyle(.link)
+                        Button {
+                            selectSkill(skill.id)
+                        } label: {
+                            SkillListRow(
+                                skill: skill,
+                                localizer: localizer,
+                                isSelected: selectedSkillID == skill.id
+                            )
                         }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -251,6 +229,10 @@ struct SkillsView: View {
         .scrollContentBackground(.hidden)
         .background(listBackground)
         .accessibilityLabel(localizer.string("全局 Skills 列表"))
+    }
+
+    private func selectSkill(_ skillID: String) {
+        selectedSkillID = skillID
     }
 
     @ViewBuilder
@@ -294,6 +276,7 @@ struct SkillsView: View {
 private struct SkillListRow: View {
     let skill: GlobalSkill
     let localizer: ApplicationLocalizer
+    let isSelected: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -331,8 +314,16 @@ private struct SkillListRow: View {
             }
         }
         .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .background(
+            isSelected ? Color.accentColor.opacity(0.16) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+        )
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var accessibilityLabel: String {
