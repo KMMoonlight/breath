@@ -12,7 +12,8 @@ struct SkillInstallationWizard: View {
     @Environment(\.dismiss) private var dismiss
     @State private var step = Step.source
     @State private var sourceMode = SourceMode.zip
-    @State private var onlineInput = ""
+    @State private var githubInput = ""
+    @State private var skillsShInput = ""
     @State private var showsFileImporter = false
     @State private var batch: SkillCandidateBatch?
     @State private var selectedCandidateIDs: Set<UUID> = []
@@ -23,7 +24,7 @@ struct SkillInstallationWizard: View {
     @State private var confirmedRiskCandidateIDs: Set<UUID> = []
     @State private var result: SkillOperationResult?
     @State private var isWorking = false
-    @State private var errorMessage: String?
+    @State private var sourceMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,13 +64,8 @@ struct SkillInstallationWizard: View {
                 guard let url = urls.first else { return }
                 discoverZip(url)
             case .failure(let error):
-                errorMessage = error.localizedDescription
+                sourceMessage = localizer.string(error.localizedDescription)
             }
-        }
-        .alert("Breath", isPresented: errorPresented) {
-            Button(localizer.string("好")) { errorMessage = nil }
-        } message: {
-            Text(localizer.string(errorMessage ?? "未知错误"))
         }
         .interactiveDismissDisabled(isWorking)
         .onDisappear {
@@ -95,92 +91,125 @@ struct SkillInstallationWizard: View {
     private var sourceStep: some View {
         VStack(alignment: .leading, spacing: 18) {
             Picker(localizer.string("来源"), selection: $sourceMode) {
-                Text(localizer.string("ZIP 文件")).tag(SourceMode.zip)
-                Text(localizer.string("GitHub 或 skills.sh")).tag(SourceMode.online)
+                Text("ZIP").tag(SourceMode.zip)
+                Text("GitHub").tag(SourceMode.github)
+                Text("skills.sh").tag(SourceMode.skillsSh)
             }
             .pickerStyle(.segmented)
 
-            if sourceMode == .zip {
-                ContentUnavailableView {
-                    Label(localizer.string("从 ZIP 导入"), systemImage: "doc.zipper")
-                } description: {
-                    Text(localizer.string("ZIP 可以包含一个或多个 Skill；导入前不会执行其中的脚本。"))
-                } actions: {
-                    Button(localizer.string("选择 ZIP…")) {
-                        showsFileImporter = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(localizer.string("输入公开 GitHub Repo、owner/repo，或搜索关键词"))
-                        .font(.headline)
-                    HStack {
-                        TextField("owner/repo", text: $onlineInput)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit(resolveOnlineInput)
-                        Button(localizer.string("查找"), action: resolveOnlineInput)
-                            .buttonStyle(.borderedProminent)
-                            .disabled(onlineInput.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                    Text(localizer.string("仅支持无需认证的公开 GitHub Repo；私有 Repo 请改用 ZIP。"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if !searchResults.isEmpty {
-                        List(searchResults) { item in
-                            Button {
-                                discoverCatalogResult(item)
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(item.name).fontWeight(.medium)
-                                        Text(item.description ?? localizer.string("暂无说明"))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
-                                        Text(item.source)
-                                            .font(.caption2.monospaced())
-                                            .foregroundStyle(.tertiary)
-                                        HStack(spacing: 6) {
-                                            RiskBadge(audit: item.securityAudit, localizer: localizer)
-                                            Text(localizer.string(item.securityAudit.summary))
-                                                .lineLimit(1)
-                                        }
-                                        .font(.caption2)
-                                        if let checkedAt = item.securityAudit.checkedAt {
-                                            Text(localizer.format(
-                                                "检查于 %@",
-                                                checkedAt.formatted(
-                                                    date: .abbreviated,
-                                                    time: .shortened
-                                                )
-                                            ))
-                                            .font(.caption2)
-                                            .foregroundStyle(.tertiary)
-                                        }
-                                    }
-                                    Spacer()
-                                    Text(localizer.format("%d 次安装", item.installs))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    Image(systemName: "chevron.right")
-                                        .foregroundStyle(.tertiary)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(
-                                "\(item.name), \(item.installs), "
-                                    + item.securityAudit.riskLevel.displayName(localizer)
-                            )
-                        }
-                        .frame(minHeight: 260)
-                    }
-                }
+            switch sourceMode {
+            case .zip: zipSourcePane
+            case .github: githubSourcePane
+            case .skillsSh: skillsShSourcePane
+            }
+
+            if let sourceMessage {
+                Label(sourceMessage, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
         }
         .padding(24)
+        .onChange(of: sourceMode) { _, _ in
+            sourceMessage = nil
+        }
+    }
+
+    private var zipSourcePane: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(localizer.string("选择 ZIP 文件"))
+                .font(.headline)
+            Text(localizer.string("ZIP 可以包含一个或多个 Skill；导入前不会执行其中的脚本。"))
+                .foregroundStyle(.secondary)
+            Button(localizer.string("选择 ZIP…")) {
+                showsFileImporter = true
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var githubSourcePane: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(localizer.string("输入公开 GitHub Repo"))
+                .font(.headline)
+            HStack {
+                TextField("owner/repo", text: $githubInput)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(resolveGitHubInput)
+                Button(localizer.string("查找"), action: resolveGitHubInput)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(githubInput.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            Text(localizer.string("仅支持无需认证的公开 GitHub Repo；私有 Repo 请改用 ZIP。"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var skillsShSourcePane: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(localizer.string("搜索 skills.sh"))
+                .font(.headline)
+            HStack {
+                TextField(localizer.string("搜索关键词"), text: $skillsShInput)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(searchSkillsSh)
+                Button(localizer.string("搜索"), action: searchSkillsSh)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(skillsShInput.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if !searchResults.isEmpty {
+                List(searchResults) { item in
+                    Button {
+                        discoverCatalogResult(item)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.name).fontWeight(.medium)
+                                Text(item.description ?? localizer.string("暂无说明"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                Text(item.source)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.tertiary)
+                                HStack(spacing: 6) {
+                                    RiskBadge(audit: item.securityAudit, localizer: localizer)
+                                    Text(localizer.string(item.securityAudit.summary))
+                                        .lineLimit(1)
+                                }
+                                .font(.caption2)
+                                if let checkedAt = item.securityAudit.checkedAt {
+                                    Text(localizer.format(
+                                        "检查于 %@",
+                                        checkedAt.formatted(
+                                            date: .abbreviated,
+                                            time: .shortened
+                                        )
+                                    ))
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                }
+                            }
+                            Spacer()
+                            Text(localizer.format("%d 次安装", item.installs))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        "\(item.name), \(item.installs), "
+                            + item.securityAudit.riskLevel.displayName(localizer)
+                    )
+                }
+                .frame(minHeight: 260)
+            }
+        }
     }
 
     private var candidateStep: some View {
@@ -463,13 +492,6 @@ struct SkillInstallationWizard: View {
         return highRiskIDs.isSubset(of: confirmedRiskCandidateIDs)
     }
 
-    private var errorPresented: Binding<Bool> {
-        Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
-        )
-    }
-
     private func discoverZip(_ url: URL) {
         runSourceTask {
             let accessed = url.startAccessingSecurityScopedResource()
@@ -478,22 +500,27 @@ struct SkillInstallationWizard: View {
         }
     }
 
-    private func resolveOnlineInput() {
-        let input = onlineInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        if (try? GitHubSkillLocator.parse(input)) != nil {
-            runSourceTask { try await service.discoverSkills(fromGitHub: input) }
-        } else {
-            isWorking = true
-            Task {
-                defer { isWorking = false }
-                do {
-                    searchResults = try await service.searchSkillsSh(query: input)
-                    if searchResults.isEmpty {
-                        errorMessage = localizer.string("没有找到 skills.sh 结果")
-                    }
-                } catch {
-                    errorMessage = error.localizedDescription
+    private func resolveGitHubInput() {
+        let input = githubInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.isEmpty else { return }
+        runSourceTask { try await service.discoverSkills(fromGitHub: input) }
+    }
+
+    private func searchSkillsSh() {
+        let input = skillsShInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.isEmpty else { return }
+        sourceMessage = nil
+        isWorking = true
+        Task {
+            defer { isWorking = false }
+            do {
+                searchResults = try await service.searchSkillsSh(query: input)
+                if searchResults.isEmpty {
+                    sourceMessage = localizer.string("没有找到 skills.sh 结果")
                 }
+            } catch {
+                searchResults = []
+                sourceMessage = localizedSourceMessage(for: error)
             }
         }
     }
@@ -505,6 +532,7 @@ struct SkillInstallationWizard: View {
     private func runSourceTask(
         _ operation: @escaping @Sendable () async throws -> SkillCandidateBatch
     ) {
+        sourceMessage = nil
         isWorking = true
         Task {
             defer { isWorking = false }
@@ -518,9 +546,20 @@ struct SkillInstallationWizard: View {
                 confirmedRiskCandidateIDs = []
                 step = .candidates
             } catch {
-                errorMessage = error.localizedDescription
+                sourceMessage = localizedSourceMessage(for: error)
             }
         }
+    }
+
+    private func localizedSourceMessage(for error: Error) -> String {
+        if let sourceError = error as? OnlineSkillSourceError,
+           sourceError == .authenticationRequired
+        {
+            return localizer.string(
+                "skills.sh 当前无法从 Breath 搜索。请在 skills.sh 查找后，通过 GitHub Repo 安装。"
+            )
+        }
+        return localizer.string(error.localizedDescription)
     }
 
     private func preparePreview() {
@@ -601,7 +640,8 @@ struct SkillInstallationWizard: View {
 
     private enum SourceMode: Hashable {
         case zip
-        case online
+        case github
+        case skillsSh
     }
 }
 

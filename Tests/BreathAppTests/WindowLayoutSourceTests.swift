@@ -94,6 +94,58 @@ struct WindowLayoutSourceTests {
         #expect(managementSource.contains("confirmedRiskCandidateIDs: confirmedRiskCandidateIDs"))
     }
 
+    @Test("Skill installer uses compact explicit source tabs and inline source errors")
+    func skillInstallerSourceSelectionStaysCompact() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/SkillManagementSheets.swift"
+            ),
+            encoding: .utf8
+        )
+        let sourceStepStart = try #require(
+            source.range(of: "private var sourceStep: some View")
+        )
+        let candidateStepStart = try #require(
+            source.range(
+                of: "private var candidateStep: some View",
+                range: sourceStepStart.upperBound..<source.endIndex
+            )
+        )
+        let sourceStep = source[
+            sourceStepStart.lowerBound..<candidateStepStart.lowerBound
+        ]
+
+        #expect(sourceStep.contains("Text(\"ZIP\").tag(SourceMode.zip)"))
+        #expect(sourceStep.contains("Text(\"GitHub\").tag(SourceMode.github)"))
+        #expect(sourceStep.contains("Text(\"skills.sh\").tag(SourceMode.skillsSh)"))
+        #expect(!sourceStep.contains("ContentUnavailableView"))
+        #expect(sourceStep.contains("sourceMessage"))
+        #expect(source.contains("private func resolveGitHubInput()"))
+        #expect(source.contains("private func searchSkillsSh()"))
+        #expect(!source.contains("resolveOnlineInput"))
+        #expect(!source.contains("case online"))
+        let updateViewStart = try #require(
+            source.range(of: "struct SkillUpdateReviewView: View")
+        )
+        let installer = source[..<updateViewStart.lowerBound]
+        #expect(!installer.contains(".alert(\"Breath\""))
+        #expect(installer.contains("localizedSourceMessage(for: error)"))
+        #expect(installer.contains("sourceError == .authenticationRequired"))
+
+        let guidelines = try String(
+            contentsOf: root.appendingPathComponent(
+                "docs/design/interface-guidelines.md"
+            ),
+            encoding: .utf8
+        )
+        #expect(guidelines.contains("流程页面不得使用超大提示标题"))
+        #expect(guidelines.contains("ContentUnavailableView"))
+    }
+
     @Test("Git error alerts keep long command output compact")
     func gitErrorPresentationIsBounded() {
         let longOutput = (1...80)

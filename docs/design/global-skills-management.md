@@ -161,7 +161,7 @@ Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数�
 
 “安装 Skill…”打开统一的分步弹窗：
 
-1. 选择 `ZIP` 或 `在线`。
+1. 在 `ZIP`、`GitHub`、`skills.sh` 三个平级 Tab 中选择来源。
 2. 解析来源。
 3. 展示并多选候选 Skill。
 4. 选择 Skill 安装目标。
@@ -173,6 +173,7 @@ Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数�
 
 ### 7.1 ZIP
 
+- 来源页使用紧凑说明和“选择 ZIP…”操作，不使用超大空状态标题。
 - 使用原生文件选择器，仅接受 ZIP 文件。
 - 在受控临时目录解压。
 - 拒绝绝对路径、`..` 越界、危险符号链接、设备文件及其他特殊文件。
@@ -192,6 +193,7 @@ Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数�
 ### 7.3 skills.sh
 
 - 普通关键词调用隔离的 skills.sh Provider 搜索。
+- 搜索服务要求 Breath 不持有的认证信息时，在 skills.sh Tab 内联说明，并引导用户取得 GitHub Repo 后切换到 GitHub Tab；不得弹出身份认证 Alert。
 - 搜索结果展示名称、`description`、来源、安装量及可用的安全审计信息。
 - 选择结果后解析其实际安装来源，再进入与 GitHub 相同的候选和预览流程。
 - skills.sh 暂时不可用时只影响在线搜索，不影响本地列表、ZIP、指定 GitHub Repo、更新记录或卸载。
