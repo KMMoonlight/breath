@@ -41,6 +41,24 @@ struct ApplicationLocalizationTests {
         #expect(english.string("Git 工作台") == "Git Workbench")
         #expect(english.string("提交信息") == "Commit Message")
         #expect(english.string("解决冲突…") == "Resolve Conflicts…")
+        #expect(
+            localizedSkillMessage(
+                "SKILL.md is missing.",
+                localizer: chinese
+            ) == "缺少 SKILL.md。"
+        )
+        #expect(
+            localizedSkillMessage(
+                "Claude Code is not installed.",
+                localizer: chinese
+            ) == "未安装 Claude Code。"
+        )
+        #expect(
+            localizedSkillMessage(
+                "Codex 0.1 is older than the supported 1.0.",
+                localizer: chinese
+            ) == "Codex 0.1 低于受支持的最低版本 1.0。"
+        )
     }
 
     @Test("Git workbench localization keys exist in both languages with matching placeholders")

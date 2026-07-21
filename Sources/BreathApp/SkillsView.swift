@@ -19,13 +19,24 @@ struct SkillsView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            NavigationSplitView {
-                skillList
-                    .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 460)
-            } detail: {
-                detail
+            GeometryReader { geometry in
+                if geometry.size.width < 720 {
+                    NavigationStack {
+                        skillList(navigatesToDetail: true)
+                            .navigationDestination(for: String.self) { skillID in
+                                detail(for: model.snapshot.skills.first { $0.id == skillID })
+                            }
+                    }
+                } else {
+                    NavigationSplitView {
+                        skillList(navigatesToDetail: false)
+                            .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 460)
+                    } detail: {
+                        detail(for: selectedSkill)
+                    }
+                    .navigationSplitViewStyle(.balanced)
+                }
             }
-            .navigationSplitViewStyle(.balanced)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
@@ -33,6 +44,11 @@ struct SkillsView: View {
             selectFirstVisibleSkillIfNeeded()
         }
         .onDisappear { model.deactivate() }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification
+        )) { _ in
+            model.reconcileAfterApplicationActivation()
+        }
         .onChange(of: model.filteredSkills.map(\.id)) { _, _ in
             selectFirstVisibleSkillIfNeeded()
         }
@@ -156,7 +172,7 @@ struct SkillsView: View {
         .accessibilityLabel(localizer.string("筛选 Skills"))
     }
 
-    private var skillList: some View {
+    private func skillList(navigatesToDetail: Bool) -> some View {
         List(selection: $selectedSkillID) {
             if model.filteredSkills.isEmpty {
                 Text(model.snapshot.skills.isEmpty
@@ -165,17 +181,23 @@ struct SkillsView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.filteredSkills) { skill in
-                    SkillListRow(skill: skill, localizer: localizer)
-                        .tag(skill.id)
+                    if navigatesToDetail {
+                        NavigationLink(value: skill.id) {
+                            SkillListRow(skill: skill, localizer: localizer)
+                        }
+                    } else {
+                        SkillListRow(skill: skill, localizer: localizer)
+                            .tag(skill.id)
+                    }
                 }
             }
             if !model.snapshot.unrecognizedItems.isEmpty {
-                Section(localizer.string("无法识别的项目")) {
+                Section(localizer.string("无法识别的 Skill 项目")) {
                     ForEach(model.snapshot.unrecognizedItems) { item in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(item.path.lastPathComponent)
                                 .font(.body.weight(.medium))
-                            Text("\(item.agentDisplayName) · \(item.reason)")
+                            Text("\(item.agentDisplayName) · \(localizedSkillMessage(item.reason, localizer: localizer))")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
@@ -184,7 +206,13 @@ struct SkillsView: View {
                                     model.reveal(item.path)
                                 }
                                 Button(localizer.string("复制诊断")) {
-                                    model.copyDiagnostic(item)
+                                    model.copyDiagnostic(
+                                        item,
+                                        localizedReason: localizedSkillMessage(
+                                            item.reason,
+                                            localizer: localizer
+                                        )
+                                    )
                                 }
                             }
                             .buttonStyle(.link)
@@ -198,8 +226,8 @@ struct SkillsView: View {
     }
 
     @ViewBuilder
-    private var detail: some View {
-        if let skill = selectedSkill {
+    private func detail(for skill: GlobalSkill?) -> some View {
+        if let skill {
             SkillDetailView(
                 skill: skill,
                 update: model.update(for: skill),
@@ -420,4 +448,39 @@ extension SkillUpdateState {
         case .failed: localizer.string("检查失败")
         }
     }
+}
+
+func localizedSkillMessage(
+    _ message: String,
+    localizer: ApplicationLocalizer
+) -> String {
+    if message.hasSuffix(" is not installed.") {
+        let name = String(message.dropLast(" is not installed.".count))
+        return localizer.format("%@ is not installed.", name)
+    }
+    if message.hasSuffix(" is installed, but its version could not be verified.") {
+        let name = String(message.dropLast(
+            " is installed, but its version could not be verified.".count
+        ))
+        return localizer.format(
+            "%@ is installed, but its version could not be verified.",
+            name
+        )
+    }
+    let olderMarker = " is older than the supported "
+    if let markerRange = message.range(of: olderMarker) {
+        let nameAndVersion = String(message[..<markerRange.lowerBound])
+        let supported = String(message[markerRange.upperBound...]).trimmingCharacters(
+            in: CharacterSet(charactersIn: ".")
+        )
+        if let separator = nameAndVersion.lastIndex(of: " ") {
+            return localizer.format(
+                "%@ %@ is older than the supported %@.",
+                String(nameAndVersion[..<separator]),
+                String(nameAndVersion[nameAndVersion.index(after: separator)...]),
+                supported
+            )
+        }
+    }
+    return localizer.string(message)
 }

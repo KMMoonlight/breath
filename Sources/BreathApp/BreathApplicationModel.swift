@@ -84,7 +84,7 @@ final class BreathApplicationModel: ObservableObject {
                 AgentAdapterRegistry.builtIn.adapters.map {
                     (
                         $0.kind,
-                        AgentSkillTargetAvailability.unavailable(
+                        SkillInstallationTargetAvailability.unavailable(
                             reason: "Agent installation status is still being checked."
                         )
                     )
@@ -162,6 +162,7 @@ final class BreathApplicationModel: ObservableObject {
             lastError = "自动安装 Agent 集成失败：\(error.localizedDescription)"
         }
         refreshEnabledAgents()
+        refreshAgentCLIStatuses()
         isRestoringSelectedSession = true
         startupTask = Task { [weak self] in
             guard let self else { return }
@@ -342,7 +343,7 @@ final class BreathApplicationModel: ObservableObject {
                 Dictionary(uniqueKeysWithValues: adapters.map { adapter in
                     (
                         adapter.kind,
-                        AgentSkillTargetAvailabilityResolver.resolve(
+                        SkillInstallationTargetAvailabilityResolver.resolve(
                             adapter: adapter,
                             status: localStatuses[adapter.kind]
                         )
@@ -595,11 +596,11 @@ enum AgentCLIInstallationStatus: Equatable, Sendable {
     case installed(version: String?, updateAvailable: Bool)
 }
 
-enum AgentSkillTargetAvailabilityResolver {
+enum SkillInstallationTargetAvailabilityResolver {
     static func resolve(
         adapter: AgentAdapterDescriptor,
         status: AgentCLIInstallationStatus?
-    ) -> AgentSkillTargetAvailability {
+    ) -> SkillInstallationTargetAvailability {
         switch status {
         case .installed(let version?, _):
             guard !InstalledAgentCLIDetector.isVersion(
@@ -612,6 +613,9 @@ enum AgentSkillTargetAvailabilityResolver {
             }
             return .available
         case .installed(version: nil, updateAvailable: _):
+            guard InstalledAgentCLIDetector.hasSemanticVersion(adapter.minimumVersion) else {
+                return .available
+            }
             return .unavailable(
                 reason: "\(adapter.displayName) is installed, but its version could not be verified."
             )
@@ -898,6 +902,10 @@ struct InstalledAgentCLIDetector: Sendable {
             if current != required { return current < required }
         }
         return version != minimum
+    }
+
+    static func hasSemanticVersion(_ value: String) -> Bool {
+        version(in: value) != nil
     }
 
     private static func numericComponents(of version: String) -> [Int] {

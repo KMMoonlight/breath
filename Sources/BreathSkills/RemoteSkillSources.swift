@@ -306,7 +306,7 @@ public struct SkillSecurityAudit: Codable, Hashable, Sendable {
     )
 }
 
-public struct SkillsShSearchResult: Codable, Hashable, Identifiable, Sendable {
+public struct SkillsShSearchResult: Decodable, Hashable, Identifiable, Sendable {
     public let id: String
     public let slug: String
     public let name: String
@@ -316,6 +316,7 @@ public struct SkillsShSearchResult: Codable, Hashable, Identifiable, Sendable {
     public let sourceType: String
     public let installURL: URL?
     public let pageURL: URL
+    public let securityAudit: SkillSecurityAudit
 
     public init(
         id: String,
@@ -326,7 +327,8 @@ public struct SkillsShSearchResult: Codable, Hashable, Identifiable, Sendable {
         installs: Int,
         sourceType: String,
         installURL: URL?,
-        pageURL: URL
+        pageURL: URL,
+        securityAudit: SkillSecurityAudit = .unknown
     ) {
         self.id = id
         self.slug = slug
@@ -337,6 +339,37 @@ public struct SkillsShSearchResult: Codable, Hashable, Identifiable, Sendable {
         self.sourceType = sourceType
         self.installURL = installURL
         self.pageURL = pageURL
+        self.securityAudit = securityAudit
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(String.self, forKey: .id),
+            slug: try container.decode(String.self, forKey: .slug),
+            name: try container.decode(String.self, forKey: .name),
+            description: try container.decodeIfPresent(String.self, forKey: .description),
+            source: try container.decode(String.self, forKey: .source),
+            installs: try container.decode(Int.self, forKey: .installs),
+            sourceType: try container.decode(String.self, forKey: .sourceType),
+            installURL: try container.decodeIfPresent(URL.self, forKey: .installURL),
+            pageURL: try container.decode(URL.self, forKey: .pageURL)
+        )
+    }
+
+    public func withSecurityAudit(_ audit: SkillSecurityAudit) -> SkillsShSearchResult {
+        SkillsShSearchResult(
+            id: id,
+            slug: slug,
+            name: name,
+            description: description,
+            source: source,
+            installs: installs,
+            sourceType: sourceType,
+            installURL: installURL,
+            pageURL: pageURL,
+            securityAudit: audit
+        )
     }
 
     enum CodingKeys: String, CodingKey {

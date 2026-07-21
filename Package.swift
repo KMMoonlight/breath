@@ -21,7 +21,11 @@ var targets: [Target] = [
     ),
     .target(
         name: "BreathSkills",
-        dependencies: ["BreathAgents", "BreathCore"]
+        dependencies: [
+            "BreathAgents",
+            "BreathCore",
+            .product(name: "Yams", package: "Yams"),
+        ]
     ),
     .target(
         name: "BreathPersistence",
@@ -128,6 +132,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.10.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.9.4"),
+        .package(url: "https://github.com/jpsim/Yams.git", exact: "6.2.2"),
     ],
     targets: targets
 )

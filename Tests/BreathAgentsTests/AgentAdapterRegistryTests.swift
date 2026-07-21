@@ -10,6 +10,8 @@ struct AgentAdapterRegistryTests {
     func supportedMatrix() {
         let adapters = AgentAdapterRegistry.builtIn.adapters
 
+        #expect(Set(adapters.map(\.kind)) == Set(AgentKind.allCases))
+
         #expect(
             adapters.map(\.kind) == [
                 .codex,

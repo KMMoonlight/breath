@@ -50,7 +50,7 @@ Breath 在主窗口提供面向当前 macOS 用户的全局 Skills 管理。用�
 
 - 内容完全一致：显示“已安装”，不重复写入。
 - 内容不同：在安装预览中展示现有与待安装的 `description` 和文件变化，由用户选择“覆盖”或“跳过”，默认跳过。
-- Breath 不自动改名，也不在目标 Agent 中创建第二个同名 Skill。
+- Breath 不自动改名，也不在同一个 Skill 安装目标中创建第二个同名 Skill。
 
 ### 3.2 候选 Skill
 
@@ -65,7 +65,7 @@ ZIP、GitHub Repo 或 skills.sh 结果解析出的内容先成为候选 Skill。
 
 ### 3.3 安装副本状态
 
-每个“Skill × Agent”副本独立具有以下信息：
+每个“Skill × Skill 安装目标”副本独立具有以下信息：
 
 - Agent、实际目录和存储形式（普通目录或外部符号链接）。
 - 当前 `name`、`description`、内容摘要和解析诊断。
@@ -73,7 +73,7 @@ ZIP、GitHub Repo 或 skills.sh 结果解析出的内容先成为候选 Skill。
 - 可验证上游、引用、安装 Commit 和安装时内容摘要（若存在）。
 - 是否本地修改、是否存在更新、最近检查结果。
 
-批量安装、更新或卸载按“Skill × Agent”分别产生成功或失败结果。一个目标失败不回滚其他目标已经完成的操作，但单个目标内部不能留下半写入目录。
+批量安装、更新或卸载按“Skill × Skill 安装目标”分别产生成功或失败结果。一个目标失败不回滚其他目标已经完成的操作，但单个目标内部不能留下半写入目录。
 
 ## 4. Agent 支持矩阵
 
@@ -93,7 +93,7 @@ Skill 安装目标与 Breath 的“受支持 Agent CLI”使用同一注册表�
 | OpenCode | `${XDG_CONFIG_HOME:-~/.config}/opencode/skills` |
 | Pi | `~/.pi/agent/skills` |
 
-目标 Agent 必须同时满足：
+Skill 安装目标必须同时满足：
 
 1. 属于受支持 Agent CLI。
 2. 本机已安装。
@@ -140,9 +140,9 @@ Skill 安装目标与 Breath 的“受支持 Agent CLI”使用同一注册表�
 
 窗口过窄时隐藏右侧详情，双击或按回车进入完整详情页。列表与所有操作必须支持键盘、VoiceOver、清晰焦点状态，并同时提供中英文文案。
 
-### 5.3 无法识别的项目
+### 5.3 无法识别的 Skill 项目
 
-Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数量，也不伪装成正常 Skill。页面底部单独展示“无法识别的项目”，包含 Agent、路径和错误原因，只提供“在 Finder 中显示”；首版不直接删除这些项目。
+Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数量，也不伪装成正常 Skill。页面底部单独展示“无法识别的 Skill 项目”，包含 Agent、路径和错误原因，只提供“在 Finder 中显示”；首版不直接删除这些项目。
 
 ## 6. 本地发现与刷新
 
@@ -164,12 +164,12 @@ Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数�
 1. 选择 `ZIP` 或 `在线`。
 2. 解析来源。
 3. 展示并多选候选 Skill。
-4. 选择目标 Agent。
+4. 选择 Skill 安装目标。
 5. 查看安装预览。
 6. 确认并执行。
 7. 展示逐 Skill、逐 Agent 结果。
 
-返回上一步保留已有选择；关闭弹窗不写入文件。目标 Agent 每次默认全部不勾选，不自动全选，也不记忆上一次选择；至少选择一个可用 Agent 后才能继续。
+返回上一步保留已有选择；关闭弹窗不写入文件。Skill 安装目标每次默认全部不勾选，不自动全选，也不记忆上一次选择；至少选择一个可用 Agent 后才能继续。
 
 ### 7.1 ZIP
 
@@ -204,7 +204,7 @@ Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数�
 - 候选 Skill 的 `name`、`description` 和规范警告。
 - 文件清单与可展开的 `SKILL.md`。
 - 可选兼容性、许可证与工具声明。
-- 目标 Agent 及真实目录。
+- Skill 安装目标及真实目录。
 - 已安装同名内容、将被替换的文件和默认“跳过”选择。
 - skills.sh 可用的安全审计风险与检查时间。
 
@@ -212,9 +212,9 @@ Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数�
 
 ## 9. 写入与失败语义
 
-Breath 为每个“候选 Skill × 目标 Agent”独立执行：
+Breath 为每个“候选 Skill × Skill 安装目标”独立执行：
 
-1. 重新检查目标 Agent、目录和同名占用。
+1. 重新检查 Skill 安装目标、目录和同名占用。
 2. 在目标目录同一文件系统上暂存完整新目录。
 3. 如果覆盖既有目录，创建仅供本次操作回滚的临时备份。
 4. 通过原子重命名替换单个目标。
@@ -223,11 +223,11 @@ Breath 为每个“候选 Skill × 目标 Agent”独立执行：
 
 某个目标权限不足、磁盘空间不足、被外部进程改变或写入失败时，该目标恢复原状并单独报错；其他目标继续执行并保留成功结果。结果页将成功项和失败项分别列出，不用一个总错误掩盖部分成功。
 
-Breath 自己安装的 Skill 始终是目标 Agent 目录中的完整独立副本，不创建符号链接，不在 Breath 应用数据目录保存 Skill 内容副本。
+Breath 自己安装的 Skill 始终是 Skill 安装目标目录中的完整独立副本，不创建符号链接，不在 Breath 应用数据目录保存 Skill 内容副本。
 
 ## 10. 安装记录与对账
 
-GitHub 或 skills.sh 安装成功后，Breath 在现有 SQLite 数据库中保存非侵入式安装记录，至少包含：
+Breath 安装成功后，在现有 SQLite 数据库中保存非侵入式安装记录。ZIP 记录只包含来源分类及副本身份；GitHub 或 skills.sh 记录还至少包含：
 
 - Agent 类型。
 - 安装路径。
@@ -239,7 +239,9 @@ GitHub 或 skills.sh 安装成功后，Breath 在现有 SQLite 数据库中保�
 - 安装时内容摘要。
 - 安装与最近更新时间。
 
-Breath 不向 Skill 目录写入 `.breath-*` 文件、扩展属性或其他私有标记。数据库记录只是上游关联，不是已安装状态的事实来源：
+ZIP 来源分类不构成 Skill 上游，不参与更新检查，也不产生“本地已修改”状态。
+
+Breath 不向 Skill 目录写入 `.breath-*` 文件、扩展属性或其他私有标记。数据库记录保存来源分类；只有远程记录包含上游关联。记录不是已安装状态的事实来源：
 
 - 记录存在而目录消失：移除或失效该记录。
 - 路径和 Skill 身份一致但内容变化：标记“本地已修改”，保留上游。
@@ -328,7 +330,7 @@ skills.sh 被封装为可替换 Provider。接口变化、限流或不可用时�
 3. 内容一致的跨 Agent 副本聚合为一行；同名但内容不同的 Skill 分行并展示各自 `description`，不显示“同名冲突”标签。
 4. 无法识别的目录单独展示路径与错误，不计入 Skill 数量，也不能在页面直接删除。
 5. ZIP、指定公开 GitHub Repo 和 skills.sh 关键词搜索都能产生候选列表；多 Skill 来源不会默认全装。
-6. 目标 Agent 默认全部不选；未安装、版本不兼容或真实 Skill 路径无法确认的 Agent 禁用并解释原因。
+6. Skill 安装目标默认全部不选；未安装、版本不兼容或真实 Skill 路径无法确认的 Agent 禁用并解释原因。
 7. 任意安装都经过文件、`SKILL.md`、目标和覆盖内容预览；导入过程不执行来源代码。
 8. 同一个 Agent 已有同名同内容时不重复写入；同名不同内容时默认跳过，只有用户明确选择才覆盖。
 9. 批量安装允许部分成功，失败目标保持原状并单独报告，成功目标不回滚。
@@ -350,6 +352,7 @@ skills.sh 被封装为可替换 Provider。接口变化、限流或不可用时�
 - [ADR 0032：原生管理全局 Skill，不依赖 Node.js 或 Breath 后端](../adr/0032-manage-global-skills-natively-without-node-or-backend.md)
 - [ADR 0033：将 Skill 直接安装到各 Agent 目录](../adr/0033-install-skills-directly-into-agent-directories.md)
 - [ADR 0034：在 Skill 目录之外保存来源记录](../adr/0034-store-skill-provenance-outside-skill-directories.md)
+- [ADR 0035：区分 Skill 安装来源与 Skill 上游](../adr/0035-distinguish-skill-origin-from-upstream.md)
 - [Breath 领域词汇](../../CONTEXT.md)
 - [Agent Skills 格式规范](https://agentskills.io/specification)
 - [Agent Skills 客户端实现指南](https://agentskills.io/client-implementation/adding-skills-support)

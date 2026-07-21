@@ -63,29 +63,54 @@ struct AgentCLIInstallationStatusTests {
         )
 
         #expect(
-            AgentSkillTargetAvailabilityResolver.resolve(
+            SkillInstallationTargetAvailabilityResolver.resolve(
                 adapter: adapter,
                 status: .installed(version: "0.144.3", updateAvailable: false)
             ) == .available
         )
         #expect(
-            AgentSkillTargetAvailabilityResolver.resolve(
+            SkillInstallationTargetAvailabilityResolver.resolve(
                 adapter: adapter,
                 status: .installed(version: "0.120.0", updateAvailable: true)
             ).isSelectable == false
         )
         #expect(
-            AgentSkillTargetAvailabilityResolver.resolve(
+            SkillInstallationTargetAvailabilityResolver.resolve(
                 adapter: adapter,
                 status: .installed(version: nil, updateAvailable: false)
             ).isSelectable == false
         )
         #expect(
-            AgentSkillTargetAvailabilityResolver.resolve(
+            SkillInstallationTargetAvailabilityResolver.resolve(
                 adapter: adapter,
                 status: .notInstalled
             ).isSelectable == false
         )
+    }
+
+    @Test("every supported Agent can be detected and selected as a Skill target")
+    func everyGlobalSkillTargetHasInstallationDetection() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        for adapter in AgentAdapterRegistry.builtIn.adapters {
+            try writeExecutable(
+                named: adapter.kind.cliExecutableName,
+                in: temporaryDirectory,
+                contents: "#!/bin/sh\necho '\(adapter.minimumVersion)'\n"
+            )
+        }
+        let detector = InstalledAgentCLIDetector(searchDirectories: [temporaryDirectory])
+
+        for adapter in AgentAdapterRegistry.builtIn.adapters {
+            let status = detector.installationStatus(for: adapter)
+            #expect(
+                SkillInstallationTargetAvailabilityResolver.resolve(
+                    adapter: adapter,
+                    status: status
+                ) == .available,
+                "\(adapter.displayName) must have working installation detection"
+            )
+        }
     }
 
     @Test("flags an update when the official release is newer than the compatible minimum")

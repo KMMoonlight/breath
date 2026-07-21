@@ -31,6 +31,33 @@ struct WindowLayoutSourceTests {
         let tasks = try #require(source.range(of: "WorkbenchAccessibility.openTaskView"))
         let skills = try #require(source.range(of: "WorkbenchAccessibility.openSkills"))
         #expect(tasks.lowerBound < skills.lowerBound)
+
+        let skillsSource = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/SkillsView.swift"),
+            encoding: .utf8
+        )
+        #expect(skillsSource.contains("NSApplication.didBecomeActiveNotification"))
+        #expect(skillsSource.contains("GeometryReader"))
+        #expect(skillsSource.contains("NavigationStack"))
+        #expect(skillsSource.contains("NavigationLink(value: skill.id)"))
+
+        let serviceSource = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathSkills/BreathSkills.swift"),
+            encoding: .utf8
+        )
+        #expect(serviceSource.contains("SkillDirectoryEventMonitor"))
+        #expect(!serviceSource.contains("every interval: Duration = .seconds(1)"))
+        let managementSource = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/SkillManagementSheets.swift"
+            ),
+            encoding: .utf8
+        )
+        #expect(managementSource.contains("ForEach(item.candidate.warnings)"))
+        #expect(managementSource.contains("RiskBadge(audit: item.securityAudit"))
+        #expect(managementSource.contains("item.securityAudit.checkedAt"))
+        #expect(managementSource.contains("confirmedRiskCandidateIDs"))
+        #expect(managementSource.contains("confirmedRiskCandidateIDs: confirmedRiskCandidateIDs"))
     }
 
     @Test("Git error alerts keep long command output compact")

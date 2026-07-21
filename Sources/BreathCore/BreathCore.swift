@@ -51,7 +51,7 @@ public enum TerminalState: String, Equatable, Codable, Sendable {
     case turnCompleted
 }
 
-public enum AgentKind: String, Equatable, Hashable, Codable, Sendable {
+public enum AgentKind: String, CaseIterable, Equatable, Hashable, Codable, Sendable {
     case codex
     case claudeCode
     case geminiCLI

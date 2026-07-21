@@ -43,7 +43,7 @@ struct ApplicationLocalizer {
 
     private var localizationIdentifier: String {
         switch resolvedLanguage {
-        case .chinese: "zh-Hans"
+        case .chinese: "zh-hans"
         case .english, .system: "en"
         }
     }

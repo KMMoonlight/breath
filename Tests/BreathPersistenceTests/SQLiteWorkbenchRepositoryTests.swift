@@ -154,7 +154,7 @@ struct SQLiteWorkbenchRepositoryTests {
         }
     }
 
-    @Test("remote Skill provenance survives a repository round trip")
+    @Test("remote and ZIP Skill provenance survive a repository round trip")
     func skillInstallationRecordRoundTrip() async throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("breath-skill-records-\(UUID().uuidString).sqlite")
@@ -164,22 +164,38 @@ struct SQLiteWorkbenchRepositoryTests {
             agent: .codex,
             installationDirectory: URL(fileURLWithPath: "/Users/tester/.codex/skills/review"),
             skillName: "review",
-            source: .github,
-            repository: "example/skills",
-            sourceRelativePath: "skills/review",
-            reference: SkillSourceReference(kind: .branch, value: "main"),
-            resolvedCommit: "0123456789abcdef",
+            origin: .remote(SkillRemoteProvenance(
+                source: .github,
+                repository: "example/skills",
+                sourceRelativePath: "skills/review",
+                reference: SkillSourceReference(kind: .branch, value: "main"),
+                resolvedCommit: "0123456789abcdef",
+                catalogSkillID: "example/skills/review"
+            )),
             installedContentDigest: "digest-v1",
             installedAt: Date(timeIntervalSince1970: 100),
             updatedAt: Date(timeIntervalSince1970: 200)
         )
+        let zipRecord = SkillInstallationRecord(
+            agent: .claudeCode,
+            installationDirectory: URL(fileURLWithPath: "/Users/tester/.claude/skills/local"),
+            skillName: "local",
+            origin: .zip,
+            installedContentDigest: "digest-local",
+            installedAt: Date(timeIntervalSince1970: 300),
+            updatedAt: Date(timeIntervalSince1970: 300)
+        )
 
         try await repository.saveSkillInstallationRecord(record)
+        try await repository.saveSkillInstallationRecord(zipRecord)
 
         let reopened = try SQLiteWorkbenchRepository(databaseURL: databaseURL)
-        #expect(try await reopened.loadSkillInstallationRecords() == [record])
+        #expect(try await reopened.loadSkillInstallationRecords() == [zipRecord, record])
         try await reopened.removeSkillInstallationRecord(
             installationDirectory: record.installationDirectory
+        )
+        try await reopened.removeSkillInstallationRecord(
+            installationDirectory: zipRecord.installationDirectory
         )
         #expect(try await reopened.loadSkillInstallationRecords().isEmpty)
     }

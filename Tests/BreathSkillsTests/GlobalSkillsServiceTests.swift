@@ -15,7 +15,7 @@ struct GlobalSkillsServiceTests {
             directoryName: "review",
             manifest: """
                 ---
-                name: review
+                name: review # YAML comments are not part of the value
                 description: Review a change before it ships.
                 ---
                 # Review
@@ -64,11 +64,13 @@ struct GlobalSkillsServiceTests {
                 agent: .codex,
                 installationDirectory: copy.directory,
                 skillName: skill.name,
-                source: .github,
-                repository: "example/skills",
-                sourceRelativePath: "review",
-                reference: SkillSourceReference(kind: .branch, value: "main"),
-                resolvedCommit: "commit-1",
+                origin: .remote(SkillRemoteProvenance(
+                    source: .github,
+                    repository: "example/skills",
+                    sourceRelativePath: "review",
+                    reference: SkillSourceReference(kind: .branch, value: "main"),
+                    resolvedCommit: "commit-1"
+                )),
                 installedContentDigest: skill.contentDigest,
                 installedAt: .distantPast,
                 updatedAt: .distantPast
@@ -179,7 +181,7 @@ struct GlobalSkillsServiceTests {
             homeDirectory: fixture.home,
             environment: [:]
         )
-        var updates = service.snapshots(every: .milliseconds(20)).makeAsyncIterator()
+        var updates = service.snapshots(debouncedBy: .milliseconds(20)).makeAsyncIterator()
         let initial = await updates.next()
         #expect(initial?.skills.isEmpty == true)
 
@@ -223,11 +225,13 @@ struct GlobalSkillsServiceTests {
                 agent: .codex,
                 installationDirectory: copy.directory,
                 skillName: "review",
-                source: .github,
-                repository: "example/skills",
-                sourceRelativePath: "review",
-                reference: SkillSourceReference(kind: .branch, value: "main"),
-                resolvedCommit: "commit-1",
+                origin: .remote(SkillRemoteProvenance(
+                    source: .github,
+                    repository: "example/skills",
+                    sourceRelativePath: "review",
+                    reference: SkillSourceReference(kind: .branch, value: "main"),
+                    resolvedCommit: "commit-1"
+                )),
                 installedContentDigest: digest,
                 installedAt: .distantPast,
                 updatedAt: .distantPast
@@ -267,9 +271,11 @@ struct GlobalSkillsServiceTests {
             ),
             "review/references/checklist.md": Data("Check behavior and tests.".utf8),
         ]).write(to: zipURL)
+        let records = MemorySkillRecordRepository()
         let service = GlobalSkillsService(
             homeDirectory: fixture.home,
-            environment: [:]
+            environment: [:],
+            recordRepository: records
         )
 
         let batch = try await service.discoverSkills(inZip: zipURL)
@@ -295,8 +301,16 @@ struct GlobalSkillsServiceTests {
         let installedNames = try FileManager.default.contentsOfDirectory(atPath: installed.path)
         #expect(!installedNames.contains { $0.hasPrefix(".breath") })
         let snapshot = await service.scan()
-        #expect(snapshot.skills.first?.copies.first?.source == .unknown)
+        #expect(snapshot.skills.first?.copies.first?.source == .zip)
         #expect(snapshot.skills.first?.copies.first?.updateState == .unavailable)
+        #expect(try await records.loadSkillInstallationRecords().first?.source == .zip)
+        try Data("local ZIP edit".utf8).write(
+            to: installed.appendingPathComponent("local.md")
+        )
+        let editedZIP = await service.scan()
+        #expect(editedZIP.skills.first?.copies.first?.source == .zip)
+        #expect(editedZIP.skills.first?.copies.first?.isLocallyModified == false)
+        #expect(editedZIP.skills.first?.copies.first?.updateState == .unavailable)
     }
 
     @Test("unsafe ZIP paths are rejected before anything reaches an Agent directory")
@@ -470,6 +484,128 @@ struct GlobalSkillsServiceTests {
         #expect(replacedManifest.contains("Replacement review behavior"))
     }
 
+    @Test("installation rechecks Agent availability and same-name aliases after preview")
+    func rechecksInstallationTargetBeforeCommit() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let zipURL = fixture.home.appendingPathComponent("review.zip")
+        try StoredZIP.make([
+            "review/SKILL.md": Data(
+                """
+                ---
+                name: review
+                description: Review before shipping.
+                ---
+                """.utf8
+            ),
+        ]).write(to: zipURL)
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            targetAvailability: [.codex: .available]
+        )
+        let batch = try await service.discoverSkills(inZip: zipURL)
+        let candidate = try #require(batch.candidates.first)
+        let preview = await service.previewInstallation(
+            batch: batch,
+            candidateIDs: [candidate.id],
+            targetAgents: [.codex]
+        )
+
+        await service.updateTargetAvailability([
+            .codex: .unavailable(reason: "Codex is no longer available."),
+        ])
+        let unavailable = await service.install(preview)
+        #expect(unavailable.items.first?.status == .failed)
+        #expect(!FileManager.default.fileExists(
+            atPath: try fixture.skillRoot(for: .codex).appendingPathComponent("review").path
+        ))
+
+        let secondBatch = try await service.discoverSkills(inZip: zipURL)
+        let secondCandidate = try #require(secondBatch.candidates.first)
+        await service.updateTargetAvailability([.codex: .available])
+        let secondPreview = await service.previewInstallation(
+            batch: secondBatch,
+            candidateIDs: [secondCandidate.id],
+            targetAgents: [.codex]
+        )
+        try fixture.writeSkill(
+            agent: .codex,
+            directoryName: "alias-directory",
+            manifest: """
+                ---
+                name: review
+                description: Installed elsewhere after preview.
+                ---
+                """
+        )
+
+        let stale = await service.install(secondPreview)
+        #expect(stale.items.first?.status == .failed)
+        #expect(stale.items.first?.message.contains("changed after preview") == true)
+        #expect(!FileManager.default.fileExists(
+            atPath: try fixture.skillRoot(for: .codex).appendingPathComponent("review").path
+        ))
+        #expect(FileManager.default.fileExists(
+            atPath: try fixture.skillRoot(for: .codex)
+                .appendingPathComponent("alias-directory/SKILL.md").path
+        ))
+    }
+
+    @Test("valid candidates remain installable when another candidate is invalid")
+    func installsValidCandidatesBesideRejectedCandidates() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let zipURL = fixture.home.appendingPathComponent("partially-valid.zip")
+        try StoredZIP.make([
+            "review/SKILL.md": Data(
+                """
+                ---
+                name: review
+                description: Review valid changes.
+                ---
+                """.utf8
+            ),
+            "broken/SKILL.md": Data(
+                """
+                ---
+                name: broken
+                ---
+                """.utf8
+            ),
+            "missing-manifest/README.md": Data("Not a Skill manifest.".utf8),
+            "malformed/SKILL.md": Data(
+                """
+                ---
+                name: malformed
+                description: [unterminated
+                ---
+                """.utf8
+            ),
+        ]).write(to: zipURL)
+        let service = GlobalSkillsService(homeDirectory: fixture.home, environment: [:])
+
+        let batch = try await service.discoverSkills(inZip: zipURL)
+
+        let candidate = try #require(batch.candidates.first)
+        #expect(batch.candidates.map(\.name) == ["review"])
+        #expect(batch.rejectedCandidates.count == 3)
+        let rejections = Dictionary(uniqueKeysWithValues: batch.rejectedCandidates.map {
+            ($0.sourceRelativePath, $0.message)
+        })
+        #expect(rejections["broken"]?.contains("description") == true)
+        #expect(rejections["missing-manifest"]?.contains("SKILL.md") == true)
+        #expect(rejections["malformed"]?.contains("frontmatter") == true)
+        let preview = await service.previewInstallation(
+            batch: batch,
+            candidateIDs: [candidate.id],
+            targetAgents: [.codex]
+        )
+        let result = await service.install(preview)
+        #expect(result.items.first?.status == .succeeded)
+        #expect(result.snapshot.skills.map(\.name) == ["review"])
+    }
+
     @Test("public GitHub installation records the resolved upstream without touching Skill files")
     func installsFromGitHubWithProvenance() async throws {
         let fixture = try SkillsFixture()
@@ -632,8 +768,9 @@ struct GlobalSkillsServiceTests {
         let replacement = await service.install(zipPreview)
 
         #expect(replacement.items.first?.status == .succeeded)
-        #expect(try await records.loadSkillInstallationRecords().isEmpty)
-        #expect(replacement.snapshot.skills.first?.copies.first?.source == .unknown)
+        #expect(try await records.loadSkillInstallationRecords().count == 1)
+        #expect(try await records.loadSkillInstallationRecords().first?.source == .zip)
+        #expect(replacement.snapshot.skills.first?.copies.first?.source == .zip)
         #expect(replacement.snapshot.skills.first?.copies.first?.updateState == .unavailable)
     }
 
@@ -729,8 +866,10 @@ struct GlobalSkillsServiceTests {
         )
 
         let results = try await service.searchSkillsSh(query: "review")
-        #expect(results == [searchResult])
-        let batch = try await service.discoverSkill(fromSkillsSh: searchResult)
+        let auditedResult = try #require(results.first)
+        #expect(auditedResult.securityAudit.riskLevel == .high)
+        #expect(auditedResult.securityAudit.checkedAt == Date(timeIntervalSince1970: 500))
+        let batch = try await service.discoverSkill(fromSkillsSh: auditedResult)
         let candidate = try #require(batch.candidates.first)
         #expect(candidate.source == .skillsSh)
         #expect(candidate.securityAudit.riskLevel == .high)
@@ -745,7 +884,7 @@ struct GlobalSkillsServiceTests {
         #expect(unconfirmed.items.first?.status == .failed)
         #expect(unconfirmed.items.first?.message.contains("high-risk") == true)
 
-        let confirmedBatch = try await service.discoverSkill(fromSkillsSh: searchResult)
+        let confirmedBatch = try await service.discoverSkill(fromSkillsSh: auditedResult)
         let confirmedCandidate = try #require(confirmedBatch.candidates.first)
         let confirmedPreview = await service.previewInstallation(
             batch: confirmedBatch,
@@ -759,10 +898,7 @@ struct GlobalSkillsServiceTests {
         #expect(confirmed.items.first?.status == .succeeded)
         #expect(try await records.loadSkillInstallationRecords().first?.source == .skillsSh)
         #expect(await catalog.queries() == ["review"])
-        #expect(await catalog.auditedIDs() == [
-            "example/skills/review",
-            "example/skills/review",
-        ])
+        #expect(await catalog.auditedIDs() == ["example/skills/review"])
     }
 
     @Test("update checks are explicit, ignore unrelated commits, and protect locally modified targets")
@@ -814,6 +950,11 @@ struct GlobalSkillsServiceTests {
         #expect((await service.install(initialPreview)).items.allSatisfy {
             $0.status == .succeeded
         })
+        let initialRecords = try await records.loadSkillInstallationRecords()
+        let installedAtByPath = Dictionary(uniqueKeysWithValues: initialRecords.map {
+            ($0.installationDirectory.standardizedFileURL.path, $0.installedAt)
+        })
+        try await Task.sleep(for: .milliseconds(10))
         #expect(await github.requestCount() == 1)
 
         let claudeDirectory = try fixture.skillRoot(for: .claudeCode)
@@ -846,7 +987,11 @@ struct GlobalSkillsServiceTests {
         let installed = await service.install(updatePreview)
         #expect(installed.items.allSatisfy { $0.status == .succeeded })
         let updatedRecords = try await records.loadSkillInstallationRecords()
-        #expect(Set(updatedRecords.map(\.resolvedCommit)) == ["commit-2"])
+        #expect(Set(updatedRecords.compactMap(\.resolvedCommit)) == ["commit-2"])
+        #expect(updatedRecords.allSatisfy {
+            $0.installedAt == installedAtByPath[$0.installationDirectory.standardizedFileURL.path]
+                && $0.updatedAt > $0.installedAt
+        })
         #expect(try String(
             contentsOf: claudeDirectory.appendingPathComponent("SKILL.md"),
             encoding: .utf8
@@ -855,10 +1000,210 @@ struct GlobalSkillsServiceTests {
             atPath: claudeDirectory.appendingPathComponent("local.md").path
         ))
 
+        await service.beginUpdateCheckSession()
+        let nextPageSession = await service.checkForUpdates()
+        #expect(!nextPageSession.usedSessionCache)
+        #expect(await github.requestCount() == 3)
+
         await github.set(archiveData: versionTwo, commit: "commit-3")
         let unrelatedCommit = await service.checkForUpdates(force: true)
         #expect(unrelatedCommit.updates.isEmpty)
         #expect(unrelatedCommit.failures.isEmpty)
+    }
+
+    @Test("skills.sh updates preserve audits and require high-risk confirmation")
+    func skillsShUpdatesRequireConfirmation() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let versionOne = StoredZIP.make([
+            "example-skills-commit/review/SKILL.md": Data(
+                """
+                ---
+                name: review
+                description: Review version one.
+                ---
+                v1
+                """.utf8
+            ),
+        ])
+        let versionTwo = StoredZIP.make([
+            "example-skills-commit/review/SKILL.md": Data(
+                """
+                ---
+                name: review
+                description: Review version two.
+                ---
+                v2
+                """.utf8
+            ),
+        ])
+        let github = MutableGitHubProvider(archiveData: versionOne, commit: "commit-1")
+        let catalogResult = SkillsShSearchResult(
+            id: "example/skills/review",
+            slug: "review",
+            name: "Review",
+            description: "Review a change.",
+            source: "example/skills",
+            installs: 42,
+            sourceType: "github",
+            installURL: URL(string: "https://github.com/example/skills"),
+            pageURL: try #require(URL(string: "https://skills.sh/example/skills/review"))
+        )
+        let catalog = StubSkillsShProvider(
+            results: [catalogResult],
+            audit: SkillSecurityAudit(
+                riskLevel: .critical,
+                summary: "Critical audit finding.",
+                checkedAt: Date(timeIntervalSince1970: 900)
+            )
+        )
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            recordRepository: MemorySkillRecordRepository(),
+            githubProvider: github,
+            skillsShProvider: catalog
+        )
+        let auditedResult = try #require(
+            try await service.searchSkillsSh(query: "review").first
+        )
+        let batch = try await service.discoverSkill(fromSkillsSh: auditedResult)
+        let candidate = try #require(batch.candidates.first)
+        let initialPreview = await service.previewInstallation(
+            batch: batch,
+            candidateIDs: [candidate.id],
+            targetAgents: [.codex]
+        )
+        #expect((await service.install(
+            initialPreview,
+            confirmedRiskCandidateIDs: [candidate.id]
+        )).items.first?.status == .succeeded)
+
+        await github.set(archiveData: versionTwo, commit: "commit-2")
+        let update = try #require((await service.checkForUpdates()).updates.first)
+        #expect(update.candidate.securityAudit.riskLevel == .critical)
+        #expect(update.candidate.securityAudit.checkedAt == Date(timeIntervalSince1970: 900))
+        let preview = await service.previewUpdate(update, targetAgents: [.codex])
+
+        let result = await service.install(preview)
+
+        #expect(result.items.first?.status == .failed)
+        #expect(result.items.first?.message.contains("high-risk") == true)
+        #expect(await catalog.auditedIDs() == [
+            "example/skills/review",
+            "example/skills/review",
+        ])
+    }
+
+    @Test("all supported Agents scan, install, update, and uninstall Skills")
+    func everyAgentSupportsTheFullSkillLifecycle() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let agents = Set(AgentKind.allCases)
+        let versionOne = StoredZIP.make([
+            "example-skills-commit/review/SKILL.md": Data(
+                """
+                ---
+                name: review
+                description: Review version one.
+                ---
+                """.utf8
+            ),
+        ])
+        let versionTwo = StoredZIP.make([
+            "example-skills-commit/review/SKILL.md": Data(
+                """
+                ---
+                name: review
+                description: Review version two.
+                ---
+                """.utf8
+            ),
+        ])
+        let github = MutableGitHubProvider(archiveData: versionOne, commit: "commit-1")
+        let trash = RecordingSkillTrash(
+            recoveryDirectory: fixture.home.appendingPathComponent("Trash", isDirectory: true)
+        )
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            recordRepository: MemorySkillRecordRepository(),
+            githubProvider: github,
+            trash: trash
+        )
+        let batch = try await service.discoverSkills(fromGitHub: "example/skills")
+        let candidate = try #require(batch.candidates.first)
+        let installPreview = await service.previewInstallation(
+            batch: batch,
+            candidateIDs: [candidate.id],
+            targetAgents: agents
+        )
+
+        let installed = await service.install(installPreview)
+
+        #expect(installed.items.count == agents.count)
+        #expect(installed.items.allSatisfy { $0.status == .succeeded })
+        let installedSkill = try #require(installed.snapshot.skills.first)
+        #expect(Set(installedSkill.copies.map(\.agent)) == agents)
+
+        await github.set(archiveData: versionTwo, commit: "commit-2")
+        let update = try #require((await service.checkForUpdates()).updates.first)
+        #expect(Set(update.targets.map(\.agent)) == agents)
+        let updatePreview = await service.previewUpdate(update, targetAgents: agents)
+        let updated = await service.install(updatePreview)
+        #expect(updated.items.allSatisfy { $0.status == .succeeded })
+        #expect(updated.snapshot.skills.first?.description == "Review version two.")
+
+        let skill = try #require(updated.snapshot.skills.first)
+        let uninstallPreview = await service.previewUninstall(
+            skillID: skill.id,
+            targetAgents: agents
+        )
+        let uninstalled = await service.uninstall(uninstallPreview)
+        #expect(uninstalled.items.count == agents.count)
+        #expect(uninstalled.items.allSatisfy { $0.status == .succeeded })
+        #expect(uninstalled.snapshot.skills.isEmpty)
+    }
+
+    @Test("optional Skill manifest declarations are retained for installation review")
+    func parsesOptionalManifestDeclarations() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let zipURL = fixture.home.appendingPathComponent("declared.zip")
+        try StoredZIP.make([
+            "review/SKILL.md": Data(
+                """
+                ---
+                name: review
+                description: >-
+                  Review a
+
+                  change.
+                license: Apache-2.0
+                compatibility: Requires git 2.40 or newer.
+                metadata:
+                  owner: platform
+                  category: engineering
+                allowed-tools:
+                  - Read
+                  - Grep
+                  - Glob
+                ---
+                """.utf8
+            ),
+        ]).write(to: zipURL)
+        let service = GlobalSkillsService(homeDirectory: fixture.home, environment: [:])
+
+        let candidate = try #require(
+            try await service.discoverSkills(inZip: zipURL).candidates.first
+        )
+
+        #expect(candidate.declarations.license == "Apache-2.0")
+        #expect(candidate.description == "Review a\nchange.")
+        #expect(candidate.declarations.compatibility == "Requires git 2.40 or newer.")
+        #expect(candidate.declarations.metadata?.contains("owner: platform") == true)
+        #expect(candidate.declarations.metadata?.contains("category: engineering") == true)
+        #expect(candidate.declarations.allowedTools == "- Read\n- Grep\n- Glob")
     }
 
     @Test("uninstall trashes physical copies but removes only an external link")
@@ -915,6 +1260,44 @@ struct GlobalSkillsServiceTests {
         ))
         #expect(!FileManager.default.fileExists(atPath: claudeLink.path))
         #expect(FileManager.default.fileExists(atPath: external.path))
+        #expect(await trash.trashedItems().map(\.lastPathComponent) == ["review"])
+    }
+
+    @Test("uninstall reports source-record cleanup failures after preserving disk truth")
+    func reportsUninstallRecordCleanupFailure() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        try fixture.writeSkill(
+            agent: .codex,
+            directoryName: "review",
+            manifest: """
+                ---
+                name: review
+                description: Review before shipping.
+                ---
+                """
+        )
+        let trash = RecordingSkillTrash(
+            recoveryDirectory: fixture.home.appendingPathComponent("Trash", isDirectory: true)
+        )
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            recordRepository: FailingRemovalSkillRecordRepository(),
+            trash: trash
+        )
+        let skill = try #require((await service.scan()).skills.first)
+        let preview = await service.previewUninstall(
+            skillID: skill.id,
+            targetAgents: [.codex]
+        )
+
+        let result = await service.uninstall(preview)
+
+        #expect(result.items.first?.status == .failed)
+        #expect(result.items.first?.message.contains("source record") == true)
+        #expect(result.items.first?.diagnostic?.contains("SkillInstallationError") == true)
+        #expect(result.snapshot.skills.isEmpty)
         #expect(await trash.trashedItems().map(\.lastPathComponent) == ["review"])
     }
 }
@@ -1019,6 +1402,16 @@ private actor SelectivelyFailingSkillRecordRepository: SkillInstallationRecordRe
 
     func removeSkillInstallationRecord(installationDirectory: URL) async throws {
         records.removeAll { $0.installationDirectory == installationDirectory }
+    }
+}
+
+private actor FailingRemovalSkillRecordRepository: SkillInstallationRecordRepository {
+    func loadSkillInstallationRecords() async throws -> [SkillInstallationRecord] { [] }
+
+    func saveSkillInstallationRecord(_ record: SkillInstallationRecord) async throws {}
+
+    func removeSkillInstallationRecord(installationDirectory: URL) async throws {
+        throw CocoaError(.fileWriteUnknown)
     }
 }
 
@@ -1178,7 +1571,12 @@ private actor RecordingSkillTrash: SkillTrashing {
             at: recoveryDirectory,
             withIntermediateDirectories: true
         )
-        let destination = recoveryDirectory.appendingPathComponent(url.lastPathComponent)
+        var destination = recoveryDirectory.appendingPathComponent(url.lastPathComponent)
+        if FileManager.default.fileExists(atPath: destination.path) {
+            destination = recoveryDirectory.appendingPathComponent(
+                "\(UUID().uuidString)-\(url.lastPathComponent)"
+            )
+        }
         try FileManager.default.moveItem(at: url, to: destination)
         items.append(destination)
     }

@@ -166,6 +166,30 @@ struct SkillInstallationCommitter: @unchecked Sendable {
         } else if fileManager.fileExists(atPath: destination.path) {
             throw SkillInstallationError.stalePreview
         }
+        let expectedSameNamePaths = Set(
+            [item.existingDirectory?.standardizedFileURL.path].compactMap { $0 }
+        )
+        guard try sameNameSkillPaths(
+            in: parent,
+            skillName: item.candidate.name
+        ) == expectedSameNamePaths else {
+            throw SkillInstallationError.stalePreview
+        }
+
+        let existingRecord: SkillInstallationRecord?
+        if let recordRepository {
+            do {
+                existingRecord = try await recordRepository.loadSkillInstallationRecords()
+                    .first {
+                        $0.installationDirectory.standardizedFileURL
+                            == destination.standardizedFileURL
+                    }
+            } catch {
+                throw SkillInstallationError.recordPersistenceFailed
+            }
+        } else {
+            existingRecord = nil
+        }
 
         let token = UUID().uuidString
         let stage = parent.appendingPathComponent(".breath-stage-\(token)", isDirectory: true)
@@ -174,15 +198,22 @@ struct SkillInstallationCommitter: @unchecked Sendable {
         do {
             try fileManager.copyItem(at: item.candidate.directory, to: stage)
             if fileManager.fileExists(atPath: destination.path) {
-                try fileManager.moveItem(at: destination, to: backup)
+                _ = try fileManager.replaceItemAt(
+                    destination,
+                    withItemAt: stage,
+                    backupItemName: backup.lastPathComponent,
+                    options: []
+                )
                 movedExisting = true
+            } else {
+                try fileManager.moveItem(at: stage, to: destination)
             }
-            try fileManager.moveItem(at: stage, to: destination)
 
-            if let recordRepository,
-               item.candidate.remoteProvenance != nil || item.removesExistingProvenance
-            {
+            if let recordRepository {
                 let timestamp = now()
+                let installedAt = item.existingDirectory == nil
+                    ? timestamp
+                    : existingRecord?.installedAt ?? timestamp
                 do {
                     if let provenance = item.candidate.remoteProvenance {
                         try await recordRepository.saveSkillInstallationRecord(
@@ -190,13 +221,21 @@ struct SkillInstallationCommitter: @unchecked Sendable {
                                 agent: item.targetID.agent,
                                 installationDirectory: destination,
                                 skillName: item.candidate.name,
-                                source: provenance.source,
-                                repository: provenance.repository,
-                                sourceRelativePath: provenance.sourceRelativePath,
-                                reference: provenance.reference,
-                                resolvedCommit: provenance.resolvedCommit,
+                                origin: .remote(provenance),
                                 installedContentDigest: item.candidate.contentDigest,
-                                installedAt: timestamp,
+                                installedAt: installedAt,
+                                updatedAt: timestamp
+                            )
+                        )
+                    } else if item.candidate.source == .zip {
+                        try await recordRepository.saveSkillInstallationRecord(
+                            SkillInstallationRecord(
+                                agent: item.targetID.agent,
+                                installationDirectory: destination,
+                                skillName: item.candidate.name,
+                                origin: .zip,
+                                installedContentDigest: item.candidate.contentDigest,
+                                installedAt: installedAt,
                                 updatedAt: timestamp
                             )
                         )
@@ -206,9 +245,17 @@ struct SkillInstallationCommitter: @unchecked Sendable {
                         )
                     }
                 } catch {
-                    try? fileManager.removeItem(at: destination)
-                    if movedExisting {
-                        try? fileManager.moveItem(at: backup, to: destination)
+                    if movedExisting,
+                       fileManager.fileExists(atPath: backup.path)
+                    {
+                        _ = try? fileManager.replaceItemAt(
+                            destination,
+                            withItemAt: backup,
+                            backupItemName: nil,
+                            options: []
+                        )
+                    } else {
+                        try? fileManager.removeItem(at: destination)
                     }
                     throw SkillInstallationError.recordPersistenceFailed
                 }
@@ -216,11 +263,46 @@ struct SkillInstallationCommitter: @unchecked Sendable {
             if movedExisting { try? fileManager.removeItem(at: backup) }
         } catch {
             try? fileManager.removeItem(at: stage)
-            if movedExisting, !fileManager.fileExists(atPath: destination.path) {
-                try? fileManager.moveItem(at: backup, to: destination)
+            if movedExisting,
+               fileManager.fileExists(atPath: backup.path)
+            {
+                if fileManager.fileExists(atPath: destination.path) {
+                    _ = try? fileManager.replaceItemAt(
+                        destination,
+                        withItemAt: backup,
+                        backupItemName: nil,
+                        options: []
+                    )
+                } else {
+                    try? fileManager.moveItem(at: backup, to: destination)
+                }
             }
             throw error
         }
+    }
+
+    private func sameNameSkillPaths(
+        in root: URL,
+        skillName: String
+    ) throws -> Set<String> {
+        guard fileManager.fileExists(atPath: root.path) else { return [] }
+        let children = try fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        )
+        var matches: Set<String> = []
+        for child in children {
+            let resolved = child.resolvingSymlinksInPath()
+            guard let manifest = try? String(
+                contentsOf: resolved.appendingPathComponent("SKILL.md"),
+                encoding: .utf8
+            ), let metadata = try? SkillManifestParser.parse(manifest),
+                  metadata.name == skillName
+            else { continue }
+            matches.insert(child.standardizedFileURL.path)
+        }
+        return matches
     }
 }
 
@@ -250,9 +332,13 @@ struct SkillUninstallCommitter: @unchecked Sendable {
         case .moveToTrash:
             try await trash.moveToTrash(item.directory)
         }
-        try? await recordRepository?.removeSkillInstallationRecord(
-            installationDirectory: item.directory
-        )
+        do {
+            try await recordRepository?.removeSkillInstallationRecord(
+                installationDirectory: item.directory
+            )
+        } catch {
+            throw SkillInstallationError.recordPersistenceFailed
+        }
     }
 }
 

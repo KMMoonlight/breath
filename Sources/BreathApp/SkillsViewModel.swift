@@ -58,13 +58,14 @@ final class SkillsViewModel: ObservableObject {
         guard watchTask == nil else { return }
         watchTask = Task { [weak self] in
             guard let self else { return }
-            for await next in service.snapshots(every: .seconds(1)) {
+            for await next in service.snapshots(debouncedBy: .milliseconds(250)) {
                 guard !Task.isCancelled else { return }
                 snapshot = next
             }
         }
         updateTask = Task { [weak self] in
             guard let self else { return }
+            await service.beginUpdateCheckSession()
             let local = await service.scan()
             guard !Task.isCancelled else { return }
             snapshot = local
@@ -87,6 +88,13 @@ final class SkillsViewModel: ObservableObject {
             snapshot = await service.scan()
             await checkForUpdates(force: true)
             isRefreshing = false
+        }
+    }
+
+    func reconcileAfterApplicationActivation() {
+        Task { [weak self] in
+            guard let self else { return }
+            snapshot = await service.scan()
         }
     }
 
@@ -115,11 +123,14 @@ final class SkillsViewModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    func copyDiagnostic(_ item: UnrecognizedSkillItem) {
+    func copyDiagnostic(
+        _ item: UnrecognizedSkillItem,
+        localizedReason: String
+    ) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(
-            "\(item.agentDisplayName) · \(item.path.lastPathComponent): \(item.reason)",
+            "\(item.agentDisplayName) · \(item.path.lastPathComponent): \(localizedReason)",
             forType: .string
         )
     }

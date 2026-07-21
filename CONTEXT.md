@@ -129,7 +129,7 @@ _Avoid_: 全局 Skill、候选 Skill、来源未知 Skill
 _Avoid_: Skill 来源、ZIP 文件、Agent 目录
 
 **Skill 安装记录（Skill Installation Record）**：
-Breath 在本机保存、用于把一个 Agent 目录中的全局 Skill 副本关联到来源、上游版本和安装时内容的记录；它不决定 Skill 是否已安装，记录丢失只会使来源与更新能力不可确认。
+Breath 在本机保存、用于把一个 Agent 目录中的全局 Skill 副本关联到来源、可选上游版本和安装时内容的记录；ZIP 记录只有来源分类，远程记录才包含 Skill 上游。它不决定 Skill 是否已安装，记录丢失只会使来源与更新能力不可确认。
 _Avoid_: 全局 Skill、副本目录、安装清单文件
 
 **Skill 安装预览（Skill Installation Review）**：

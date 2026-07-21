@@ -1,6 +1,7 @@
 import BreathAgents
 import BreathCore
 import Foundation
+import Yams
 
 public enum SkillSourceKind: String, Codable, CaseIterable, Hashable, Sendable {
     case zip
@@ -35,24 +36,22 @@ public struct SkillInstallationRecord: Codable, Hashable, Identifiable, Sendable
     public let agent: AgentKind
     public let installationDirectory: URL
     public let skillName: String
-    public let source: SkillSourceKind
-    public let repository: String
-    public let sourceRelativePath: String
-    public let reference: SkillSourceReference
-    public let resolvedCommit: String
+    public let origin: SkillInstallationOrigin
     public let installedContentDigest: String
     public let installedAt: Date
     public let updatedAt: Date
+
+    public var source: SkillSourceKind { origin.source }
+    public var repository: String? { origin.remoteProvenance?.repository }
+    public var sourceRelativePath: String? { origin.remoteProvenance?.sourceRelativePath }
+    public var reference: SkillSourceReference? { origin.remoteProvenance?.reference }
+    public var resolvedCommit: String? { origin.remoteProvenance?.resolvedCommit }
 
     public init(
         agent: AgentKind,
         installationDirectory: URL,
         skillName: String,
-        source: SkillSourceKind,
-        repository: String,
-        sourceRelativePath: String,
-        reference: SkillSourceReference,
-        resolvedCommit: String,
+        origin: SkillInstallationOrigin,
         installedContentDigest: String,
         installedAt: Date,
         updatedAt: Date
@@ -60,11 +59,7 @@ public struct SkillInstallationRecord: Codable, Hashable, Identifiable, Sendable
         self.agent = agent
         self.installationDirectory = installationDirectory
         self.skillName = skillName
-        self.source = source
-        self.repository = repository
-        self.sourceRelativePath = sourceRelativePath
-        self.reference = reference
-        self.resolvedCommit = resolvedCommit
+        self.origin = origin
         self.installedContentDigest = installedContentDigest
         self.installedAt = installedAt
         self.updatedAt = updatedAt
@@ -200,7 +195,7 @@ public struct UnrecognizedSkillItem: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-public enum AgentSkillTargetAvailability: Codable, Hashable, Sendable {
+public enum SkillInstallationTargetAvailability: Codable, Hashable, Sendable {
     case available
     case unavailable(reason: String)
 
@@ -210,19 +205,19 @@ public enum AgentSkillTargetAvailability: Codable, Hashable, Sendable {
     }
 }
 
-public struct AgentSkillTarget: Codable, Hashable, Identifiable, Sendable {
+public struct SkillInstallationTarget: Codable, Hashable, Identifiable, Sendable {
     public var id: AgentKind { agent }
     public let agent: AgentKind
     public let displayName: String
     public let directory: URL?
-    public let availability: AgentSkillTargetAvailability
+    public let availability: SkillInstallationTargetAvailability
     public let activationHint: String
 
     public init(
         agent: AgentKind,
         displayName: String,
         directory: URL?,
-        availability: AgentSkillTargetAvailability,
+        availability: SkillInstallationTargetAvailability,
         activationHint: String
     ) {
         self.agent = agent
@@ -236,13 +231,13 @@ public struct AgentSkillTarget: Codable, Hashable, Identifiable, Sendable {
 public struct GlobalSkillsSnapshot: Codable, Equatable, Sendable {
     public let skills: [GlobalSkill]
     public let unrecognizedItems: [UnrecognizedSkillItem]
-    public let targets: [AgentSkillTarget]
+    public let targets: [SkillInstallationTarget]
     public let scannedAt: Date
 
     public init(
         skills: [GlobalSkill],
         unrecognizedItems: [UnrecognizedSkillItem],
-        targets: [AgentSkillTarget],
+        targets: [SkillInstallationTarget],
         scannedAt: Date
     ) {
         self.skills = skills
@@ -263,7 +258,7 @@ public actor GlobalSkillsService {
     private let homeDirectory: URL
     private let agentAdapters: [AgentAdapterDescriptor]
     private let environment: [String: String]
-    private var targetAvailability: [AgentKind: AgentSkillTargetAvailability]
+    private var targetAvailability: [AgentKind: SkillInstallationTargetAvailability]
     private let recordRepository: (any SkillInstallationRecordRepository)?
     private let githubProvider: any GitHubSkillProviding
     private let skillsShProvider: any SkillsShProviding
@@ -273,12 +268,15 @@ public actor GlobalSkillsService {
     private let now: @Sendable () -> Date
     private var updateStates: [String: SkillUpdateState] = [:]
     private var cachedUpdateResult: SkillUpdateCheckResult?
+    private var snapshotContinuations: [
+        UUID: AsyncStream<GlobalSkillsSnapshot>.Continuation
+    ] = [:]
 
     public init(
         homeDirectory: URL,
         agentAdapters: [AgentAdapterDescriptor] = AgentAdapterRegistry.builtIn.adapters,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        targetAvailability: [AgentKind: AgentSkillTargetAvailability] = [:],
+        targetAvailability: [AgentKind: SkillInstallationTargetAvailability] = [:],
         recordRepository: (any SkillInstallationRecordRepository)? = nil,
         githubProvider: any GitHubSkillProviding = GitHubHTTPSkillProvider(),
         skillsShProvider: any SkillsShProviding = SkillsShHTTPProvider(),
@@ -301,7 +299,7 @@ public actor GlobalSkillsService {
     public func scan() async -> GlobalSkillsSnapshot {
         var parsed: [ParsedInstalledSkill] = []
         var unrecognized: [UnrecognizedSkillItem] = []
-        var targets: [AgentSkillTarget] = []
+        var targets: [SkillInstallationTarget] = []
         let records = (try? await recordRepository?.loadSkillInstallationRecords()) ?? []
         let recordsByPath = Dictionary(
             records.map { ($0.installationDirectory.standardizedFileURL.path, $0) },
@@ -316,7 +314,7 @@ public actor GlobalSkillsService {
                 homeDirectory: homeDirectory,
                 environment: environment
             ) else {
-                targets.append(AgentSkillTarget(
+                targets.append(SkillInstallationTarget(
                     agent: adapter.kind,
                     displayName: adapter.displayName,
                     directory: nil,
@@ -328,7 +326,7 @@ public actor GlobalSkillsService {
                 continue
             }
             reconcilableAgents.insert(adapter.kind)
-            targets.append(AgentSkillTarget(
+            targets.append(SkillInstallationTarget(
                 agent: adapter.kind,
                 displayName: adapter.displayName,
                 directory: root,
@@ -418,33 +416,102 @@ public actor GlobalSkillsService {
     }
 
     public func updateTargetAvailability(
-        _ availability: [AgentKind: AgentSkillTargetAvailability]
-    ) {
+        _ availability: [AgentKind: SkillInstallationTargetAvailability]
+    ) async {
+        guard targetAvailability != availability else { return }
         targetAvailability = availability
+        let snapshot = await scan()
+        for continuation in snapshotContinuations.values {
+            continuation.yield(snapshot)
+        }
     }
 
     public nonisolated func snapshots(
-        every interval: Duration = .seconds(1)
+        debouncedBy interval: Duration = .milliseconds(250)
     ) -> AsyncStream<GlobalSkillsSnapshot> {
         AsyncStream { continuation in
+            let identifier = UUID()
             let task = Task {
-                var previous: GlobalSkillsSnapshot?
+                await self.addSnapshotContinuation(continuation, id: identifier)
+                var monitor = await SkillDirectoryEventMonitor(
+                    directories: self.directoriesToMonitor()
+                )
+                var previous = await self.scan()
+                continuation.yield(previous)
                 while !Task.isCancelled {
-                    let next = await self.scan()
-                    if previous.map({ Self.hasSameContents($0, next) }) != true {
-                        continuation.yield(next)
-                        previous = next
+                    var events = monitor.events.makeAsyncIterator()
+                    guard await events.next() != nil, !Task.isCancelled else {
+                        monitor.cancel()
+                        break
                     }
                     do {
                         try await Task.sleep(for: interval)
                     } catch {
+                        monitor.cancel()
                         break
                     }
+                    let next = await self.scan()
+                    let replacementMonitor = await SkillDirectoryEventMonitor(
+                        directories: self.directoriesToMonitor()
+                    )
+                    monitor.cancel()
+                    monitor = replacementMonitor
+                    if !Self.hasSameContents(previous, next) {
+                        continuation.yield(next)
+                        previous = next
+                    }
                 }
+                monitor.cancel()
+                await self.removeSnapshotContinuation(id: identifier)
                 continuation.finish()
             }
-            continuation.onTermination = { _ in task.cancel() }
+            continuation.onTermination = { _ in
+                task.cancel()
+                Task { await self.removeSnapshotContinuation(id: identifier) }
+            }
         }
+    }
+
+    private func addSnapshotContinuation(
+        _ continuation: AsyncStream<GlobalSkillsSnapshot>.Continuation,
+        id: UUID
+    ) {
+        snapshotContinuations[id] = continuation
+    }
+
+    private func removeSnapshotContinuation(id: UUID) {
+        snapshotContinuations.removeValue(forKey: id)
+    }
+
+    private func directoriesToMonitor() -> [URL] {
+        var directories: [URL] = []
+        for adapter in agentAdapters {
+            guard let root = adapter.globalSkills?.reliablyResolveDirectory(
+                homeDirectory: homeDirectory,
+                environment: environment
+            ) else { continue }
+            var existing = root
+            while !fileManager.fileExists(atPath: existing.path),
+                  existing.path != "/"
+            {
+                existing.deleteLastPathComponent()
+            }
+            directories.append(existing)
+            guard existing.standardizedFileURL == root.standardizedFileURL,
+                  let enumerator = fileManager.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles],
+                    errorHandler: { _, _ in false }
+                  )
+            else { continue }
+            while let item = enumerator.nextObject() as? URL {
+                if (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                    directories.append(item)
+                }
+            }
+        }
+        return directories
     }
 
     private static func hasSameContents(
@@ -501,7 +568,8 @@ public actor GlobalSkillsService {
             $0.agent == adapter.kind && $0.skillName == metadata.name ? $0 : nil
         }
         let isLocallyModified = matchingRecord.map {
-            $0.installedContentDigest != digest
+            guard case .remote = $0.origin else { return false }
+            return $0.installedContentDigest != digest
         } ?? false
         let recordedUpdateState = updateStates[presentedURL.standardizedFileURL.path]
         return ParsedInstalledSkill(
@@ -522,7 +590,10 @@ public actor GlobalSkillsService {
                 reference: matchingRecord?.reference,
                 resolvedCommit: matchingRecord?.resolvedCommit,
                 updateState: recordedUpdateState ?? matchingRecord.map {
-                    $0.reference.followsUpdates
+                    guard case .remote(let provenance) = $0.origin else {
+                        return .unavailable
+                    }
+                    return provenance.reference.followsUpdates
                         ? (isLocallyModified ? .locallyModified : .current)
                         : .pinned
                 } ?? .unavailable,
@@ -543,19 +614,20 @@ public actor GlobalSkillsService {
                 to: workspace,
                 fileManager: fileManager
             )
-            let candidates = try discoverCandidates(
+            let discovery = try discoverCandidates(
                 in: workspace,
                 source: .zip,
                 sourceLabel: archiveURL.lastPathComponent,
                 remoteProvenance: nil
             )
-            guard !candidates.isEmpty else {
+            guard !discovery.candidates.isEmpty || !discovery.rejections.isEmpty else {
                 throw SkillSourceError.noSkillsFound
             }
             return SkillCandidateBatch(
                 source: .zip,
                 sourceLabel: archiveURL.lastPathComponent,
-                candidates: candidates,
+                candidates: discovery.candidates,
+                rejectedCandidates: discovery.rejections,
                 workspaceDirectory: workspace
             )
         } catch {
@@ -582,7 +654,22 @@ public actor GlobalSkillsService {
     ) async throws -> [SkillsShSearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 2 else { return [] }
-        return try await skillsShProvider.search(query: trimmed, limit: limit)
+        let results = try await skillsShProvider.search(query: trimmed, limit: limit)
+        let provider = skillsShProvider
+        return await withTaskGroup(
+            of: (Int, SkillsShSearchResult).self,
+            returning: [SkillsShSearchResult].self
+        ) { group in
+            for (index, result) in results.enumerated() {
+                group.addTask {
+                    let audit = (try? await provider.audit(skillID: result.id)) ?? .unknown
+                    return (index, result.withSecurityAudit(audit))
+                }
+            }
+            var audited: [(Int, SkillsShSearchResult)] = []
+            for await item in group { audited.append(item) }
+            return audited.sorted { $0.0 < $1.0 }.map(\.1)
+        }
     }
 
     public func discoverSkill(
@@ -593,7 +680,6 @@ public actor GlobalSkillsService {
         else {
             throw OnlineSkillSourceError.unsupportedCatalogSource
         }
-        let audit = (try? await skillsShProvider.audit(skillID: result.id)) ?? .unknown
         let resolved = try await githubProvider.resolve(
             GitHubSkillLocator(repository: result.source)
         )
@@ -601,9 +687,19 @@ public actor GlobalSkillsService {
             resolved: resolved,
             source: .skillsSh,
             sourceLabel: "skills.sh · \(result.name)",
-            securityAudit: audit,
-            preferredSkillSlug: result.slug
+            securityAudit: result.securityAudit,
+            preferredSkillSlug: result.slug,
+            catalogSkillID: result.id
         )
+    }
+
+    public func beginUpdateCheckSession() {
+        if let cachedUpdateResult {
+            for update in cachedUpdateResult.updates {
+                try? fileManager.removeItem(at: update.workspaceDirectory)
+            }
+        }
+        cachedUpdateResult = nil
     }
 
     public func checkForUpdates(force: Bool = false) async -> SkillUpdateCheckResult {
@@ -651,18 +747,26 @@ public actor GlobalSkillsService {
         }
 
         let localSnapshot = await scan()
-        let groups = Dictionary(grouping: records) { record in
-            SkillUpdateGroupKey(
-                skillName: record.skillName,
-                source: record.source,
-                repository: record.repository,
-                sourceRelativePath: record.sourceRelativePath,
-                reference: record.reference
+        let keyedRecords = records.compactMap { record -> SkillUpdateRecord? in
+            guard case .remote(let provenance) = record.origin else { return nil }
+            return SkillUpdateRecord(
+                key: SkillUpdateGroupKey(
+                    skillName: record.skillName,
+                    source: provenance.source.sourceKind,
+                    repository: provenance.repository,
+                    sourceRelativePath: provenance.sourceRelativePath,
+                    reference: provenance.reference,
+                    catalogSkillID: provenance.catalogSkillID
+                ),
+                record: record,
+                resolvedCommit: provenance.resolvedCommit
             )
         }
+        let groups = Dictionary(grouping: keyedRecords, by: \.key)
         var updates: [SkillAvailableUpdate] = []
         var failures: [SkillUpdateCheckFailure] = []
-        for (key, groupRecords) in groups.sorted(by: { $0.key.sortKey < $1.key.sortKey }) {
+        for (key, keyedGroup) in groups.sorted(by: { $0.key.sortKey < $1.key.sortKey }) {
+            let groupRecords = keyedGroup.map(\.record)
             guard key.reference.followsUpdates else {
                 for record in groupRecords {
                     updateStates[record.installationDirectory.standardizedFileURL.path] = .pinned
@@ -675,11 +779,19 @@ public actor GlobalSkillsService {
                     subdirectory: key.sourceRelativePath.isEmpty ? nil : key.sourceRelativePath,
                     reference: key.reference
                 ))
+                let securityAudit: SkillSecurityAudit
+                if key.source == .skillsSh, let catalogSkillID = key.catalogSkillID {
+                    securityAudit = (try? await skillsShProvider.audit(
+                        skillID: catalogSkillID
+                    )) ?? .unknown
+                } else {
+                    securityAudit = .unknown
+                }
                 let batch = try makeRemoteCandidateBatch(
                     resolved: resolved,
                     source: key.source,
                     sourceLabel: "Update · \(key.repository)",
-                    securityAudit: .unknown,
+                    securityAudit: securityAudit,
                     preferredSkillSlug: nil
                 )
                 guard let candidate = batch.candidates.first(where: {
@@ -693,7 +805,7 @@ public actor GlobalSkillsService {
                 for record in groupRecords {
                     let recordPath = record.installationDirectory.standardizedFileURL.path
                     if candidate.contentDigest == record.installedContentDigest {
-                        updateStates[recordPath] = record.reference.followsUpdates
+                        updateStates[recordPath] = key.reference.followsUpdates
                             ? .current
                             : .pinned
                         continue
@@ -723,7 +835,7 @@ public actor GlobalSkillsService {
                     source: key.source,
                     repository: key.repository,
                     sourceRelativePath: key.sourceRelativePath,
-                    oldCommits: Array(Set(groupRecords.map(\.resolvedCommit))).sorted(),
+                    oldCommits: Array(Set(keyedGroup.map(\.resolvedCommit))).sorted(),
                     newCommit: resolved.resolvedCommit,
                     candidate: candidate,
                     targets: targets.sorted { $0.agentDisplayName < $1.agentDisplayName },
@@ -839,7 +951,7 @@ public actor GlobalSkillsService {
                             agentDisplayName: item.agentDisplayName,
                             directory: item.directory,
                             status: .failed,
-                            message: Self.installationFailureMessage(error),
+                            message: Self.uninstallFailureMessage(error),
                             diagnostic: Self.sanitizedDiagnostic(error)
                         )
                     }
@@ -1009,8 +1121,20 @@ public actor GlobalSkillsService {
         var indexedResults: [(Int, SkillOperationResultItem)] = []
         await withTaskGroup(of: (Int, SkillOperationResultItem).self) { group in
             for (index, item) in preview.items.enumerated() {
+                let targetIsCurrentlyAvailable = targetAvailability[item.targetID.agent]?
+                    .isSelectable ?? true
                 group.addTask {
                     let result: SkillOperationResultItem
+                    guard targetIsCurrentlyAvailable else {
+                        return (
+                            index,
+                            Self.resultItem(
+                                for: item,
+                                status: .failed,
+                                message: "The Skill installation target is unavailable."
+                            )
+                        )
+                    }
                     switch item.action {
                     case .alreadyInstalled:
                         result = Self.resultItem(
@@ -1028,7 +1152,7 @@ public actor GlobalSkillsService {
                         result = Self.resultItem(
                             for: item,
                             status: .failed,
-                            message: item.reason ?? "The target Agent is unavailable."
+                            message: item.reason ?? "The Skill installation target is unavailable."
                         )
                     case .install, .replace:
                         if item.candidate.securityAudit.riskLevel.requiresExtraConfirmation,
@@ -1078,98 +1202,120 @@ public actor GlobalSkillsService {
         sourceLabel: String,
         remoteProvenance: SkillRemoteProvenance?,
         securityAudit: SkillSecurityAudit = .unknown
-    ) throws -> [SkillCandidate] {
+    ) throws -> SkillCandidateDiscovery {
         var roots: [URL] = []
         if fileManager.fileExists(
             atPath: sourceRoot.appendingPathComponent("SKILL.md").path
         ) {
             roots = [sourceRoot]
         } else {
-            let children = try fileManager.contentsOfDirectory(
-                at: sourceRoot,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )
-            roots = children.filter {
-                fileManager.fileExists(
-                    atPath: $0.appendingPathComponent("SKILL.md").path
-                )
-            }
-            if roots.isEmpty {
-                roots = try boundedSkillRoots(in: sourceRoot)
-            }
+            roots = try boundedCandidateRoots(in: sourceRoot)
         }
         guard roots.count <= 256 else {
             throw SkillSourceError.archiveLimitExceeded
         }
-        return try roots.sorted { $0.path < $1.path }.map { root in
-            let manifestURL = root.appendingPathComponent("SKILL.md")
-            guard let manifest = try? String(contentsOf: manifestURL, encoding: .utf8) else {
-                throw SkillSourceError.invalidSkill("SKILL.md is missing or is not valid UTF-8.")
-            }
-            let metadata: SkillManifestMetadata
-            do {
-                metadata = try SkillManifestParser.parse(manifest)
-            } catch {
-                throw SkillSourceError.invalidSkill(Self.userFacingReason(for: error))
-            }
-            guard Self.isSafeSkillName(metadata.name) else {
-                throw SkillSourceError.invalidSkill("The Skill name cannot be used as one directory component.")
-            }
-            let contents = try SkillContentReader.collectFiles(
-                in: root,
-                fileManager: fileManager
-            )
+        var candidates: [SkillCandidate] = []
+        var rejections: [RejectedSkillCandidate] = []
+        for root in roots.sorted(by: { $0.path < $1.path }) {
             let relativePath = SkillContentReader.relativePath(from: sourceRoot, to: root)
-            var warnings: [SkillCandidateWarning] = []
-            if metadata.name.range(
-                of: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
-                options: .regularExpression
-            ) == nil {
-                warnings.append(SkillCandidateWarning(
-                    kind: .nonstandardName,
-                    message: "The Skill name does not use the recommended lowercase hyphen format."
+            do {
+                candidates.append(try makeCandidate(
+                    root: root,
+                    sourceRoot: sourceRoot,
+                    source: source,
+                    sourceLabel: sourceLabel,
+                    remoteProvenance: remoteProvenance,
+                    securityAudit: securityAudit
+                ))
+            } catch {
+                rejections.append(RejectedSkillCandidate(
+                    sourceRelativePath: relativePath,
+                    message: Self.candidateRejectionMessage(error)
                 ))
             }
-            if root.lastPathComponent != metadata.name {
-                warnings.append(SkillCandidateWarning(
-                    kind: .directoryNameMismatch,
-                    message: "The source directory name differs from the Skill name."
-                ))
-            }
-            let provenance = remoteProvenance.map {
-                let sourcePath = [$0.sourceRelativePath, relativePath]
-                    .filter { !$0.isEmpty && $0 != "." }
-                    .joined(separator: "/")
-                return SkillRemoteProvenance(
-                    source: $0.source,
-                    repository: $0.repository,
-                    sourceRelativePath: sourcePath,
-                    reference: $0.reference,
-                    resolvedCommit: $0.resolvedCommit
-                )
-            }
-            return SkillCandidate(
-                name: metadata.name,
-                description: metadata.description,
-                manifest: manifest,
-                contentDigest: SkillContentReader.digest(contents),
-                files: contents.map {
-                    SkillFileEntry(
-                        relativePath: $0.relativePath,
-                        size: Int64($0.data.count),
-                        kind: $0.kind
-                    )
-                },
-                warnings: warnings,
-                source: source,
-                sourceLabel: sourceLabel,
-                sourceRelativePath: relativePath,
-                remoteProvenance: provenance,
-                securityAudit: securityAudit,
-                directory: root
+        }
+        return SkillCandidateDiscovery(
+            candidates: candidates,
+            rejections: rejections
+        )
+    }
+
+    private func makeCandidate(
+        root: URL,
+        sourceRoot: URL,
+        source: SkillSourceKind,
+        sourceLabel: String,
+        remoteProvenance: SkillRemoteProvenance?,
+        securityAudit: SkillSecurityAudit
+    ) throws -> SkillCandidate {
+        let manifestURL = root.appendingPathComponent("SKILL.md")
+        guard let manifest = try? String(contentsOf: manifestURL, encoding: .utf8) else {
+            throw SkillSourceError.invalidSkill("SKILL.md is missing or is not valid UTF-8.")
+        }
+        let metadata: SkillManifestMetadata
+        do {
+            metadata = try SkillManifestParser.parse(manifest)
+        } catch {
+            throw SkillSourceError.invalidSkill(Self.userFacingReason(for: error))
+        }
+        guard Self.isSafeSkillName(metadata.name) else {
+            throw SkillSourceError.invalidSkill("The Skill name cannot be used as one directory component.")
+        }
+        let contents = try SkillContentReader.collectFiles(
+            in: root,
+            fileManager: fileManager
+        )
+        let relativePath = SkillContentReader.relativePath(from: sourceRoot, to: root)
+        var warnings: [SkillCandidateWarning] = []
+        if metadata.name.range(
+            of: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            options: .regularExpression
+        ) == nil {
+            warnings.append(SkillCandidateWarning(
+                kind: .nonstandardName,
+                message: "The Skill name does not use the recommended lowercase hyphen format."
+            ))
+        }
+        if root.lastPathComponent != metadata.name {
+            warnings.append(SkillCandidateWarning(
+                kind: .directoryNameMismatch,
+                message: "The source directory name differs from the Skill name."
+            ))
+        }
+        let provenance = remoteProvenance.map {
+            let sourcePath = [$0.sourceRelativePath, relativePath]
+                .filter { !$0.isEmpty && $0 != "." }
+                .joined(separator: "/")
+            return SkillRemoteProvenance(
+                source: $0.source,
+                repository: $0.repository,
+                sourceRelativePath: sourcePath,
+                reference: $0.reference,
+                resolvedCommit: $0.resolvedCommit,
+                catalogSkillID: $0.catalogSkillID
             )
         }
+        return SkillCandidate(
+            name: metadata.name,
+            description: metadata.description,
+            declarations: metadata.declarations,
+            manifest: manifest,
+            contentDigest: SkillContentReader.digest(contents),
+            files: contents.map {
+                SkillFileEntry(
+                    relativePath: $0.relativePath,
+                    size: Int64($0.data.count),
+                    kind: $0.kind
+                )
+            },
+            warnings: warnings,
+            source: source,
+            sourceLabel: sourceLabel,
+            sourceRelativePath: relativePath,
+            remoteProvenance: provenance,
+            securityAudit: securityAudit,
+            directory: root
+        )
     }
 
     private func makeRemoteCandidateBatch(
@@ -1177,7 +1323,8 @@ public actor GlobalSkillsService {
         source: SkillSourceKind,
         sourceLabel: String,
         securityAudit: SkillSecurityAudit,
-        preferredSkillSlug: String?
+        preferredSkillSlug: String?,
+        catalogSkillID: String? = nil
     ) throws -> SkillCandidateBatch {
         let workspace = fileManager.temporaryDirectory.appendingPathComponent(
             "breath-skill-remote-\(UUID().uuidString)",
@@ -1223,14 +1370,18 @@ public actor GlobalSkillsService {
             } else {
                 sourceRoot = repositoryRoot
             }
+            guard let remoteSource = SkillRemoteSourceKind(source) else {
+                throw SkillSourceError.noSkillsFound
+            }
             let provenance = SkillRemoteProvenance(
-                source: source,
+                source: remoteSource,
                 repository: resolved.repository,
                 sourceRelativePath: resolved.subdirectory ?? "",
                 reference: resolved.reference,
-                resolvedCommit: resolved.resolvedCommit
+                resolvedCommit: resolved.resolvedCommit,
+                catalogSkillID: catalogSkillID
             )
-            var candidates = try discoverCandidates(
+            var discovery = try discoverCandidates(
                 in: sourceRoot,
                 source: source,
                 sourceLabel: sourceLabel,
@@ -1239,19 +1390,31 @@ public actor GlobalSkillsService {
             )
             if let preferredSkillSlug {
                 let normalizedSlug = preferredSkillSlug.lowercased()
-                let preferred = candidates.filter {
+                let preferred = discovery.candidates.filter {
                     $0.name.lowercased() == normalizedSlug
                         || $0.sourceRelativePath.split(separator: "/").last?
                             .lowercased() == normalizedSlug
                 }
-                guard !preferred.isEmpty else { throw SkillSourceError.noSkillsFound }
-                candidates = preferred
+                let rejected = discovery.rejections.filter {
+                    $0.sourceRelativePath.split(separator: "/").last?
+                        .lowercased() == normalizedSlug
+                }
+                guard !preferred.isEmpty || !rejected.isEmpty else {
+                    throw SkillSourceError.noSkillsFound
+                }
+                discovery = SkillCandidateDiscovery(
+                    candidates: preferred,
+                    rejections: rejected
+                )
             }
-            guard !candidates.isEmpty else { throw SkillSourceError.noSkillsFound }
+            guard !discovery.candidates.isEmpty || !discovery.rejections.isEmpty else {
+                throw SkillSourceError.noSkillsFound
+            }
             return SkillCandidateBatch(
                 source: source,
                 sourceLabel: sourceLabel,
-                candidates: candidates,
+                candidates: discovery.candidates,
+                rejectedCandidates: discovery.rejections,
                 workspaceDirectory: workspace
             )
         } catch {
@@ -1289,6 +1452,52 @@ public actor GlobalSkillsService {
             }
         }
         return roots
+    }
+
+    private func boundedCandidateRoots(in sourceRoot: URL) throws -> [URL] {
+        let manifestRoots = try boundedSkillRoots(in: sourceRoot)
+        let excludedPeers = Set([
+            ".git", ".github", ".build", "build", "dist", "DerivedData",
+            "node_modules", "docs", "scripts", "src", "tests", "assets", "references",
+        ])
+        var rootsByPath = Dictionary(
+            manifestRoots.map { ($0.standardizedFileURL.path, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let collectionParents = Set(manifestRoots.map { $0.deletingLastPathComponent() })
+        for parent in collectionParents {
+            let peers = try fileManager.contentsOfDirectory(
+                at: parent,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+            for peer in peers where !excludedPeers.contains(peer.lastPathComponent) {
+                guard (try? peer.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                else { continue }
+                rootsByPath[peer.standardizedFileURL.path] = peer
+            }
+        }
+        if rootsByPath.isEmpty {
+            let children = try fileManager.contentsOfDirectory(
+                at: sourceRoot,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ).filter {
+                !excludedPeers.contains($0.lastPathComponent)
+                    && (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            }
+            if children.isEmpty {
+                rootsByPath[sourceRoot.standardizedFileURL.path] = sourceRoot
+            } else {
+                for child in children {
+                    rootsByPath[child.standardizedFileURL.path] = child
+                }
+            }
+        }
+        guard rootsByPath.count <= 256 else {
+            throw SkillSourceError.archiveLimitExceeded
+        }
+        return Array(rootsByPath.values)
     }
 
     private func unavailablePreviewItem(
@@ -1386,6 +1595,22 @@ public actor GlobalSkillsService {
         }
     }
 
+    private static func uninstallFailureMessage(_ error: Error) -> String {
+        if case SkillInstallationError.recordPersistenceFailed = error {
+            return "The Skill was removed, but its source record could not be cleaned up. Refresh to retry reconciliation."
+        }
+        return installationFailureMessage(error)
+    }
+
+    private static func candidateRejectionMessage(_ error: Error) -> String {
+        if let sourceError = error as? SkillSourceError,
+           let description = sourceError.errorDescription
+        {
+            return description
+        }
+        return userFacingReason(for: error)
+    }
+
     private static func sanitizedDiagnostic(_ error: Error) -> String {
         String(describing: type(of: error))
     }
@@ -1421,9 +1646,15 @@ private struct ParsedInstalledSkill {
     let matchesInstallationRecord: Bool
 }
 
-private struct SkillManifestMetadata {
+private struct SkillCandidateDiscovery {
+    let candidates: [SkillCandidate]
+    let rejections: [RejectedSkillCandidate]
+}
+
+struct SkillManifestMetadata {
     let name: String
     let description: String
+    let declarations: SkillManifestDeclarations
 }
 
 enum SkillReadingError: Error {
@@ -1442,13 +1673,20 @@ private struct SkillUpdateGroupKey: Hashable {
     let repository: String
     let sourceRelativePath: String
     let reference: SkillSourceReference
+    let catalogSkillID: String?
 
     var sortKey: String {
-        "\(repository):\(sourceRelativePath):\(skillName):\(reference.value)"
+        "\(repository):\(sourceRelativePath):\(skillName):\(reference.value):\(catalogSkillID ?? "")"
     }
 }
 
-private enum SkillManifestParser {
+private struct SkillUpdateRecord {
+    let key: SkillUpdateGroupKey
+    let record: SkillInstallationRecord
+    let resolvedCommit: String
+}
+
+enum SkillManifestParser {
     static func parse(_ manifest: String) throws -> SkillManifestMetadata {
         let lines = manifest.replacingOccurrences(of: "\r\n", with: "\n")
             .split(separator: "\n", omittingEmptySubsequences: false)
@@ -1461,52 +1699,50 @@ private enum SkillManifestParser {
             throw SkillReadingError.invalidFrontmatter
         }
 
-        var values: [String: String] = [:]
-        var index = 1
-        while index < closingIndex {
-            let line = lines[index]
-            guard let separator = line.firstIndex(of: ":") else {
-                index += 1
-                continue
+        let frontmatter = lines[1..<closingIndex].joined(separator: "\n")
+        let values: [String: Any]
+        do {
+            guard let loaded = try Yams.load(yaml: frontmatter) as? [String: Any] else {
+                throw SkillReadingError.invalidFrontmatter
             }
-            let key = line[..<separator].trimmingCharacters(in: .whitespaces)
-            var value = line[line.index(after: separator)...]
-                .trimmingCharacters(in: .whitespaces)
-            if value == "|" || value == ">" {
-                let folded = value == ">"
-                var blocks: [String] = []
-                index += 1
-                while index < closingIndex,
-                      lines[index].first?.isWhitespace == true
-                {
-                    blocks.append(lines[index].trimmingCharacters(in: .whitespaces))
-                    index += 1
-                }
-                values[key] = blocks.joined(separator: folded ? " " : "\n")
-                continue
-            }
-            if value.count >= 2,
-               (value.hasPrefix("\"") && value.hasSuffix("\""))
-                || (value.hasPrefix("'") && value.hasSuffix("'"))
-            {
-                value.removeFirst()
-                value.removeLast()
-            }
-            values[key] = value
-            index += 1
+            values = loaded
+        } catch is SkillReadingError {
+            throw SkillReadingError.invalidFrontmatter
+        } catch {
+            throw SkillReadingError.invalidFrontmatter
         }
 
-        guard let name = values["name"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let name = (values["name"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
               !name.isEmpty
         else {
             throw SkillReadingError.missingName
         }
-        guard let description = values["description"]?
+        guard let description = (values["description"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !description.isEmpty
         else {
             throw SkillReadingError.missingDescription
         }
-        return SkillManifestMetadata(name: name, description: description)
+        func optionalValue(_ key: String) -> String? {
+            guard let value = values[key] else { return nil }
+            if let string = value as? String {
+                let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            guard let serialized = try? Yams.dump(object: value) else { return nil }
+            let trimmed = serialized.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return SkillManifestMetadata(
+            name: name,
+            description: description,
+            declarations: SkillManifestDeclarations(
+                license: optionalValue("license"),
+                compatibility: optionalValue("compatibility"),
+                metadata: optionalValue("metadata"),
+                allowedTools: optionalValue("allowed-tools")
+            )
+        )
     }
 }

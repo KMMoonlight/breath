@@ -1,11 +1,49 @@
 import BreathAgents
 import BreathCore
+import BreathSkills
 import Foundation
 import Testing
 @testable import BreathApp
 
 @Suite("Agent integration preferences")
 struct AgentIntegrationPreferenceStoreTests {
+    @MainActor
+    @Test("an open Skills page receives Agent target availability changes")
+    func openSkillsPageReceivesTargetAvailability() async throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("breath-skill-targets-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let codex = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .codex }
+        )
+        let service = GlobalSkillsService(
+            homeDirectory: temporaryDirectory,
+            agentAdapters: [codex],
+            environment: [:],
+            targetAvailability: [
+                .codex: .unavailable(reason: "Agent installation status is still being checked."),
+            ]
+        )
+        let model = SkillsViewModel(service: service)
+        model.activate()
+        defer { model.deactivate() }
+        for _ in 0..<100 where model.snapshot.targets.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.snapshot.targets.first?.availability.isSelectable == false)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(model.snapshot.targets.first?.availability.isSelectable == false)
+
+        await service.updateTargetAvailability([.codex: .available])
+        for _ in 0..<100
+            where model.snapshot.targets.first?.availability.isSelectable != true
+        {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(model.snapshot.targets.first?.availability.isSelectable == true)
+    }
+
     @Test("installed CLIs are enabled by default and explicit choices persist")
     func installedDefaultsAndExplicitChoices() throws {
         let suiteName = "BreathTests.AgentIntegrationPreferenceStore.\(UUID().uuidString)"
@@ -50,9 +88,9 @@ struct AgentIntegrationPreferenceStoreTests {
             at: binDirectory,
             withIntermediateDirectories: true
         )
-        for executableName in ["codex", "claude"] {
+        for (executableName, version) in [("codex", "0.144.3"), ("claude", "2.1.7")] {
             let executableURL = binDirectory.appendingPathComponent(executableName)
-            try Data("#!/bin/sh\n".utf8).write(to: executableURL)
+            try Data("#!/bin/sh\necho '\(version)'\n".utf8).write(to: executableURL)
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o755],
                 ofItemAtPath: executableURL.path
@@ -77,6 +115,13 @@ struct AgentIntegrationPreferenceStoreTests {
             )
         )
         model.start()
+
+        for _ in 0..<100 where model.agentCLIStatuses[.codex] == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let skillTargets = await model.skillsService.scan().targets
+        #expect(model.agentCLIStatuses[.codex] != nil)
+        #expect(skillTargets.first { $0.agent == .codex }?.availability.isSelectable == true)
 
         let installed = try String(contentsOf: hooksURL, encoding: .utf8)
         let claudeSettingsURL = homeDirectory.appendingPathComponent(".claude/settings.json")

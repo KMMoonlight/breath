@@ -17,25 +17,88 @@ public struct SkillCandidateWarning: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+public enum SkillRemoteSourceKind: String, Codable, Hashable, Sendable {
+    case github
+    case skillsSh
+
+    public init?(_ source: SkillSourceKind) {
+        switch source {
+        case .github: self = .github
+        case .skillsSh: self = .skillsSh
+        case .zip, .unknown: return nil
+        }
+    }
+
+    public var sourceKind: SkillSourceKind {
+        switch self {
+        case .github: .github
+        case .skillsSh: .skillsSh
+        }
+    }
+}
+
 public struct SkillRemoteProvenance: Codable, Hashable, Sendable {
-    public let source: SkillSourceKind
+    public let source: SkillRemoteSourceKind
     public let repository: String
     public let sourceRelativePath: String
     public let reference: SkillSourceReference
     public let resolvedCommit: String
+    public let catalogSkillID: String?
 
     public init(
-        source: SkillSourceKind,
+        source: SkillRemoteSourceKind,
         repository: String,
         sourceRelativePath: String,
         reference: SkillSourceReference,
-        resolvedCommit: String
+        resolvedCommit: String,
+        catalogSkillID: String? = nil
     ) {
         self.source = source
         self.repository = repository
         self.sourceRelativePath = sourceRelativePath
         self.reference = reference
         self.resolvedCommit = resolvedCommit
+        self.catalogSkillID = catalogSkillID
+    }
+}
+
+public enum SkillInstallationOrigin: Codable, Hashable, Sendable {
+    case zip
+    case remote(SkillRemoteProvenance)
+
+    public var source: SkillSourceKind {
+        switch self {
+        case .zip: .zip
+        case .remote(let provenance): provenance.source.sourceKind
+        }
+    }
+
+    public var remoteProvenance: SkillRemoteProvenance? {
+        if case .remote(let provenance) = self { return provenance }
+        return nil
+    }
+}
+
+public struct SkillManifestDeclarations: Codable, Hashable, Sendable {
+    public let license: String?
+    public let compatibility: String?
+    public let metadata: String?
+    public let allowedTools: String?
+
+    public init(
+        license: String? = nil,
+        compatibility: String? = nil,
+        metadata: String? = nil,
+        allowedTools: String? = nil
+    ) {
+        self.license = license
+        self.compatibility = compatibility
+        self.metadata = metadata
+        self.allowedTools = allowedTools
+    }
+
+    public var isEmpty: Bool {
+        license == nil && compatibility == nil && metadata == nil && allowedTools == nil
     }
 }
 
@@ -43,6 +106,7 @@ public struct SkillCandidate: Identifiable, Hashable, Sendable {
     public let id: UUID
     public let name: String
     public let description: String
+    public let declarations: SkillManifestDeclarations
     public let manifest: String
     public let contentDigest: String
     public let files: [SkillFileEntry]
@@ -58,6 +122,7 @@ public struct SkillCandidate: Identifiable, Hashable, Sendable {
         id: UUID = UUID(),
         name: String,
         description: String,
+        declarations: SkillManifestDeclarations = SkillManifestDeclarations(),
         manifest: String,
         contentDigest: String,
         files: [SkillFileEntry],
@@ -72,6 +137,7 @@ public struct SkillCandidate: Identifiable, Hashable, Sendable {
         self.id = id
         self.name = name
         self.description = description
+        self.declarations = declarations
         self.manifest = manifest
         self.contentDigest = contentDigest
         self.files = files
@@ -85,11 +151,23 @@ public struct SkillCandidate: Identifiable, Hashable, Sendable {
     }
 }
 
+public struct RejectedSkillCandidate: Identifiable, Hashable, Sendable {
+    public var id: String { "\(sourceRelativePath):\(message)" }
+    public let sourceRelativePath: String
+    public let message: String
+
+    public init(sourceRelativePath: String, message: String) {
+        self.sourceRelativePath = sourceRelativePath
+        self.message = message
+    }
+}
+
 public struct SkillCandidateBatch: Identifiable, Sendable {
     public let id: UUID
     public let source: SkillSourceKind
     public let sourceLabel: String
     public let candidates: [SkillCandidate]
+    public let rejectedCandidates: [RejectedSkillCandidate]
     let workspaceDirectory: URL
 
     init(
@@ -97,12 +175,14 @@ public struct SkillCandidateBatch: Identifiable, Sendable {
         source: SkillSourceKind,
         sourceLabel: String,
         candidates: [SkillCandidate],
+        rejectedCandidates: [RejectedSkillCandidate] = [],
         workspaceDirectory: URL
     ) {
         self.id = id
         self.source = source
         self.sourceLabel = sourceLabel
         self.candidates = candidates
+        self.rejectedCandidates = rejectedCandidates
         self.workspaceDirectory = workspaceDirectory
     }
 }

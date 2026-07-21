@@ -86,7 +86,7 @@ struct SkillInstallationWizard: View {
         switch step {
         case .source: localizer.string("选择来源")
         case .candidates: localizer.string("选择候选 Skill")
-        case .targets: localizer.string("选择目标 Agent")
+        case .targets: localizer.string("选择 Skill 安装目标")
         case .review: localizer.string("检查并确认")
         case .result: localizer.string("安装结果")
         }
@@ -141,6 +141,23 @@ struct SkillInstallationWizard: View {
                                         Text(item.source)
                                             .font(.caption2.monospaced())
                                             .foregroundStyle(.tertiary)
+                                        HStack(spacing: 6) {
+                                            RiskBadge(audit: item.securityAudit, localizer: localizer)
+                                            Text(localizer.string(item.securityAudit.summary))
+                                                .lineLimit(1)
+                                        }
+                                        .font(.caption2)
+                                        if let checkedAt = item.securityAudit.checkedAt {
+                                            Text(localizer.format(
+                                                "检查于 %@",
+                                                checkedAt.formatted(
+                                                    date: .abbreviated,
+                                                    time: .shortened
+                                                )
+                                            ))
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                        }
                                     }
                                     Spacer()
                                     Text(localizer.format("%d 次安装", item.installs))
@@ -152,7 +169,10 @@ struct SkillInstallationWizard: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("\(item.name), \(item.installs)")
+                            .accessibilityLabel(
+                                "\(item.name), \(item.installs), "
+                                    + item.securityAudit.riskLevel.displayName(localizer)
+                            )
                         }
                         .frame(minHeight: 260)
                     }
@@ -167,32 +187,52 @@ struct SkillInstallationWizard: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(localizer.string("只会安装你明确选择的候选 Skill。"))
                 .foregroundStyle(.secondary)
-            List(batch?.candidates ?? []) { candidate in
-                Toggle(isOn: membership(candidate.id, in: $selectedCandidateIDs)) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(candidate.name).fontWeight(.semibold)
-                            if candidate.securityAudit.riskLevel != .unknown {
-                                RiskBadge(
-                                    audit: candidate.securityAudit,
-                                    localizer: localizer
+            List {
+                ForEach(batch?.candidates ?? []) { candidate in
+                    Toggle(isOn: membership(candidate.id, in: $selectedCandidateIDs)) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(candidate.name).fontWeight(.semibold)
+                                if candidate.securityAudit.riskLevel != .unknown {
+                                    RiskBadge(
+                                        audit: candidate.securityAudit,
+                                        localizer: localizer
+                                    )
+                                }
+                            }
+                            Text(candidate.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(localizer.format("%d 个文件", candidate.files.count))
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            ForEach(candidate.warnings) { warning in
+                                Label(
+                                    localizedSkillMessage(warning.message, localizer: localizer),
+                                    systemImage: "exclamationmark.triangle"
                                 )
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
                             }
                         }
-                        Text(candidate.description)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(localizer.format("%d 个文件", candidate.files.count))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                        ForEach(candidate.warnings) { warning in
-                            Label(warning.message, systemImage: "exclamationmark.triangle")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
+                    }
+                    .toggleStyle(.checkbox)
+                }
+                if let rejections = batch?.rejectedCandidates,
+                   !rejections.isEmpty
+                {
+                    Section(localizer.string("无法安装的候选 Skill")) {
+                        ForEach(rejections) { rejection in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(rejection.sourceRelativePath)
+                                    .font(.body.monospaced())
+                                Text(localizer.string(rejection.message))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
-                .toggleStyle(.checkbox)
             }
         }
         .padding(20)
@@ -210,7 +250,9 @@ struct SkillInstallationWizard: View {
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                         if case .unavailable(let reason) = target.availability {
-                            Text(reason).font(.caption).foregroundStyle(.secondary)
+                            Text(localizedSkillMessage(reason, localizer: localizer))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -231,6 +273,26 @@ struct SkillInstallationWizard: View {
                     GroupBox {
                         VStack(alignment: .leading, spacing: 10) {
                             LabeledContent(localizer.string("说明"), value: item.candidate.description)
+                            if let license = item.candidate.declarations.license {
+                                LabeledContent(localizer.string("许可证"), value: license)
+                            }
+                            if let compatibility = item.candidate.declarations.compatibility {
+                                LabeledContent(localizer.string("兼容性"), value: compatibility)
+                            }
+                            if let metadata = item.candidate.declarations.metadata {
+                                LabeledContent(localizer.string("元数据声明"), value: metadata)
+                            }
+                            if let allowedTools = item.candidate.declarations.allowedTools {
+                                LabeledContent(localizer.string("允许的工具"), value: allowedTools)
+                            }
+                            ForEach(item.candidate.warnings) { warning in
+                                Label(
+                                    localizedSkillMessage(warning.message, localizer: localizer),
+                                    systemImage: "exclamationmark.triangle"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                            }
                             LabeledContent(localizer.string("Agent"), value: item.agentDisplayName)
                             LabeledContent(localizer.string("真实目录"), value: item.targetDirectory.path)
                             if let provenance = item.candidate.remoteProvenance {
@@ -326,8 +388,8 @@ struct SkillInstallationWizard: View {
         VStack(alignment: .leading, spacing: 12) {
             List(result?.items ?? []) { item in
                 HStack(alignment: .top) {
-                    Image(systemName: item.status.systemImage)
-                        .foregroundStyle(item.status.tint)
+                    Image(systemName: item.status.presentation.systemImage)
+                        .foregroundStyle(item.status.presentation.tint)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("\(item.skillName) · \(item.agentDisplayName)")
                             .fontWeight(.medium)
@@ -555,6 +617,7 @@ struct SkillUpdateReviewView: View {
     @State private var result: SkillOperationResult?
     @State private var isWorking = false
     @State private var errorMessage: String?
+    @State private var confirmedRiskCandidateIDs: Set<UUID> = []
 
     init(
         service: GlobalSkillsService,
@@ -589,8 +652,8 @@ struct SkillUpdateReviewView: View {
             if let result {
                 List(result.items) { item in
                     HStack(alignment: .top) {
-                        Image(systemName: item.status.systemImage)
-                            .foregroundStyle(item.status.tint)
+                        Image(systemName: item.status.presentation.systemImage)
+                            .foregroundStyle(item.status.presentation.tint)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("\(item.skillName) · \(item.agentDisplayName)")
                                 .fontWeight(.medium)
@@ -640,6 +703,40 @@ struct SkillUpdateReviewView: View {
                                 .font(.caption.monospaced())
                                 .textSelection(.enabled)
                         }
+                        LabeledContent(
+                            localizer.string("安全审计"),
+                            value: update.candidate.securityAudit.riskLevel.displayName(localizer)
+                        )
+                        Text(localizer.string(update.candidate.securityAudit.summary))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if let checkedAt = update.candidate.securityAudit.checkedAt {
+                            Text(localizer.format(
+                                "检查于 %@",
+                                checkedAt.formatted(date: .abbreviated, time: .shortened)
+                            ))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        }
+                        if update.candidate.securityAudit.riskLevel.requiresExtraConfirmation {
+                            Toggle(
+                                localizer.string("我已审阅高风险提示并仍要安装"),
+                                isOn: Binding(
+                                    get: {
+                                        confirmedRiskCandidateIDs.contains(update.candidate.id)
+                                    },
+                                    set: { confirmed in
+                                        if confirmed {
+                                            confirmedRiskCandidateIDs.insert(update.candidate.id)
+                                        } else {
+                                            confirmedRiskCandidateIDs.remove(update.candidate.id)
+                                        }
+                                    }
+                                )
+                            )
+                            .toggleStyle(.checkbox)
+                            .foregroundStyle(.red)
+                        }
                     }
                     .padding(20)
                 }
@@ -685,7 +782,11 @@ struct SkillUpdateReviewView: View {
                     Button(localizer.string("返回")) { self.preview = nil }
                     Button(localizer.string("安装更新"), action: install)
                         .buttonStyle(.borderedProminent)
-                        .disabled(isWorking)
+                        .disabled(
+                            isWorking
+                                || (update.candidate.securityAudit.riskLevel.requiresExtraConfirmation
+                                    && !confirmedRiskCandidateIDs.contains(update.candidate.id))
+                        )
                 }
             }
             .padding(16)
@@ -714,7 +815,10 @@ struct SkillUpdateReviewView: View {
         guard let preview else { return }
         isWorking = true
         Task {
-            result = await service.install(preview)
+            result = await service.install(
+                preview,
+                confirmedRiskCandidateIDs: confirmedRiskCandidateIDs
+            )
             isWorking = false
         }
     }
@@ -746,8 +850,8 @@ struct SkillUninstallView: View {
             if let result {
                 List(result.items) { item in
                     HStack(alignment: .top) {
-                        Image(systemName: item.status.systemImage)
-                            .foregroundStyle(item.status.tint)
+                        Image(systemName: item.status.presentation.systemImage)
+                            .foregroundStyle(item.status.presentation.tint)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("\(item.skillName) · \(item.agentDisplayName)")
                                 .fontWeight(.medium)
@@ -883,19 +987,11 @@ private extension SkillInstallationAction {
 }
 
 private extension SkillOperationStatus {
-    var systemImage: String {
+    var presentation: (systemImage: String, tint: Color) {
         switch self {
-        case .succeeded, .alreadyInstalled: "checkmark.circle.fill"
-        case .skipped: "forward.circle.fill"
-        case .failed: "xmark.octagon.fill"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .succeeded, .alreadyInstalled: .green
-        case .skipped: .secondary
-        case .failed: .red
+        case .succeeded, .alreadyInstalled: ("checkmark.circle.fill", .green)
+        case .skipped: ("forward.circle.fill", .secondary)
+        case .failed: ("xmark.octagon.fill", .red)
         }
     }
 }
