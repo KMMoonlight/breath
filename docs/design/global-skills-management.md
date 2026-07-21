@@ -192,8 +192,8 @@ Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数�
 
 ### 7.3 skills.sh
 
-- 普通关键词调用隔离的 skills.sh Provider 搜索。
-- 搜索服务要求 Breath 不持有的认证信息时，在 skills.sh Tab 内联说明，并引导用户取得 GitHub Repo 后切换到 GitHub Tab；不得弹出身份认证 Alert。
+- 普通关键词调用隔离的 skills.sh Provider，通过 skills.sh 官方 CLI 使用的公开搜索入口检索。
+- 只展示具有公开 GitHub 上游、可以由 Breath 原生安装的结果。skills.sh 搜索错误在当前 Tab 内联显示，不得弹出身份认证 Alert。
 - 搜索结果展示名称、`description`、来源、安装量及可用的安全审计信息。
 - 选择结果后解析其实际安装来源，再进入与 GitHub 相同的候选和预览流程。
 - skills.sh 暂时不可用时只影响在线搜索，不影响本地列表、ZIP、指定 GitHub Repo、更新记录或卸载。

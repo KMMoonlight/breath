@@ -124,6 +124,9 @@ struct WindowLayoutSourceTests {
         #expect(sourceStep.contains("Text(\"skills.sh\").tag(SourceMode.skillsSh)"))
         #expect(!sourceStep.contains("ContentUnavailableView"))
         #expect(sourceStep.contains("sourceMessage"))
+        #expect(sourceStep.contains(
+            ".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)"
+        ))
         #expect(source.contains("private func resolveGitHubInput()"))
         #expect(source.contains("private func searchSkillsSh()"))
         #expect(!source.contains("resolveOnlineInput"))
@@ -134,7 +137,7 @@ struct WindowLayoutSourceTests {
         let installer = source[..<updateViewStart.lowerBound]
         #expect(!installer.contains(".alert(\"Breath\""))
         #expect(installer.contains("localizedSourceMessage(for: error)"))
-        #expect(installer.contains("sourceError == .authenticationRequired"))
+        #expect(!installer.contains("skills.sh 当前无法从 Breath 搜索"))
 
         let guidelines = try String(
             contentsOf: root.appendingPathComponent(

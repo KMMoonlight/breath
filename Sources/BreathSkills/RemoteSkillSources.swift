@@ -398,7 +398,7 @@ public struct SkillsShHTTPProvider: SkillsShProviding, Sendable {
     }
 
     public func search(query: String, limit: Int = 50) async throws -> [SkillsShSearchResult] {
-        guard var components = URLComponents(string: "https://skills.sh/api/v1/skills/search") else {
+        guard var components = URLComponents(string: "https://skills.sh/api/search") else {
             throw OnlineSkillSourceError.invalidResponse
         }
         components.queryItems = [
@@ -407,31 +407,12 @@ public struct SkillsShHTTPProvider: SkillsShProviding, Sendable {
         ]
         guard let url = components.url else { throw OnlineSkillSourceError.invalidResponse }
         let data = try await request(url)
-        return try Self.makeDecoder().decode(SearchResponse.self, from: data).data
+        let response = try Self.makeDecoder().decode(SearchResponse.self, from: data)
+        return response.skills.compactMap(Self.makeSearchResult)
     }
 
-    public func audit(skillID: String) async throws -> SkillSecurityAudit {
-        let encodedID = skillID.split(separator: "/").map {
-            String($0).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0)
-        }.joined(separator: "/")
-        guard let url = URL(string: "https://skills.sh/api/v1/skills/audit/\(encodedID)") else {
-            throw OnlineSkillSourceError.invalidResponse
-        }
-        do {
-            let data = try await request(url)
-            let response = try Self.makeDecoder().decode(AuditResponse.self, from: data)
-            guard !response.audits.isEmpty else { return .unknown }
-            let highest = response.audits.max {
-                riskRank($0.riskLevel) < riskRank($1.riskLevel)
-            }
-            return SkillSecurityAudit(
-                riskLevel: Self.riskLevel(highest?.riskLevel),
-                summary: highest?.summary ?? "Security audit available.",
-                checkedAt: highest?.auditedAt
-            )
-        } catch OnlineSkillSourceError.repositoryUnavailable {
-            return .unknown
-        }
+    public func audit(skillID _: String) async throws -> SkillSecurityAudit {
+        return .unknown
     }
 
     private func request(_ url: URL) async throws -> Data {
@@ -462,33 +443,45 @@ public struct SkillsShHTTPProvider: SkillsShProviding, Sendable {
         return decoder
     }
 
-    private func riskRank(_ raw: String?) -> Int {
-        switch Self.riskLevel(raw) {
-        case .unknown: 0
-        case .none: 1
-        case .low: 2
-        case .medium: 3
-        case .high: 4
-        case .critical: 5
+    private struct SearchResponse: Decodable {
+        let skills: [SearchItem]
+    }
+
+    private struct SearchItem: Decodable {
+        let id: String
+        let skillID: String
+        let name: String
+        let installs: Int
+        let source: String
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case skillID = "skillId"
+            case name
+            case installs
+            case source
         }
     }
 
-    private static func riskLevel(_ raw: String?) -> SkillRiskLevel {
-        guard let raw else { return .unknown }
-        return SkillRiskLevel(rawValue: raw.lowercased()) ?? .unknown
-    }
-
-    private struct SearchResponse: Decodable {
-        let data: [SkillsShSearchResult]
-    }
-
-    private struct AuditResponse: Decodable {
-        let audits: [AuditEntry]
-    }
-
-    private struct AuditEntry: Decodable {
-        let summary: String
-        let auditedAt: Date?
-        let riskLevel: String?
+    private static func makeSearchResult(_ item: SearchItem) -> SkillsShSearchResult? {
+        guard let locator = try? GitHubSkillLocator.parse(item.source),
+              locator.subdirectory == nil,
+              locator.reference == nil,
+              let installURL = URL(string: "https://github.com/\(locator.repository)"),
+              let pageURL = URL(string: "https://skills.sh/\(item.id)")
+        else {
+            return nil
+        }
+        return SkillsShSearchResult(
+            id: item.id,
+            slug: item.skillID,
+            name: item.name,
+            description: nil,
+            source: locator.repository,
+            installs: item.installs,
+            sourceType: "github",
+            installURL: installURL,
+            pageURL: pageURL
+        )
     }
 }

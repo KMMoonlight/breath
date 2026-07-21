@@ -111,6 +111,7 @@ struct SkillInstallationWizard: View {
             Spacer()
         }
         .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onChange(of: sourceMode) { _, _ in
             sourceMessage = nil
         }
@@ -552,13 +553,6 @@ struct SkillInstallationWizard: View {
     }
 
     private func localizedSourceMessage(for error: Error) -> String {
-        if let sourceError = error as? OnlineSkillSourceError,
-           sourceError == .authenticationRequired
-        {
-            return localizer.string(
-                "skills.sh 当前无法从 Breath 搜索。请在 skills.sh 查找后，通过 GitHub Repo 安装。"
-            )
-        }
         return localizer.string(error.localizedDescription)
     }
 
