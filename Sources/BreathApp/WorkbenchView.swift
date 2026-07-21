@@ -176,7 +176,7 @@ struct WorkbenchView: View {
                 .help(localizer.string(WorkbenchAccessibility.addWorkspace))
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, WorkbenchLayout.sidebarHeaderVerticalPadding)
+            .frame(height: WorkbenchLayout.sidebarHeaderRowHeight)
 
             Divider()
 
@@ -1756,7 +1756,7 @@ private struct AgentBrandIcon: View {
 
 enum WorkbenchLayout {
     static let windowControlsHeight: CGFloat = 32
-    static let sidebarHeaderVerticalPadding: CGFloat = 8
+    static let sidebarHeaderRowHeight: CGFloat = 32
     static let sidebarDefaultWidth: CGFloat = 220
     static let sidebarMinimumWidth: CGFloat = 140
     static let sidebarMaximumWidth: CGFloat = 380

@@ -40,6 +40,40 @@ struct WindowLayoutSourceTests {
         #expect(skillsSource.contains("GeometryReader"))
         #expect(skillsSource.contains("NavigationStack"))
         #expect(skillsSource.contains("NavigationLink(value: skill.id)"))
+        #expect(skillsSource.contains("HSplitView"))
+        #expect(!skillsSource.contains("NavigationSplitView"))
+        #expect(!skillsSource.contains("sidebarToggle"))
+        #expect(skillsSource.contains("private var listControls: some View"))
+        #expect(skillsSource.contains(".menuStyle(.borderlessButton)"))
+        #expect(skillsSource.contains("Image(systemName: \"arrow.clockwise\")"))
+        #expect(skillsSource.contains("private var listBackground: Color"))
+        #expect(skillsSource.contains(".scrollContentBackground(.hidden)"))
+        #expect(skillsSource.contains(".padding(.top, 6)"))
+        #expect(!skillsSource.contains(
+            "Label(localizer.string(\"刷新\"), systemImage: \"arrow.clockwise\")"
+        ))
+
+        let headerStart = try #require(
+            skillsSource.range(of: "private var header: some View")
+        )
+        let listControlsStart = try #require(
+            skillsSource.range(of: "private var listControls: some View")
+        )
+        let headerSource = skillsSource[
+            headerStart.lowerBound..<listControlsStart.lowerBound
+        ]
+        #expect(!headerSource.contains("TextField"))
+        #expect(!headerSource.contains("filterMenu"))
+        #expect(!headerSource.contains("model.refresh()"))
+        #expect(headerSource.contains(
+            "HStack(alignment: .firstTextBaseline, spacing: 8)"
+        ))
+        #expect(headerSource.contains(".font(.title2.weight(.semibold))"))
+        #expect(headerSource.contains("WorkbenchLayout.windowControlsHeight"))
+        #expect(headerSource.contains("WorkbenchLayout.sidebarHeaderRowHeight"))
+        #expect(!headerSource.contains("WorkbenchLayout.sidebarHeaderVerticalPadding"))
+        #expect(!headerSource.contains("VStack(alignment: .leading"))
+        #expect(!headerSource.contains(".padding(.top, 32)"))
 
         let serviceSource = try String(
             contentsOf: root.appendingPathComponent("Sources/BreathSkills/BreathSkills.swift"),

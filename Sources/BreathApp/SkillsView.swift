@@ -22,19 +22,18 @@ struct SkillsView: View {
             GeometryReader { geometry in
                 if geometry.size.width < 720 {
                     NavigationStack {
-                        skillList(navigatesToDetail: true)
+                        skillListPanel(navigatesToDetail: true)
                             .navigationDestination(for: String.self) { skillID in
                                 detail(for: model.snapshot.skills.first { $0.id == skillID })
                             }
                     }
                 } else {
-                    NavigationSplitView {
-                        skillList(navigatesToDetail: false)
-                            .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 460)
-                    } detail: {
+                    HSplitView {
+                        skillListPanel(navigatesToDetail: false)
+                            .frame(minWidth: 280, idealWidth: 340, maxWidth: 460)
                         detail(for: selectedSkill)
+                            .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    .navigationSplitViewStyle(.balanced)
                 }
             }
         }
@@ -96,43 +95,62 @@ struct SkillsView: View {
         ApplicationLocalizer(language: language)
     }
 
+    private var listBackground: Color {
+        Color(nsColor: .windowBackgroundColor)
+    }
+
     private var header: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+        VStack(spacing: 0) {
+            Color.clear
+                .frame(height: WorkbenchLayout.windowControlsHeight)
+                .accessibilityHidden(true)
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(localizer.string("Skills"))
                     .font(.title2.weight(.semibold))
                 Text(localizer.format("%d 个全局 Skill", model.snapshot.skills.count))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    showsInstaller = true
+                } label: {
+                    Label(localizer.string("安装 Skill…"), systemImage: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .accessibilityLabel(localizer.string("安装 Skill"))
             }
-            Spacer()
+            .padding(.horizontal, 18)
+            .frame(height: WorkbenchLayout.sidebarHeaderRowHeight)
+        }
+    }
+
+    private var listControls: some View {
+        HStack(spacing: 8) {
             TextField(localizer.string("搜索名称或说明"), text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 220)
                 .accessibilityLabel(localizer.string("搜索 Skills"))
             filterMenu
             Button {
                 model.refresh()
             } label: {
                 if model.isRefreshing {
-                    ProgressView().controlSize(.small)
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
                 } else {
-                    Label(localizer.string("刷新"), systemImage: "arrow.clockwise")
+                    Image(systemName: "arrow.clockwise")
                 }
             }
+            .buttonStyle(.plain)
+            .frame(width: 24, height: 24)
+            .contentShape(Rectangle())
             .disabled(model.isRefreshing)
             .accessibilityLabel(localizer.string("刷新 Skills"))
-            Button {
-                showsInstaller = true
-            } label: {
-                Label(localizer.string("安装 Skill…"), systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
-            .accessibilityLabel(localizer.string("安装 Skill"))
         }
-        .padding(.top, 32)
-        .padding(.horizontal, 18)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
     }
 
     private var filterMenu: some View {
@@ -169,7 +187,19 @@ struct SkillsView: View {
         } label: {
             Label(localizer.string("筛选"), systemImage: "line.3.horizontal.decrease.circle")
         }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
         .accessibilityLabel(localizer.string("筛选 Skills"))
+    }
+
+    private func skillListPanel(navigatesToDetail: Bool) -> some View {
+        VStack(spacing: 0) {
+            listControls
+            Divider()
+            skillList(navigatesToDetail: navigatesToDetail)
+                .padding(.top, 6)
+        }
+        .background(listBackground)
     }
 
     private func skillList(navigatesToDetail: Bool) -> some View {
@@ -222,6 +252,8 @@ struct SkillsView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(listBackground)
         .accessibilityLabel(localizer.string("全局 Skills 列表"))
     }
 
