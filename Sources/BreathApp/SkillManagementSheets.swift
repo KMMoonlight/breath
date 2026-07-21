@@ -25,6 +25,7 @@ struct SkillInstallationWizard: View {
     @State private var result: SkillOperationResult?
     @State private var sourceMessage: String?
     @State private var activity: Activity?
+    @State private var preinstalledAgents: Set<AgentKind> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -181,9 +182,15 @@ struct SkillInstallationWizard: View {
             }
             if !searchResults.isEmpty {
                 List(searchResults) { item in
-                    let installedAgents = installedAgentNames(matching: item)
+                    let installedCopies = installedCopies(matching: item)
+                    let installedAgents = installedAgentNames(in: installedCopies)
                     let submitter = catalogSubmitter(for: item)
                     let isInstalled = !installedAgents.isEmpty
+                    let installedAgentKinds = Set(installedCopies.map(\.agent))
+                    let canInstallToOtherAgent = snapshot.targets.contains {
+                        $0.availability.isSelectable
+                            && !installedAgentKinds.contains($0.agent)
+                    }
                     HStack(alignment: .center, spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(item.name).fontWeight(.medium)
@@ -233,21 +240,34 @@ struct SkillInstallationWizard: View {
                             Text(localizer.format("%d 次安装", item.installs))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            if activity == .downloadingCatalog(item.id) {
+                            if activity == .preparingInstalledCopy(item.id) {
+                                progressStatus("正在准备本地副本…")
+                            } else if activity == .downloadingCatalog(item.id) {
                                 progressStatus("正在下载…")
+                            } else if isInstalled && !canInstallToOtherAgent {
+                                Text(localizer.string("此 Skill 已安装"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             } else {
-                                Button(localizer.string(isInstalled ? "管理安装…" : "安装")) {
-                                    discoverCatalogResult(item)
+                                Button(localizer.string(
+                                    isInstalled ? "安装到其他 Agent" : "安装"
+                                )) {
+                                    beginCatalogInstallation(
+                                        item,
+                                        installedCopies: installedCopies
+                                    )
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .disabled(isWorking)
                                 .accessibilityLabel(localizer.format(
-                                    isInstalled ? "管理 %@ 的安装" : "安装 %@",
+                                    isInstalled ? "将 %@ 安装到其他 Agent" : "安装 %@",
                                     item.name
                                 ))
                                 .accessibilityHint(localizer.string(
-                                    "从 GitHub 下载来源并进入安装内容检查"
+                                    isInstalled
+                                        ? "从本地已安装副本准备内容并选择其他 Agent"
+                                        : "从 GitHub 下载来源并进入安装内容检查"
                                 ))
                             }
                         }
@@ -262,21 +282,24 @@ struct SkillInstallationWizard: View {
         }
     }
 
-    private func installedAgentNames(matching item: SkillsShSearchResult) -> [String] {
-        guard let identity = SkillSourceIdentity(
-            source: .skillsSh,
-            repository: item.source,
-            sourceRelativePath: item.slug,
-            catalogSkillID: item.id
-        ) else {
-            return []
-        }
-        return Array(Set(
-            snapshot.skills
-                .flatMap(\.copies)
-                .filter { $0.sourceIdentity == identity }
-                .map(\.agentDisplayName)
-        )).sorted {
+    private func installedCopies(matching item: SkillsShSearchResult) -> [InstalledSkillCopy] {
+        return snapshot.skills
+            .flatMap(\.copies)
+            .filter { $0.matchesSkillsShCatalogEntry(item) }
+            .sorted {
+                let leftIsShared = $0.installationOrigin?.sharedProvenance != nil
+                let rightIsShared = $1.installationOrigin?.sharedProvenance != nil
+                if leftIsShared != rightIsShared { return leftIsShared }
+                if $0.isLocallyModified != $1.isLocallyModified {
+                    return !$0.isLocallyModified
+                }
+                return $0.agentDisplayName.localizedStandardCompare($1.agentDisplayName)
+                    == .orderedAscending
+            }
+    }
+
+    private func installedAgentNames(in copies: [InstalledSkillCopy]) -> [String] {
+        Array(Set(copies.map(\.agentDisplayName))).sorted {
             $0.localizedStandardCompare($1) == .orderedAscending
         }
     }
@@ -361,13 +384,18 @@ struct SkillInstallationWizard: View {
             Text(localizer.string("每次安装默认不选择任何 Agent。每个目标将获得完整独立副本。"))
                 .foregroundStyle(.secondary)
             List(snapshot.targets) { target in
+                let isAlreadyInstalled = preinstalledAgents.contains(target.agent)
                 Toggle(isOn: membership(target.agent, in: $selectedAgents)) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(target.displayName).fontWeight(.medium)
                         Text(target.directory?.path ?? localizer.string("目录无法解析"))
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
-                        if case .unavailable(let reason) = target.availability {
+                        if isAlreadyInstalled {
+                            Text(localizer.string("此 Skill 已安装"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else if case .unavailable(let reason) = target.availability {
                             Text(localizedSkillMessage(reason, localizer: localizer))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -375,7 +403,7 @@ struct SkillInstallationWizard: View {
                     }
                 }
                 .toggleStyle(.checkbox)
-                .disabled(!target.availability.isSelectable)
+                .disabled(!target.availability.isSelectable || isAlreadyInstalled)
             }
         }
         .padding(20)
@@ -652,14 +680,39 @@ struct SkillInstallationWizard: View {
         }
     }
 
-    private func discoverCatalogResult(_ item: SkillsShSearchResult) {
-        runSourceTask(activity: .downloadingCatalog(item.id)) {
-            try await service.discoverSkill(fromSkillsSh: item)
+    private func beginCatalogInstallation(
+        _ item: SkillsShSearchResult,
+        installedCopies: [InstalledSkillCopy]
+    ) {
+        if let sourceCopy = installedCopies.first {
+            let sourceLabel = localizer.format(
+                "本地副本 · %@",
+                sourceCopy.agentDisplayName
+            )
+            runSourceTask(
+                activity: .preparingInstalledCopy(item.id),
+                installedAgentsToExclude: Set(installedCopies.map(\.agent)),
+                nextStep: .targets,
+                selectsDiscoveredCandidates: true
+            ) {
+                try await service.discoverSkill(
+                    fromInstalledCopy: sourceCopy,
+                    sourceLabel: sourceLabel,
+                    securityAudit: item.securityAudit
+                )
+            }
+        } else {
+            runSourceTask(activity: .downloadingCatalog(item.id)) {
+                try await service.discoverSkill(fromSkillsSh: item)
+            }
         }
     }
 
     private func runSourceTask(
         activity newActivity: Activity,
+        installedAgentsToExclude: Set<AgentKind> = [],
+        nextStep: Step = .candidates,
+        selectsDiscoveredCandidates: Bool = false,
         _ operation: @escaping @Sendable () async throws -> SkillCandidateBatch
     ) {
         guard activity == nil else { return }
@@ -671,11 +724,14 @@ struct SkillInstallationWizard: View {
                 if let batch { await service.cancel(batch) }
                 let discovered = try await operation()
                 batch = discovered
-                selectedCandidateIDs = []
+                selectedCandidateIDs = selectsDiscoveredCandidates
+                    ? Set(discovered.candidates.map(\.id))
+                    : []
                 selectedAgents = []
+                preinstalledAgents = installedAgentsToExclude
                 replacementChoices = [:]
                 confirmedRiskCandidateIDs = []
-                step = .candidates
+                step = nextStep
             } catch {
                 sourceMessage = localizedSourceMessage(for: error)
             }
@@ -773,6 +829,7 @@ struct SkillInstallationWizard: View {
         case downloadingGitHub
         case searchingSkillsSh(String)
         case downloadingCatalog(String)
+        case preparingInstalledCopy(String)
         case preparingPreview
         case installing
     }

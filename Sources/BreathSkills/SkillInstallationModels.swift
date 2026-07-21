@@ -62,6 +62,83 @@ public struct SkillRemoteProvenance: Codable, Hashable, Sendable {
     }
 }
 
+public struct SkillSharedProvenance: Codable, Hashable, Sendable {
+    public let source: SkillSourceKind
+    public let repository: String?
+    public let sourceRelativePath: String?
+    public let skillIdentifier: String?
+    public let sourceURL: String?
+    public let contentHash: String?
+
+    public init(
+        source: SkillSourceKind,
+        repository: String?,
+        sourceRelativePath: String?,
+        skillIdentifier: String?,
+        sourceURL: String?,
+        contentHash: String?
+    ) {
+        self.source = source
+        self.repository = repository
+        self.sourceRelativePath = sourceRelativePath
+        self.skillIdentifier = skillIdentifier
+        self.sourceURL = sourceURL
+        self.contentHash = contentHash
+    }
+
+    func matchesSkillsShCatalogEntry(
+        repository catalogRepository: String,
+        skillIdentifier catalogSkillIdentifier: String,
+        catalogSkillID: String
+    ) -> Bool {
+        guard source == .github,
+              let repository = Self.normalizedRepository(repository),
+              let skillDirectoryName = Self.canonicalDirectoryName(for: skillIdentifier),
+              let catalogRepository = Self.normalizedRepository(catalogRepository),
+              let catalogDirectoryName = Self.canonicalDirectoryName(
+                  for: catalogSkillIdentifier
+              ),
+              let catalogSkillIdentifier = Self.normalizedCatalogSkillIdentifier(
+                  catalogSkillIdentifier
+              ),
+              repository == catalogRepository,
+              skillDirectoryName == catalogDirectoryName
+        else {
+            return false
+        }
+        return catalogSkillID.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() == "\(catalogRepository)/\(catalogSkillIdentifier)"
+    }
+
+    private static func normalizedRepository(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let components = value.split(separator: "/")
+        guard components.count == 2 else { return nil }
+        return components.map(String.init).joined(separator: "/").lowercased()
+    }
+
+    static func canonicalDirectoryName(for value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value
+            .lowercased()
+            .replacingOccurrences(
+                of: "[^a-z0-9._]+",
+                with: "-",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".-"))
+        let limited = String(normalized.prefix(255))
+        return limited.isEmpty ? "unnamed-skill" : limited
+    }
+
+    private static func normalizedCatalogSkillIdentifier(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalized.isEmpty ? nil : normalized
+    }
+}
+
 public enum SkillSourceIdentity: Codable, Hashable, Sendable {
     case skillsSh(catalogSkillID: String)
     case github(repository: String, sourceRelativePath: String)
@@ -113,16 +190,23 @@ public extension SkillRemoteProvenance {
 public enum SkillInstallationOrigin: Codable, Hashable, Sendable {
     case zip
     case remote(SkillRemoteProvenance)
+    case shared(SkillSharedProvenance)
 
     public var source: SkillSourceKind {
         switch self {
         case .zip: .zip
         case .remote(let provenance): provenance.source.sourceKind
+        case .shared(let provenance): provenance.source
         }
     }
 
     public var remoteProvenance: SkillRemoteProvenance? {
         if case .remote(let provenance) = self { return provenance }
+        return nil
+    }
+
+    public var sharedProvenance: SkillSharedProvenance? {
+        if case .shared(let provenance) = self { return provenance }
         return nil
     }
 }
@@ -168,6 +252,8 @@ public struct SkillCandidate: Identifiable, Hashable, Sendable {
     public let sourceRelativePath: String
     public let remoteProvenance: SkillRemoteProvenance?
     public let securityAudit: SkillSecurityAudit
+    let installationOrigin: SkillInstallationOrigin?
+    let installationRecordContentDigest: String?
     let directory: URL
 
     init(
@@ -184,6 +270,8 @@ public struct SkillCandidate: Identifiable, Hashable, Sendable {
         sourceRelativePath: String,
         remoteProvenance: SkillRemoteProvenance?,
         securityAudit: SkillSecurityAudit = .unknown,
+        installationOrigin: SkillInstallationOrigin? = nil,
+        installationRecordContentDigest: String? = nil,
         directory: URL
     ) {
         self.id = id
@@ -199,6 +287,8 @@ public struct SkillCandidate: Identifiable, Hashable, Sendable {
         self.sourceRelativePath = sourceRelativePath
         self.remoteProvenance = remoteProvenance
         self.securityAudit = securityAudit
+        self.installationOrigin = installationOrigin
+        self.installationRecordContentDigest = installationRecordContentDigest
         self.directory = directory
     }
 }

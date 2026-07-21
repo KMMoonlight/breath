@@ -143,12 +143,14 @@ struct WindowLayoutSourceTests {
         #expect(sourceStep.contains(
             "Button(localizer.string(\"安装\"), action: resolveGitHubInput)"
         ))
-        #expect(sourceStep.contains("isInstalled ? \"管理安装…\" : \"安装\""))
-        #expect(sourceStep.contains("isInstalled ? \"管理 %@ 的安装\" : \"安装 %@\""))
+        #expect(sourceStep.contains("isInstalled ? \"安装到其他 Agent\" : \"安装\""))
+        #expect(sourceStep.contains(
+            "isInstalled ? \"将 %@ 安装到其他 Agent\" : \"安装 %@\""
+        ))
         #expect(!sourceStep.contains("Text(item.source)"))
-        #expect(sourceStep.contains("installedAgentNames(matching: item)"))
-        #expect(sourceStep.contains("$0.sourceIdentity == identity"))
-        #expect(sourceStep.contains("catalogSkillID: item.id"))
+        #expect(sourceStep.contains("installedCopies(matching: item)"))
+        #expect(sourceStep.contains("installedAgentNames(in: installedCopies)"))
+        #expect(sourceStep.contains("$0.matchesSkillsShCatalogEntry(item)"))
         #expect(sourceStep.contains("localizer.format(\"提交者：%@\", submitter)"))
         #expect(sourceStep.contains("已安装于 %@"))
         #expect(!sourceStep.contains(".filter { $0.name == name }"))
@@ -158,6 +160,10 @@ struct WindowLayoutSourceTests {
         #expect(!sourceStep.contains("localizer.string(\"暂无说明\")"))
         #expect(!sourceStep.contains(".onSubmit(resolveGitHubInput)"))
         #expect(sourceStep.contains("activity == .downloadingCatalog(item.id)"))
+        #expect(sourceStep.contains("activity == .preparingInstalledCopy(item.id)"))
+        #expect(sourceStep.contains("fromInstalledCopy: sourceCopy"))
+        #expect(sourceStep.contains("nextStep: .targets"))
+        #expect(!sourceStep.contains("管理安装…"))
         #expect(sourceStep.contains("activity == .downloadingGitHub"))
         #expect(sourceStep.contains("localizer.string(\"正在下载…\")"))
         #expect(!sourceStep.contains("Image(systemName: \"chevron.right\")"))

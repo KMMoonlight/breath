@@ -212,7 +212,21 @@ struct SkillInstallationCommitter: @unchecked Sendable {
                     ? timestamp
                     : existingRecord?.installedAt ?? timestamp
                 do {
-                    if let provenance = item.candidate.remoteProvenance {
+                    if let installationOrigin = item.candidate.installationOrigin {
+                        try await recordRepository.saveSkillInstallationRecord(
+                            SkillInstallationRecord(
+                                agent: item.targetID.agent,
+                                installationDirectory: destination,
+                                skillName: item.candidate.name,
+                                origin: installationOrigin,
+                                installedContentDigest: item.candidate
+                                    .installationRecordContentDigest
+                                    ?? item.candidate.contentDigest,
+                                installedAt: installedAt,
+                                updatedAt: timestamp
+                            )
+                        )
+                    } else if let provenance = item.candidate.remoteProvenance {
                         try await recordRepository.saveSkillInstallationRecord(
                             SkillInstallationRecord(
                                 agent: item.targetID.agent,

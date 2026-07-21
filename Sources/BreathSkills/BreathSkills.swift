@@ -42,11 +42,18 @@ public struct SkillInstallationRecord: Codable, Hashable, Identifiable, Sendable
     public let updatedAt: Date
 
     public var source: SkillSourceKind { origin.source }
-    public var repository: String? { origin.remoteProvenance?.repository }
-    public var sourceRelativePath: String? { origin.remoteProvenance?.sourceRelativePath }
+    public var repository: String? {
+        origin.remoteProvenance?.repository ?? origin.sharedProvenance?.repository
+    }
+    public var sourceRelativePath: String? {
+        origin.remoteProvenance?.sourceRelativePath
+            ?? origin.sharedProvenance?.sourceRelativePath
+    }
     public var reference: SkillSourceReference? { origin.remoteProvenance?.reference }
     public var resolvedCommit: String? { origin.remoteProvenance?.resolvedCommit }
-    public var catalogSkillID: String? { origin.remoteProvenance?.catalogSkillID }
+    public var catalogSkillID: String? {
+        origin.remoteProvenance?.catalogSkillID
+    }
 
     public init(
         agent: AgentKind,
@@ -114,6 +121,8 @@ public struct InstalledSkillCopy: Codable, Hashable, Identifiable, Sendable {
     public let reference: SkillSourceReference?
     public let resolvedCommit: String?
     public let catalogSkillID: String?
+    public let installationOrigin: SkillInstallationOrigin?
+    public let installationRecordContentDigest: String?
     public let updateState: SkillUpdateState
     public let isLocallyModified: Bool
 
@@ -129,6 +138,8 @@ public struct InstalledSkillCopy: Codable, Hashable, Identifiable, Sendable {
         reference: SkillSourceReference? = nil,
         resolvedCommit: String? = nil,
         catalogSkillID: String? = nil,
+        installationOrigin: SkillInstallationOrigin? = nil,
+        installationRecordContentDigest: String? = nil,
         updateState: SkillUpdateState = .unavailable,
         isLocallyModified: Bool = false
     ) {
@@ -143,11 +154,14 @@ public struct InstalledSkillCopy: Codable, Hashable, Identifiable, Sendable {
         self.reference = reference
         self.resolvedCommit = resolvedCommit
         self.catalogSkillID = catalogSkillID
+        self.installationOrigin = installationOrigin
+        self.installationRecordContentDigest = installationRecordContentDigest
         self.updateState = updateState
         self.isLocallyModified = isLocallyModified
     }
 
     public var sourceIdentity: SkillSourceIdentity? {
+        guard installationOrigin?.sharedProvenance == nil else { return nil }
         guard let remoteSource = SkillRemoteSourceKind(source) else { return nil }
         return SkillSourceIdentity(
             source: remoteSource,
@@ -155,6 +169,23 @@ public struct InstalledSkillCopy: Codable, Hashable, Identifiable, Sendable {
             sourceRelativePath: sourceRelativePath ?? "",
             catalogSkillID: catalogSkillID
         )
+    }
+
+    public func matchesSkillsShCatalogEntry(_ entry: SkillsShSearchResult) -> Bool {
+        guard let catalogIdentity = SkillSourceIdentity(
+            source: .skillsSh,
+            repository: entry.source,
+            sourceRelativePath: entry.slug,
+            catalogSkillID: entry.id
+        ) else {
+            return false
+        }
+        if sourceIdentity == catalogIdentity { return true }
+        return installationOrigin?.sharedProvenance?.matchesSkillsShCatalogEntry(
+            repository: entry.source,
+            skillIdentifier: entry.slug,
+            catalogSkillID: entry.id
+        ) == true
     }
 }
 
@@ -317,6 +348,10 @@ public actor GlobalSkillsService {
         var parsed: [ParsedInstalledSkill] = []
         var unrecognized: [UnrecognizedSkillItem] = []
         var targets: [SkillInstallationTarget] = []
+        let sharedRegistry = SharedSkillRegistry.load(
+            homeDirectory: homeDirectory,
+            fileManager: fileManager
+        )
         let records = (try? await recordRepository?.loadSkillInstallationRecords()) ?? []
         let recordsByPath = Dictionary(
             records.map { ($0.installationDirectory.standardizedFileURL.path, $0) },
@@ -367,7 +402,8 @@ public actor GlobalSkillsService {
                         let installed = try parseInstalledSkill(
                             at: child,
                             adapter: adapter,
-                            record: recordsByPath[child.standardizedFileURL.path]
+                            record: recordsByPath[child.standardizedFileURL.path],
+                            sharedRegistry: sharedRegistry
                         )
                         parsed.append(installed)
                         if installed.matchesInstallationRecord {
@@ -529,6 +565,30 @@ public actor GlobalSkillsService {
                 }
             }
         }
+        let sharedContainer = homeDirectory.appendingPathComponent(".agents", isDirectory: true)
+        var existingSharedContainer = sharedContainer
+        while !fileManager.fileExists(atPath: existingSharedContainer.path),
+              existingSharedContainer.standardizedFileURL != homeDirectory.standardizedFileURL
+        {
+            existingSharedContainer.deleteLastPathComponent()
+        }
+        directories.append(existingSharedContainer)
+        let sharedRoot = sharedContainer.appendingPathComponent("skills", isDirectory: true)
+        if fileManager.fileExists(atPath: sharedRoot.path) {
+            directories.append(sharedRoot)
+            if let enumerator = fileManager.enumerator(
+                at: sharedRoot,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles],
+                errorHandler: { _, _ in false }
+            ) {
+                while let item = enumerator.nextObject() as? URL {
+                    if (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                        directories.append(item)
+                    }
+                }
+            }
+        }
         return directories
     }
 
@@ -544,7 +604,8 @@ public actor GlobalSkillsService {
     private func parseInstalledSkill(
         at presentedURL: URL,
         adapter: AgentAdapterDescriptor,
-        record: SkillInstallationRecord?
+        record: SkillInstallationRecord?,
+        sharedRegistry: SharedSkillRegistry
     ) throws -> ParsedInstalledSkill {
         let values = try presentedURL.resourceValues(forKeys: [
             .isDirectoryKey,
@@ -585,6 +646,8 @@ public actor GlobalSkillsService {
         let matchingRecord = record.flatMap {
             $0.agent == adapter.kind && $0.skillName == metadata.name ? $0 : nil
         }
+        let installationOrigin = matchingRecord?.origin
+            ?? sharedRegistry.installationOrigin(for: resolvedURL)
         let isLocallyModified = matchingRecord.map {
             guard case .remote = $0.origin else { return false }
             return $0.installedContentDigest != digest
@@ -603,12 +666,16 @@ public actor GlobalSkillsService {
                 directory: presentedURL,
                 resolvedDirectory: resolvedURL,
                 isSymbolicLink: isSymbolicLink,
-                source: matchingRecord?.source ?? .unknown,
-                repository: matchingRecord?.repository,
-                sourceRelativePath: matchingRecord?.sourceRelativePath,
+                source: installationOrigin?.source ?? .unknown,
+                repository: matchingRecord?.repository
+                    ?? installationOrigin?.sharedProvenance?.repository,
+                sourceRelativePath: matchingRecord?.sourceRelativePath
+                    ?? installationOrigin?.sharedProvenance?.sourceRelativePath,
                 reference: matchingRecord?.reference,
                 resolvedCommit: matchingRecord?.resolvedCommit,
                 catalogSkillID: matchingRecord?.catalogSkillID,
+                installationOrigin: installationOrigin,
+                installationRecordContentDigest: matchingRecord?.installedContentDigest,
                 updateState: recordedUpdateState ?? matchingRecord.map {
                     guard case .remote(let provenance) = $0.origin else {
                         return .unavailable
@@ -711,6 +778,53 @@ public actor GlobalSkillsService {
             preferredSkillSlug: result.slug,
             catalogSkillID: result.id
         )
+    }
+
+    public func discoverSkill(
+        fromInstalledCopy copy: InstalledSkillCopy,
+        sourceLabel: String,
+        securityAudit: SkillSecurityAudit = .unknown
+    ) throws -> SkillCandidateBatch {
+        guard let installationOrigin = copy.installationOrigin else {
+            throw SkillSourceError.unknownCandidateBatch
+        }
+        let workspace = fileManager.temporaryDirectory.appendingPathComponent(
+            "breath-skill-local-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let localSnapshot = workspace.appendingPathComponent(
+            copy.resolvedDirectory.lastPathComponent,
+            isDirectory: true
+        )
+        do {
+            try fileManager.createDirectory(
+                at: workspace,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try rejectSymbolicLinks(in: copy.resolvedDirectory)
+            try fileManager.copyItem(at: copy.resolvedDirectory, to: localSnapshot)
+            try rejectSymbolicLinks(in: localSnapshot)
+            let candidate = try makeCandidate(
+                root: localSnapshot,
+                sourceRoot: localSnapshot,
+                source: copy.source,
+                sourceLabel: sourceLabel,
+                remoteProvenance: installationOrigin.remoteProvenance,
+                securityAudit: securityAudit,
+                installationOrigin: installationOrigin,
+                installationRecordContentDigest: copy.installationRecordContentDigest
+            )
+            return SkillCandidateBatch(
+                source: copy.source,
+                sourceLabel: sourceLabel,
+                candidates: [candidate],
+                workspaceDirectory: workspace
+            )
+        } catch {
+            try? fileManager.removeItem(at: workspace)
+            throw error
+        }
     }
 
     public func beginUpdateCheckSession() {
@@ -1294,7 +1408,9 @@ public actor GlobalSkillsService {
         source: SkillSourceKind,
         sourceLabel: String,
         remoteProvenance: SkillRemoteProvenance?,
-        securityAudit: SkillSecurityAudit
+        securityAudit: SkillSecurityAudit,
+        installationOrigin: SkillInstallationOrigin? = nil,
+        installationRecordContentDigest: String? = nil
     ) throws -> SkillCandidate {
         let manifestURL = root.appendingPathComponent("SKILL.md")
         guard let manifest = try? String(contentsOf: manifestURL, encoding: .utf8) else {
@@ -1369,8 +1485,28 @@ public actor GlobalSkillsService {
             sourceRelativePath: relativePath,
             remoteProvenance: provenance,
             securityAudit: securityAudit,
+            installationOrigin: installationOrigin,
+            installationRecordContentDigest: installationRecordContentDigest,
             directory: root
         )
+    }
+
+    private func rejectSymbolicLinks(in root: URL) throws {
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isSymbolicLinkKey],
+            options: [],
+            errorHandler: { _, _ in false }
+        ) else {
+            throw SkillReadingError.unreadableDirectory
+        }
+        while let item = enumerator.nextObject() as? URL {
+            if try item.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+                throw SkillSourceError.invalidSkill(
+                    "The installed Skill contains a symbolic link and cannot be copied as an independent Agent installation."
+                )
+            }
+        }
     }
 
     private func makeRemoteCandidateBatch(
@@ -1713,6 +1849,111 @@ public actor GlobalSkillsService {
         }
     }
 
+}
+
+private struct SharedSkillRegistry {
+    private let root: URL
+    private let originsByDirectoryName: [String: SkillInstallationOrigin]
+
+    static func load(homeDirectory: URL, fileManager: FileManager) -> SharedSkillRegistry {
+        let container = homeDirectory.appendingPathComponent(".agents", isDirectory: true)
+        let root = container.appendingPathComponent("skills", isDirectory: true)
+        let lockURL = container.appendingPathComponent(".skill-lock.json")
+        guard fileManager.fileExists(atPath: lockURL.path),
+              let data = try? Data(contentsOf: lockURL),
+              let lock = try? JSONDecoder().decode(SharedSkillLockFile.self, from: data)
+        else {
+            return SharedSkillRegistry(root: root, originsByDirectoryName: [:])
+        }
+        var origins: [String: SkillInstallationOrigin] = [:]
+        var ambiguousDirectoryNames: Set<String> = []
+        for entry in lock.skills.values {
+            guard let directoryName = SkillSharedProvenance.canonicalDirectoryName(
+                for: entry.skillIdentifier
+            ) else {
+                continue
+            }
+            let repository = entry.source?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedRepository = repository.flatMap { value in
+                let components = value.split(separator: "/")
+                guard components.count == 2 else { return nil }
+                return components.map(String.init).joined(separator: "/").lowercased()
+            }
+            let source: SkillSourceKind = entry.sourceType?.lowercased() == "github"
+                && normalizedRepository != nil
+                ? .github
+                : .unknown
+            let sourceRelativePath = entry.skillPath.flatMap(Self.skillDirectoryPath)
+            let origin = SkillInstallationOrigin.shared(SkillSharedProvenance(
+                source: source,
+                repository: normalizedRepository,
+                sourceRelativePath: sourceRelativePath,
+                skillIdentifier: entry.skillIdentifier,
+                sourceURL: entry.sourceURL,
+                contentHash: entry.skillFolderHash
+            ))
+            if origins[directoryName] == nil {
+                origins[directoryName] = origin
+            } else {
+                ambiguousDirectoryNames.insert(directoryName)
+            }
+        }
+        for directoryName in ambiguousDirectoryNames {
+            origins.removeValue(forKey: directoryName)
+        }
+        return SharedSkillRegistry(root: root, originsByDirectoryName: origins)
+    }
+
+    func installationOrigin(for resolvedDirectory: URL) -> SkillInstallationOrigin? {
+        let canonicalRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        let canonicalDirectory = resolvedDirectory.resolvingSymlinksInPath().standardizedFileURL
+        guard canonicalDirectory.deletingLastPathComponent() == canonicalRoot else { return nil }
+        return originsByDirectoryName[canonicalDirectory.lastPathComponent]
+    }
+
+    private static func skillDirectoryPath(_ skillPath: String) -> String? {
+        var components = skillPath.split(separator: "/").map(String.init)
+        if components.last?.lowercased() == "skill.md" {
+            components.removeLast()
+        }
+        let path = components.joined(separator: "/")
+        return path.isEmpty ? nil : path
+    }
+}
+
+private struct SharedSkillLockFile: Decodable {
+    let skills: [String: SharedSkillLockEntry]
+
+    private enum CodingKeys: String, CodingKey {
+        case skills
+    }
+}
+
+private struct SharedSkillLockEntry: Decodable {
+    let skillIdentifier: String
+    let source: String?
+    let sourceType: String?
+    let sourceURL: String?
+    let skillPath: String?
+    let skillFolderHash: String?
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        skillIdentifier = decoder.codingPath.last?.stringValue ?? ""
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+        sourceType = try container.decodeIfPresent(String.self, forKey: .sourceType)
+        sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
+        skillPath = try container.decodeIfPresent(String.self, forKey: .skillPath)
+        skillFolderHash = try container.decodeIfPresent(String.self, forKey: .skillFolderHash)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case sourceType
+        case sourceURL = "sourceUrl"
+        case skillPath
+        case skillFolderHash
+    }
 }
 
 private struct ParsedInstalledSkill {

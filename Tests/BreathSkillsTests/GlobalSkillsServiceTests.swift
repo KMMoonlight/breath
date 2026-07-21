@@ -176,6 +176,208 @@ struct GlobalSkillsServiceTests {
         #expect(FileManager.default.fileExists(atPath: external.path))
     }
 
+    @Test("skills CLI shared links keep catalog identity and install locally for another Agent")
+    func recognizesAndCopiesSharedSkillsCLIInstall() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let sharedContainer = fixture.home.appendingPathComponent(".agents", isDirectory: true)
+        let sharedSkill = sharedContainer
+            .appendingPathComponent("skills/agent-browser", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: sharedSkill,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            ---
+            name: agent-browser
+            description: Automates browser interactions.
+            ---
+            local shared content
+            """.utf8
+        ).write(to: sharedSkill.appendingPathComponent("SKILL.md"))
+        try Data(
+            """
+            {
+              "version": 3,
+              "skills": {
+                "Agent Browser": {
+                  "source": "Vercel-Labs/Agent-Browser",
+                  "sourceType": "github",
+                  "sourceUrl": "https://github.com/vercel-labs/agent-browser.git",
+                  "skillPath": "skills/agent-browser/SKILL.md",
+                  "skillFolderHash": "shared-folder-hash"
+                }
+              }
+            }
+            """.utf8
+        ).write(to: sharedContainer.appendingPathComponent(".skill-lock.json"))
+        let claudeLink = try fixture.skillRoot(for: .claudeCode)
+            .appendingPathComponent("agent-browser", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: claudeLink.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: claudeLink,
+            withDestinationURL: sharedSkill
+        )
+        let records = MemorySkillRecordRepository()
+        let github = StubGitHubProvider(archiveData: Data())
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            recordRepository: records,
+            githubProvider: github
+        )
+
+        let snapshot = await service.scan()
+        let skill = try #require(snapshot.skills.first)
+        let sharedCopy = try #require(skill.copies.first)
+
+        #expect(sharedCopy.isSymbolicLink)
+        #expect(sharedCopy.resolvedDirectory == sharedSkill.resolvingSymlinksInPath())
+        #expect(sharedCopy.source == .github)
+        #expect(sharedCopy.repository == "vercel-labs/agent-browser")
+        #expect(sharedCopy.sourceRelativePath == "skills/agent-browser")
+        #expect(sharedCopy.catalogSkillID == nil)
+        #expect(sharedCopy.sourceIdentity == nil)
+        #expect(sharedCopy.installationOrigin?.sharedProvenance?.skillIdentifier
+            == "Agent Browser")
+        #expect(sharedCopy.installationOrigin?.sharedProvenance?.contentHash
+            == "shared-folder-hash")
+        #expect(sharedCopy.installationOrigin?.sharedProvenance?.sourceURL
+            == "https://github.com/vercel-labs/agent-browser.git")
+        let catalogEntry = SkillsShSearchResult(
+            id: "vercel-labs/agent-browser/agent-browser",
+            slug: "agent-browser",
+            name: "agent-browser",
+            description: "Automates browser interactions.",
+            source: "vercel-labs/agent-browser",
+            installs: 1,
+            sourceType: "github",
+            installURL: URL(string: "https://github.com/vercel-labs/agent-browser"),
+            pageURL: try #require(URL(
+                string: "https://skills.sh/vercel-labs/agent-browser/agent-browser"
+            ))
+        )
+        #expect(sharedCopy.matchesSkillsShCatalogEntry(catalogEntry))
+        let inconsistentCatalogEntry = SkillsShSearchResult(
+            id: "another-owner/agent-browser/agent-browser",
+            slug: catalogEntry.slug,
+            name: catalogEntry.name,
+            description: catalogEntry.description,
+            source: catalogEntry.source,
+            installs: catalogEntry.installs,
+            sourceType: catalogEntry.sourceType,
+            installURL: catalogEntry.installURL,
+            pageURL: catalogEntry.pageURL
+        )
+        #expect(!sharedCopy.matchesSkillsShCatalogEntry(inconsistentCatalogEntry))
+
+        let batch = try await service.discoverSkill(
+            fromInstalledCopy: sharedCopy,
+            sourceLabel: "Local Copy · Claude Code"
+        )
+        let candidate = try #require(batch.candidates.first)
+        let preview = await service.previewInstallation(
+            batch: batch,
+            candidateIDs: [candidate.id],
+            targetAgents: [.codex]
+        )
+        let result = await service.install(preview)
+
+        #expect(await github.requestedLocators().isEmpty)
+        #expect(result.items.first?.status == .succeeded)
+        #expect(Set(result.snapshot.skills.first?.copies.map(\.agent) ?? [])
+            == Set([.claudeCode, .codex]))
+        let codexDirectory = try fixture.skillRoot(for: .codex)
+            .appendingPathComponent("agent-browser", isDirectory: true)
+        #expect(FileManager.default.fileExists(atPath: codexDirectory.path))
+        #expect(FileManager.default.fileExists(atPath: sharedSkill.path))
+        let codexRecord = try #require(
+            try await records.loadSkillInstallationRecords().first {
+                $0.agent == .codex
+            }
+        )
+        #expect(codexRecord.origin.sharedProvenance?.skillIdentifier == "Agent Browser")
+        #expect(result.snapshot.skills.first?.copies.allSatisfy {
+            $0.matchesSkillsShCatalogEntry(catalogEntry)
+        } == true)
+    }
+
+    @Test("local Agent installation rejects nested symbolic links")
+    func rejectsNestedLinkWhenCopyingInstalledSkill() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let sharedContainer = fixture.home.appendingPathComponent(".agents", isDirectory: true)
+        let sharedSkill = sharedContainer.appendingPathComponent(
+            "skills/review",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: sharedSkill,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            ---
+            name: review
+            description: Review changes.
+            ---
+            """.utf8
+        ).write(to: sharedSkill.appendingPathComponent("SKILL.md"))
+        let outsideFile = fixture.home.appendingPathComponent("outside.md")
+        try Data("outside".utf8).write(to: outsideFile)
+        try FileManager.default.createSymbolicLink(
+            at: sharedSkill.appendingPathComponent("outside.md"),
+            withDestinationURL: outsideFile
+        )
+        try Data(
+            """
+            {
+              "version": 3,
+              "skills": {
+                "review": {
+                  "source": "example/skills",
+                  "sourceType": "github",
+                  "sourceUrl": "https://github.com/example/skills.git",
+                  "skillPath": "skills/review/SKILL.md",
+                  "skillFolderHash": "shared-folder-hash"
+                }
+              }
+            }
+            """.utf8
+        ).write(to: sharedContainer.appendingPathComponent(".skill-lock.json"))
+        let claudeLink = try fixture.skillRoot(for: .claudeCode)
+            .appendingPathComponent("review", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: claudeLink.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: claudeLink,
+            withDestinationURL: sharedSkill
+        )
+        let github = StubGitHubProvider(archiveData: Data())
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            githubProvider: github
+        )
+        let copy = try #require((await service.scan()).skills.first?.copies.first)
+
+        await #expect(throws: SkillSourceError.invalidSkill(
+            "The installed Skill contains a symbolic link and cannot be copied as an independent Agent installation."
+        )) {
+            try await service.discoverSkill(
+                fromInstalledCopy: copy,
+                sourceLabel: "Local Copy · Claude Code"
+            )
+        }
+        #expect(await github.requestedLocators().isEmpty)
+    }
+
     @Test("snapshot stream notices a Skill installed outside Breath")
     func observesExternalInstall() async throws {
         let fixture = try SkillsFixture()

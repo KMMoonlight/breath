@@ -154,6 +154,8 @@ Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数�
 
 - 读取支持矩阵解析出的全部 Agent 全局 Skill 目录。
 - 识别普通目录和符号链接。
+- 将 `~/.agents/skills` 视为 skills CLI 管理的共享内容库：Agent 目录软链接到其中的 Skill 时，仍按该 Agent 的已安装副本展示；共享库本身不是一个 Agent 安装目标。
+- 只读解析 `~/.agents/.skill-lock.json`，按 skills CLI 的目录规范化规则将锁文件 Skill 标识关联到共享目录，并恢复 Repo 和来源内路径；规范化后发生歧义时不关联来源。Breath 不修改该清单，也不根据 `SKILL.md` 名称猜测来源。skills.sh 搜索返回结果后，只有锁文件 Repo、Skill 标识与结果中的 Repo、`skillId`、完整目录条目 ID 彼此一致，才视为同一目录条目。
 - 不跟随形成循环或越界到不可读位置的链接。
 - 解析 `SKILL.md` 的 YAML frontmatter，读取 `name`、`description` 及可选的 `license`、`compatibility`、`metadata` 和 `allowed-tools`。
 - 内容摘要覆盖 Skill 目录内的真实文件内容，忽略 `.DS_Store` 等文件系统噪声，不执行任何文件。
@@ -200,7 +202,8 @@ Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数�
 - 只展示具有公开 GitHub 上游、可以由 Breath 原生安装的结果。skills.sh 搜索错误在当前 Tab 内联显示，不得弹出身份认证 Alert。
 - 搜索结果展示名称、`description`、提交者、安装量及可用的安全审计信息，不展示完整来源字段。提交者取已验证 GitHub Repo 的 owner，仅表示目录条目的提交方，不等同于 Skill 的 `metadata.author`。
 - 搜索输入使用短延迟 debounce 自动查询，不提供独立搜索按钮。
-- 搜索结果不得以整行点击或无文字箭头触发远程下载。没有精确安装记录时，每行提供明确的“安装”按钮；skills.sh 目录条目 ID 与本机安装记录精确一致时，展示已安装 Agent，并将操作标记为“管理安装…”，以便继续安装到其他 Agent。不得根据名称、作者、提交者或 Repo 猜测已安装。
+- 搜索结果不得以整行点击或无文字箭头触发远程下载。没有精确安装记录时，每行提供明确的“安装”按钮；skills.sh 目录条目 ID 与本机安装记录或受支持的共享清单精确一致时展示已安装 Agent。仍有可用 Agent 未安装时提供无省略号的“安装到其他 Agent”，所有可用 Agent 均已安装时只展示“此 Skill 已安装”。不得根据名称、作者、提交者或 Repo 猜测已安装。
+- “安装到其他 Agent”必须先为本机已安装目录创建受控临时快照，再按正常目标选择与安装预览写入完整独立副本；该流程不得访问网络，也不得重新下载来源。快照中包含嵌套符号链接时拒绝复制，避免把共享库或其他外部路径带入目标 Agent。
 - 安装预览优先比较来源身份，再比较 `name` 与内容摘要，明确区分“此 Skill 已安装”“已安装同名 Skill”和“已安装相同内容”，并决定是否需要覆盖。
 - 搜索结果仅展示来源实际提供的信息；缺少 `description` 或安全审计时不展示占位文案或未知审计状态。
 - skills.sh 指向的仓库同时包含仓库级 `SKILL.md` 与同名嵌套 Skill 时，优先选择目录名与目录条目 slug 匹配的嵌套 Skill，不能把 GitHub 压缩包的技术包装目录作为来源目录冲突展示给用户。
@@ -261,6 +264,8 @@ Breath 不向 Skill 目录写入 `.breath-*` 文件、扩展属性或其他私�
 - Breath 数据被删除：Skill 文件保持可用，但失去 Breath 记录的更新能力。
 
 Breath 可以只读识别能安全匹配的生态兼容清单，例如 skills CLI 的全局锁定信息；不修改其他工具的清单，也不根据 Skill 名称猜测上游。
+
+对于 skills CLI 的共享安装，`~/.agents/skills` 中的目录提供本地内容，`~/.agents/.skill-lock.json` 提供可验证来源身份，Agent 自身 Skill 目录中的符号链接决定该 Agent 是否已安装。Breath 监听共享目录和锁文件的外部变化；识别和复制过程中不改写共享目录、锁文件或既有符号链接。从共享副本安装到其他 Agent 时，只在目标 Agent 目录创建完整副本，并为该副本保留共享来源身份；共享来源没有可验证 Commit，因此不由 Breath 提供更新检查。
 
 ## 11. 更新
 
