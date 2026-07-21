@@ -265,11 +265,10 @@ struct SkillsView: View {
                 uninstall: { skillToUninstall = skill }
             )
         } else {
-            ContentUnavailableView(
-                localizer.string("选择一个 Skill"),
-                systemImage: "sparkles",
-                description: Text(localizer.string("查看说明、文件和已安装的 Agent"))
-            )
+            Text(localizer.string("选择一个 Skill"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

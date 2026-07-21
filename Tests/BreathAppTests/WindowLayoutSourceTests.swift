@@ -58,6 +58,23 @@ struct WindowLayoutSourceTests {
             "Label(localizer.string(\"刷新\"), systemImage: \"arrow.clockwise\")"
         ))
 
+        let detailStart = try #require(
+            skillsSource.range(of: "private func detail(for skill: GlobalSkill?)")
+        )
+        let selectedSkillStart = try #require(
+            skillsSource.range(
+                of: "private var selectedSkill: GlobalSkill?",
+                range: detailStart.upperBound..<skillsSource.endIndex
+            )
+        )
+        let detailSource = skillsSource[
+            detailStart.lowerBound..<selectedSkillStart.lowerBound
+        ]
+        #expect(!detailSource.contains("ContentUnavailableView("))
+        #expect(detailSource.contains("Text(localizer.string(\"选择一个 Skill\"))"))
+        #expect(detailSource.contains(".font(.caption)"))
+        #expect(detailSource.contains(".foregroundStyle(.secondary)"))
+
         let headerStart = try #require(
             skillsSource.range(of: "private var header: some View")
         )
