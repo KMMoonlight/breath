@@ -130,8 +130,10 @@ struct SkillsView: View {
         HStack(alignment: .center, spacing: 8) {
             TextField(localizer.string("搜索名称或说明"), text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
+                .frame(height: 24, alignment: .center)
                 .accessibilityLabel(localizer.string("搜索 Skills"))
             filterMenu
+                .frame(height: 24, alignment: .center)
             Button {
                 model.refresh()
             } label: {
@@ -141,16 +143,17 @@ struct SkillsView: View {
                         .frame(width: 16, height: 16)
                 } else {
                     Image(systemName: "arrow.clockwise")
-                        .frame(width: 16, height: 16, alignment: .center)
-                        .offset(y: 1)
+                        .offset(y: 2)
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
+            .controlSize(.small)
             .frame(width: 24, height: 24, alignment: .center)
             .contentShape(Rectangle())
             .disabled(model.isRefreshing)
             .accessibilityLabel(localizer.string("刷新 Skills"))
         }
+        .frame(height: 24, alignment: .center)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
     }
