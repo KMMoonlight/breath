@@ -493,6 +493,10 @@
 "查找" = "Find";
 "下载并检查…" = "Download and Review…";
 "正在下载…" = "Downloading…";
+"正在搜索…" = "Searching…";
+"正在检查 ZIP…" = "Reviewing ZIP…";
+"正在生成预览…" = "Preparing Review…";
+"正在安装…" = "Installing…";
 "选择“下载并检查…”后，Breath 会从 GitHub 下载来源并进入安装内容检查；确认前不会写入任何 Agent 目录。" = "Choose Download and Review to download the source from GitHub and review its contents. No Agent directory is changed before confirmation.";
 "从 GitHub 下载来源并进入安装内容检查" = "Download the source from GitHub and review its installation contents";
 "仅支持无需认证的公开 GitHub Repo；私有 Repo 请改用 ZIP。" = "Only public GitHub repos that need no authentication are supported. Use ZIP for private repos.";

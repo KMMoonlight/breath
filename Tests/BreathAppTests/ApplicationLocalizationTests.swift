@@ -43,6 +43,7 @@ struct ApplicationLocalizationTests {
         #expect(english.string("解决冲突…") == "Resolve Conflicts…")
         #expect(english.string("下载并检查…") == "Download and Review…")
         #expect(english.string("正在下载…") == "Downloading…")
+        #expect(english.string("正在安装…") == "Installing…")
         #expect(
             localizedSkillMessage(
                 "SKILL.md is missing.",

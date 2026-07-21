@@ -137,8 +137,8 @@ struct WindowLayoutSourceTests {
             "Button(localizer.string(\"查找\"), action: resolveGitHubInput)"
         ))
         #expect(!sourceStep.contains(".onSubmit(resolveGitHubInput)"))
-        #expect(sourceStep.contains("sourceActivity == .catalog(item.id)"))
-        #expect(sourceStep.contains("sourceActivity == .github"))
+        #expect(sourceStep.contains("activity == .downloadingCatalog(item.id)"))
+        #expect(sourceStep.contains("activity == .downloadingGitHub"))
         #expect(sourceStep.contains("localizer.string(\"正在下载…\")"))
         #expect(!sourceStep.contains("Image(systemName: \"chevron.right\")"))
         #expect(source.contains("private func resolveGitHubInput()"))
@@ -152,6 +152,9 @@ struct WindowLayoutSourceTests {
         #expect(!installer.contains(".alert(\"Breath\""))
         #expect(installer.contains("localizedSourceMessage(for: error)"))
         #expect(!installer.contains("skills.sh 当前无法从 Breath 搜索"))
+        #expect(!installer.contains("@State private var isWorking"))
+        #expect(installer.contains("private var isWorking: Bool { activity != nil }"))
+        #expect(installer.contains("progressStatus(\"正在安装…\")"))
 
         let guidelines = try String(
             contentsOf: root.appendingPathComponent(

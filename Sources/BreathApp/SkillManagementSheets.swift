@@ -23,9 +23,8 @@ struct SkillInstallationWizard: View {
     @State private var replacementChoices: [SkillInstallationTargetID: SkillReplacementChoice] = [:]
     @State private var confirmedRiskCandidateIDs: Set<UUID> = []
     @State private var result: SkillOperationResult?
-    @State private var isWorking = false
     @State private var sourceMessage: String?
-    @State private var sourceActivity: SourceActivity?
+    @State private var activity: Activity?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,9 +37,6 @@ struct SkillInstallationWizard: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if isWorking, sourceActivity == nil {
-                    ProgressView().controlSize(.small)
-                }
             }
             .padding(20)
             Divider()
@@ -81,6 +77,8 @@ struct SkillInstallationWizard: View {
         ApplicationLocalizer(language: language)
     }
 
+    private var isWorking: Bool { activity != nil }
+
     private var stepTitle: String {
         switch step {
         case .source: localizer.string("选择来源")
@@ -99,6 +97,7 @@ struct SkillInstallationWizard: View {
                 Text("skills.sh").tag(SourceMode.skillsSh)
             }
             .pickerStyle(.segmented)
+            .disabled(isWorking)
 
             switch sourceMode {
             case .zip: zipSourcePane
@@ -126,10 +125,15 @@ struct SkillInstallationWizard: View {
                 .font(.headline)
             Text(localizer.string("ZIP 可以包含一个或多个 Skill；导入前不会执行其中的脚本。"))
                 .foregroundStyle(.secondary)
-            Button(localizer.string("选择 ZIP…")) {
-                showsFileImporter = true
+            if activity == .checkingZip {
+                progressStatus("正在检查 ZIP…")
+            } else {
+                Button(localizer.string("选择 ZIP…")) {
+                    showsFileImporter = true
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isWorking)
             }
-            .buttonStyle(.borderedProminent)
         }
     }
 
@@ -140,13 +144,9 @@ struct SkillInstallationWizard: View {
             HStack {
                 TextField("owner/repo", text: $githubInput)
                     .textFieldStyle(.roundedBorder)
-                if sourceActivity == .github {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text(localizer.string("正在下载…"))
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .disabled(isWorking)
+                if activity == .downloadingGitHub {
+                    progressStatus("正在下载…")
                 } else {
                     Button(localizer.string("下载并检查…"), action: resolveGitHubInput)
                         .buttonStyle(.borderedProminent)
@@ -159,11 +159,7 @@ struct SkillInstallationWizard: View {
             Text(localizer.string("仅支持无需认证的公开 GitHub Repo；私有 Repo 请改用 ZIP。"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text(localizer.string(
-                "选择“下载并检查…”后，Breath 会从 GitHub 下载来源并进入安装内容检查；确认前不会写入任何 Agent 目录。"
-            ))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            downloadDisclosure
         }
     }
 
@@ -175,16 +171,20 @@ struct SkillInstallationWizard: View {
                 TextField(localizer.string("搜索关键词"), text: $skillsShInput)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(searchSkillsSh)
-                Button(localizer.string("搜索"), action: searchSkillsSh)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(skillsShInput.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(isWorking)
+                if activity == .searchingSkillsSh {
+                    progressStatus("正在搜索…")
+                } else {
+                    Button(localizer.string("搜索"), action: searchSkillsSh)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(
+                            skillsShInput.trimmingCharacters(in: .whitespaces).isEmpty
+                                || isWorking
+                        )
+                }
             }
             if !searchResults.isEmpty {
-                Text(localizer.string(
-                    "选择“下载并检查…”后，Breath 会从 GitHub 下载来源并进入安装内容检查；确认前不会写入任何 Agent 目录。"
-                ))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                downloadDisclosure
                 List(searchResults) { item in
                     HStack(alignment: .center, spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
@@ -219,13 +219,8 @@ struct SkillInstallationWizard: View {
                             Text(localizer.format("%d 次安装", item.installs))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            if sourceActivity == .catalog(item.id) {
-                                HStack(spacing: 6) {
-                                    ProgressView().controlSize(.small)
-                                    Text(localizer.string("正在下载…"))
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            if activity == .downloadingCatalog(item.id) {
+                                progressStatus("正在下载…")
                             } else {
                                 Button(localizer.string("下载并检查…")) {
                                     discoverCatalogResult(item)
@@ -243,6 +238,23 @@ struct SkillInstallationWizard: View {
                 .frame(minHeight: 260)
             }
         }
+    }
+
+    private var downloadDisclosure: some View {
+        Text(localizer.string(
+            "选择“下载并检查…”后，Breath 会从 GitHub 下载来源并进入安装内容检查；确认前不会写入任何 Agent 目录。"
+        ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    private func progressStatus(_ title: String) -> some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text(localizer.string(title))
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 
     private var candidateStep: some View {
@@ -501,13 +513,23 @@ struct SkillInstallationWizard: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(selectedCandidateIDs.isEmpty)
             case .targets:
-                Button(localizer.string("下一步"), action: preparePreview)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(selectedAgents.isEmpty || isWorking)
+                if activity == .preparingPreview {
+                    progressStatus("正在生成预览…")
+                } else {
+                    Button(localizer.string("下一步"), action: preparePreview)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(selectedAgents.isEmpty || isWorking)
+                }
             case .review:
-                Button(localizer.string("安装"), action: performInstall)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canInstall || isWorking)
+                if activity == .preparingPreview {
+                    progressStatus("正在生成预览…")
+                } else if activity == .installing {
+                    progressStatus("正在安装…")
+                } else {
+                    Button(localizer.string("安装"), action: performInstall)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canInstall || isWorking)
+                }
             case .result:
                 EmptyView()
             }
@@ -526,7 +548,7 @@ struct SkillInstallationWizard: View {
     }
 
     private func discoverZip(_ url: URL) {
-        runSourceTask {
+        runSourceTask(activity: .checkingZip) {
             let accessed = url.startAccessingSecurityScopedResource()
             defer { if accessed { url.stopAccessingSecurityScopedResource() } }
             return try await service.discoverSkills(inZip: url)
@@ -536,18 +558,18 @@ struct SkillInstallationWizard: View {
     private func resolveGitHubInput() {
         let input = githubInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
-        runSourceTask(activity: .github) {
+        runSourceTask(activity: .downloadingGitHub) {
             try await service.discoverSkills(fromGitHub: input)
         }
     }
 
     private func searchSkillsSh() {
         let input = skillsShInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !input.isEmpty else { return }
+        guard !input.isEmpty, activity == nil else { return }
         sourceMessage = nil
-        isWorking = true
+        activity = .searchingSkillsSh
         Task {
-            defer { isWorking = false }
+            defer { activity = nil }
             do {
                 searchResults = try await service.searchSkillsSh(query: input)
                 if searchResults.isEmpty {
@@ -561,23 +583,20 @@ struct SkillInstallationWizard: View {
     }
 
     private func discoverCatalogResult(_ item: SkillsShSearchResult) {
-        runSourceTask(activity: .catalog(item.id)) {
+        runSourceTask(activity: .downloadingCatalog(item.id)) {
             try await service.discoverSkill(fromSkillsSh: item)
         }
     }
 
     private func runSourceTask(
-        activity: SourceActivity? = nil,
+        activity newActivity: Activity,
         _ operation: @escaping @Sendable () async throws -> SkillCandidateBatch
     ) {
+        guard activity == nil else { return }
         sourceMessage = nil
-        isWorking = true
-        sourceActivity = activity
+        activity = newActivity
         Task {
-            defer {
-                isWorking = false
-                sourceActivity = nil
-            }
+            defer { activity = nil }
             do {
                 if let batch { await service.cancel(batch) }
                 let discovered = try await operation()
@@ -598,16 +617,16 @@ struct SkillInstallationWizard: View {
     }
 
     private func preparePreview() {
-        guard let batch else { return }
-        isWorking = true
+        guard let batch, activity == nil else { return }
+        activity = .preparingPreview
         Task {
+            defer { activity = nil }
             preview = await service.previewInstallation(
                 batch: batch,
                 candidateIDs: selectedCandidateIDs,
                 targetAgents: selectedAgents,
                 replacementChoices: replacementChoices
             )
-            isWorking = false
             step = .review
         }
     }
@@ -618,14 +637,14 @@ struct SkillInstallationWizard: View {
     }
 
     private func performInstall() {
-        guard let preview else { return }
-        isWorking = true
+        guard let preview, activity == nil else { return }
+        activity = .installing
         Task {
+            defer { activity = nil }
             result = await service.install(
                 preview,
                 confirmedRiskCandidateIDs: confirmedRiskCandidateIDs
             )
-            isWorking = false
             step = .result
         }
     }
@@ -679,9 +698,13 @@ struct SkillInstallationWizard: View {
         case skillsSh
     }
 
-    private enum SourceActivity: Equatable {
-        case github
-        case catalog(String)
+    private enum Activity: Equatable {
+        case checkingZip
+        case downloadingGitHub
+        case searchingSkillsSh
+        case downloadingCatalog(String)
+        case preparingPreview
+        case installing
     }
 }
 
