@@ -140,7 +140,6 @@ struct SkillInstallationWizard: View {
             HStack {
                 TextField("owner/repo", text: $githubInput)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit(resolveGitHubInput)
                 if sourceActivity == .github {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)

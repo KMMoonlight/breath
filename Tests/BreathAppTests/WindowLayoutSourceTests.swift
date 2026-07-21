@@ -136,6 +136,7 @@ struct WindowLayoutSourceTests {
         #expect(!sourceStep.contains(
             "Button(localizer.string(\"查找\"), action: resolveGitHubInput)"
         ))
+        #expect(!sourceStep.contains(".onSubmit(resolveGitHubInput)"))
         #expect(sourceStep.contains("sourceActivity == .catalog(item.id)"))
         #expect(sourceStep.contains("sourceActivity == .github"))
         #expect(sourceStep.contains("localizer.string(\"正在下载…\")"))
