@@ -41,7 +41,6 @@ struct ApplicationLocalizationTests {
         #expect(english.string("Git 工作台") == "Git Workbench")
         #expect(english.string("提交信息") == "Commit Message")
         #expect(english.string("解决冲突…") == "Resolve Conflicts…")
-        #expect(english.string("下载并检查…") == "Download and Review…")
         #expect(english.string("正在下载…") == "Downloading…")
         #expect(english.string("正在安装…") == "Installing…")
         #expect(

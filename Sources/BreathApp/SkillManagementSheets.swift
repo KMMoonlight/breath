@@ -11,7 +11,7 @@ struct SkillInstallationWizard: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var step = Step.source
-    @State private var sourceMode = SourceMode.zip
+    @State private var sourceMode = SourceMode.skillsSh
     @State private var githubInput = ""
     @State private var skillsShInput = ""
     @State private var showsFileImporter = false
@@ -79,6 +79,11 @@ struct SkillInstallationWizard: View {
 
     private var isWorking: Bool { activity != nil }
 
+    private var isSearchingSkillsSh: Bool {
+        if case .searchingSkillsSh = activity { return true }
+        return false
+    }
+
     private var stepTitle: String {
         switch step {
         case .source: localizer.string("选择来源")
@@ -92,9 +97,9 @@ struct SkillInstallationWizard: View {
     private var sourceStep: some View {
         VStack(alignment: .leading, spacing: 18) {
             Picker(localizer.string("来源"), selection: $sourceMode) {
-                Text("ZIP").tag(SourceMode.zip)
-                Text("GitHub").tag(SourceMode.github)
                 Text("skills.sh").tag(SourceMode.skillsSh)
+                Text("GitHub").tag(SourceMode.github)
+                Text("ZIP").tag(SourceMode.zip)
             }
             .pickerStyle(.segmented)
             .disabled(isWorking)
@@ -110,7 +115,6 @@ struct SkillInstallationWizard: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Spacer()
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -148,7 +152,7 @@ struct SkillInstallationWizard: View {
                 if activity == .downloadingGitHub {
                     progressStatus("正在下载…")
                 } else {
-                    Button(localizer.string("下载并检查…"), action: resolveGitHubInput)
+                    Button(localizer.string("安装"), action: resolveGitHubInput)
                         .buttonStyle(.borderedProminent)
                         .disabled(
                             githubInput.trimmingCharacters(in: .whitespaces).isEmpty
@@ -159,7 +163,6 @@ struct SkillInstallationWizard: View {
             Text(localizer.string("仅支持无需认证的公开 GitHub Repo；私有 Repo 请改用 ZIP。"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            downloadDisclosure
         }
     }
 
@@ -170,48 +173,45 @@ struct SkillInstallationWizard: View {
             HStack {
                 TextField(localizer.string("搜索关键词"), text: $skillsShInput)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit(searchSkillsSh)
-                    .disabled(isWorking)
-                if activity == .searchingSkillsSh {
+                    .disabled(isWorking && !isSearchingSkillsSh)
+                if isSearchingSkillsSh {
                     progressStatus("正在搜索…")
-                } else {
-                    Button(localizer.string("搜索"), action: searchSkillsSh)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(
-                            skillsShInput.trimmingCharacters(in: .whitespaces).isEmpty
-                                || isWorking
-                        )
                 }
             }
             if !searchResults.isEmpty {
-                downloadDisclosure
                 List(searchResults) { item in
                     HStack(alignment: .center, spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(item.name).fontWeight(.medium)
-                            Text(item.description ?? localizer.string("暂无说明"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
+                            if let description = item.description,
+                               !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            {
+                                Text(description)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
                             Text(item.source)
                                 .font(.caption2.monospaced())
                                 .foregroundStyle(.tertiary)
-                            HStack(spacing: 6) {
-                                RiskBadge(audit: item.securityAudit, localizer: localizer)
-                                Text(localizer.string(item.securityAudit.summary))
-                                    .lineLimit(1)
-                            }
-                            .font(.caption2)
-                            if let checkedAt = item.securityAudit.checkedAt {
-                                Text(localizer.format(
-                                    "检查于 %@",
-                                    checkedAt.formatted(
-                                        date: .abbreviated,
-                                        time: .shortened
-                                    )
-                                ))
+                            if item.securityAudit.riskLevel != .unknown {
+                                HStack(spacing: 6) {
+                                    RiskBadge(audit: item.securityAudit, localizer: localizer)
+                                    Text(localizer.string(item.securityAudit.summary))
+                                        .lineLimit(1)
+                                }
                                 .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                if let checkedAt = item.securityAudit.checkedAt {
+                                    Text(localizer.format(
+                                        "检查于 %@",
+                                        checkedAt.formatted(
+                                            date: .abbreviated,
+                                            time: .shortened
+                                        )
+                                    ))
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                }
                             }
                         }
                         Spacer()
@@ -222,7 +222,7 @@ struct SkillInstallationWizard: View {
                             if activity == .downloadingCatalog(item.id) {
                                 progressStatus("正在下载…")
                             } else {
-                                Button(localizer.string("下载并检查…")) {
+                                Button(localizer.string("安装")) {
                                     discoverCatalogResult(item)
                                 }
                                 .buttonStyle(.bordered)
@@ -235,17 +235,13 @@ struct SkillInstallationWizard: View {
                         }
                     }
                 }
-                .frame(minHeight: 260)
+                .frame(minHeight: 260, maxHeight: .infinity)
             }
         }
-    }
-
-    private var downloadDisclosure: some View {
-        Text(localizer.string(
-            "选择“下载并检查…”后，Breath 会从 GitHub 下载来源并进入安装内容检查；确认前不会写入任何 Agent 目录。"
-        ))
-            .font(.caption)
-            .foregroundStyle(.secondary)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .task(id: skillsShInput) {
+            await searchSkillsShAfterDebounce()
+        }
     }
 
     private func progressStatus(_ title: String) -> some View {
@@ -563,22 +559,39 @@ struct SkillInstallationWizard: View {
         }
     }
 
-    private func searchSkillsSh() {
+    private func searchSkillsShAfterDebounce() async {
         let input = skillsShInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !input.isEmpty, activity == nil else { return }
+        guard !input.isEmpty else {
+            searchResults = []
+            sourceMessage = nil
+            if isSearchingSkillsSh { activity = nil }
+            return
+        }
+        do {
+            try await Task.sleep(for: .milliseconds(350))
+        } catch {
+            return
+        }
+        guard !Task.isCancelled else { return }
+        if activity != nil, !isSearchingSkillsSh { return }
         sourceMessage = nil
-        activity = .searchingSkillsSh
-        Task {
-            defer { activity = nil }
-            do {
-                searchResults = try await service.searchSkillsSh(query: input)
-                if searchResults.isEmpty {
-                    sourceMessage = localizer.string("没有找到 skills.sh 结果")
-                }
-            } catch {
-                searchResults = []
-                sourceMessage = localizedSourceMessage(for: error)
+        activity = .searchingSkillsSh(input)
+        defer {
+            if activity == .searchingSkillsSh(input) {
+                activity = nil
             }
+        }
+        do {
+            let results = try await service.searchSkillsSh(query: input)
+            guard !Task.isCancelled else { return }
+            searchResults = results
+            if results.isEmpty {
+                sourceMessage = localizer.string("没有找到 skills.sh 结果")
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            searchResults = []
+            sourceMessage = localizedSourceMessage(for: error)
         }
     }
 
@@ -701,7 +714,7 @@ struct SkillInstallationWizard: View {
     private enum Activity: Equatable {
         case checkingZip
         case downloadingGitHub
-        case searchingSkillsSh
+        case searchingSkillsSh(String)
         case downloadingCatalog(String)
         case preparingPreview
         case installing

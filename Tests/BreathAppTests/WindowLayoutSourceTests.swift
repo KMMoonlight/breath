@@ -119,30 +119,37 @@ struct WindowLayoutSourceTests {
             sourceStepStart.lowerBound..<candidateStepStart.lowerBound
         ]
 
-        #expect(sourceStep.contains("Text(\"ZIP\").tag(SourceMode.zip)"))
-        #expect(sourceStep.contains("Text(\"GitHub\").tag(SourceMode.github)"))
-        #expect(sourceStep.contains("Text(\"skills.sh\").tag(SourceMode.skillsSh)"))
+        let skillsShTab = try #require(
+            sourceStep.range(of: "Text(\"skills.sh\").tag(SourceMode.skillsSh)")
+        )
+        let githubTab = try #require(
+            sourceStep.range(of: "Text(\"GitHub\").tag(SourceMode.github)")
+        )
+        let zipTab = try #require(
+            sourceStep.range(of: "Text(\"ZIP\").tag(SourceMode.zip)")
+        )
+        #expect(skillsShTab.lowerBound < githubTab.lowerBound)
+        #expect(githubTab.lowerBound < zipTab.lowerBound)
         #expect(!sourceStep.contains("ContentUnavailableView"))
         #expect(sourceStep.contains("sourceMessage"))
         #expect(sourceStep.contains(
             ".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)"
         ))
         #expect(sourceStep.contains(
-            "Button(localizer.string(\"下载并检查…\"))"
+            "Button(localizer.string(\"安装\"), action: resolveGitHubInput)"
         ))
-        #expect(sourceStep.contains(
-            "Button(localizer.string(\"下载并检查…\"), action: resolveGitHubInput)"
-        ))
-        #expect(!sourceStep.contains(
-            "Button(localizer.string(\"查找\"), action: resolveGitHubInput)"
-        ))
+        #expect(sourceStep.contains("Button(localizer.string(\"安装\"))"))
+        #expect(sourceStep.contains(".task(id: skillsShInput)"))
+        #expect(sourceStep.contains("searchSkillsShAfterDebounce"))
+        #expect(!sourceStep.contains("Button(localizer.string(\"搜索\")"))
+        #expect(!sourceStep.contains("localizer.string(\"暂无说明\")"))
         #expect(!sourceStep.contains(".onSubmit(resolveGitHubInput)"))
         #expect(sourceStep.contains("activity == .downloadingCatalog(item.id)"))
         #expect(sourceStep.contains("activity == .downloadingGitHub"))
         #expect(sourceStep.contains("localizer.string(\"正在下载…\")"))
         #expect(!sourceStep.contains("Image(systemName: \"chevron.right\")"))
         #expect(source.contains("private func resolveGitHubInput()"))
-        #expect(source.contains("private func searchSkillsSh()"))
+        #expect(source.contains("private func searchSkillsShAfterDebounce() async"))
         #expect(!source.contains("resolveOnlineInput"))
         #expect(!source.contains("case online"))
         let updateViewStart = try #require(
