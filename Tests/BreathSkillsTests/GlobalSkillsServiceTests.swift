@@ -176,8 +176,8 @@ struct GlobalSkillsServiceTests {
         #expect(FileManager.default.fileExists(atPath: external.path))
     }
 
-    @Test("skills CLI shared links keep catalog identity and install locally for another Agent")
-    func recognizesAndCopiesSharedSkillsCLIInstall() async throws {
+    @Test("Codex discovers skills CLI shared roots and copies them locally for another Agent")
+    func recognizesCodexSharedSkillsCLIInstall() async throws {
         let fixture = try SkillsFixture()
         defer { fixture.remove() }
         let sharedContainer = fixture.home.appendingPathComponent(".agents", isDirectory: true)
@@ -233,20 +233,25 @@ struct GlobalSkillsServiceTests {
 
         let snapshot = await service.scan()
         let skill = try #require(snapshot.skills.first)
-        let sharedCopy = try #require(skill.copies.first)
+        let codexSharedCopy = try #require(skill.copies.first { $0.agent == .codex })
+        let claudeCopy = try #require(skill.copies.first { $0.agent == .claudeCode })
 
-        #expect(sharedCopy.isSymbolicLink)
-        #expect(sharedCopy.resolvedDirectory == sharedSkill.resolvingSymlinksInPath())
-        #expect(sharedCopy.source == .github)
-        #expect(sharedCopy.repository == "vercel-labs/agent-browser")
-        #expect(sharedCopy.sourceRelativePath == "skills/agent-browser")
-        #expect(sharedCopy.catalogSkillID == nil)
-        #expect(sharedCopy.sourceIdentity == nil)
-        #expect(sharedCopy.installationOrigin?.sharedProvenance?.skillIdentifier
+        #expect(!codexSharedCopy.isSymbolicLink)
+        #expect(codexSharedCopy.isSharedAgentDiscoveryCopy)
+        #expect(codexSharedCopy.directory == sharedSkill.standardizedFileURL)
+        #expect(codexSharedCopy.resolvedDirectory == sharedSkill.resolvingSymlinksInPath())
+        #expect(claudeCopy.isSymbolicLink)
+        #expect(claudeCopy.resolvedDirectory == sharedSkill.resolvingSymlinksInPath())
+        #expect(codexSharedCopy.source == .github)
+        #expect(codexSharedCopy.repository == "vercel-labs/agent-browser")
+        #expect(codexSharedCopy.sourceRelativePath == "skills/agent-browser")
+        #expect(codexSharedCopy.catalogSkillID == nil)
+        #expect(codexSharedCopy.sourceIdentity == nil)
+        #expect(codexSharedCopy.installationOrigin?.sharedProvenance?.skillIdentifier
             == "Agent Browser")
-        #expect(sharedCopy.installationOrigin?.sharedProvenance?.contentHash
+        #expect(codexSharedCopy.installationOrigin?.sharedProvenance?.contentHash
             == "shared-folder-hash")
-        #expect(sharedCopy.installationOrigin?.sharedProvenance?.sourceURL
+        #expect(codexSharedCopy.installationOrigin?.sharedProvenance?.sourceURL
             == "https://github.com/vercel-labs/agent-browser.git")
         let catalogEntry = SkillsShSearchResult(
             id: "vercel-labs/agent-browser/agent-browser",
@@ -261,7 +266,7 @@ struct GlobalSkillsServiceTests {
                 string: "https://skills.sh/vercel-labs/agent-browser/agent-browser"
             ))
         )
-        #expect(sharedCopy.matchesSkillsShCatalogEntry(catalogEntry))
+        #expect(codexSharedCopy.matchesSkillsShCatalogEntry(catalogEntry))
         let inconsistentCatalogEntry = SkillsShSearchResult(
             id: "another-owner/agent-browser/agent-browser",
             slug: catalogEntry.slug,
@@ -273,34 +278,46 @@ struct GlobalSkillsServiceTests {
             installURL: catalogEntry.installURL,
             pageURL: catalogEntry.pageURL
         )
-        #expect(!sharedCopy.matchesSkillsShCatalogEntry(inconsistentCatalogEntry))
+        #expect(!codexSharedCopy.matchesSkillsShCatalogEntry(inconsistentCatalogEntry))
 
         let batch = try await service.discoverSkill(
-            fromInstalledCopy: sharedCopy,
-            sourceLabel: "Local Copy · Claude Code"
+            fromInstalledCopy: codexSharedCopy,
+            sourceLabel: "Local Copy · Codex"
         )
         let candidate = try #require(batch.candidates.first)
-        let preview = await service.previewInstallation(
+        let codexPreview = await service.previewInstallation(
             batch: batch,
             candidateIDs: [candidate.id],
             targetAgents: [.codex]
+        )
+        #expect(codexPreview.items.first?.action == .alreadyInstalled)
+        #expect(codexPreview.items.first?.targetDirectory == sharedSkill.standardizedFileURL)
+        #expect((await service.previewUninstall(
+            skillID: skill.id,
+            targetAgents: [.codex]
+        )).items.isEmpty)
+
+        let preview = await service.previewInstallation(
+            batch: batch,
+            candidateIDs: [candidate.id],
+            targetAgents: [.geminiCLI]
         )
         let result = await service.install(preview)
 
         #expect(await github.requestedLocators().isEmpty)
         #expect(result.items.first?.status == .succeeded)
         #expect(Set(result.snapshot.skills.first?.copies.map(\.agent) ?? [])
-            == Set([.claudeCode, .codex]))
-        let codexDirectory = try fixture.skillRoot(for: .codex)
+            == Set([.codex, .claudeCode, .geminiCLI]))
+        let geminiDirectory = try fixture.skillRoot(for: .geminiCLI)
             .appendingPathComponent("agent-browser", isDirectory: true)
-        #expect(FileManager.default.fileExists(atPath: codexDirectory.path))
+        #expect(FileManager.default.fileExists(atPath: geminiDirectory.path))
         #expect(FileManager.default.fileExists(atPath: sharedSkill.path))
-        let codexRecord = try #require(
+        let geminiRecord = try #require(
             try await records.loadSkillInstallationRecords().first {
-                $0.agent == .codex
+                $0.agent == .geminiCLI
             }
         )
-        #expect(codexRecord.origin.sharedProvenance?.skillIdentifier == "Agent Browser")
+        #expect(geminiRecord.origin.sharedProvenance?.skillIdentifier == "Agent Browser")
         #expect(result.snapshot.skills.first?.copies.allSatisfy {
             $0.matchesSkillsShCatalogEntry(catalogEntry)
         } == true)

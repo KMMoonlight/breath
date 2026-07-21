@@ -1126,6 +1126,7 @@ struct SkillUninstallView: View {
                         }
                     }
                     .toggleStyle(.checkbox)
+                    .disabled(copy.isSharedAgentDiscoveryCopy)
                 }
             }
             Divider()

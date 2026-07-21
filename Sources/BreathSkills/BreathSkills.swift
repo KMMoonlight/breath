@@ -187,6 +187,12 @@ public struct InstalledSkillCopy: Codable, Hashable, Identifiable, Sendable {
             catalogSkillID: entry.id
         ) == true
     }
+
+    public var isSharedAgentDiscoveryCopy: Bool {
+        let skillsRoot = directory.deletingLastPathComponent()
+        return skillsRoot.lastPathComponent == "skills"
+            && skillsRoot.deletingLastPathComponent().lastPathComponent == ".agents"
+    }
 }
 
 public struct GlobalSkill: Codable, Hashable, Identifiable, Sendable {
@@ -309,7 +315,7 @@ public actor GlobalSkillsService {
     private var targetAvailability: [AgentKind: SkillInstallationTargetAvailability]
     private let recordRepository: (any SkillInstallationRecordRepository)?
     private let githubProvider: any GitHubSkillProviding
-    private let skillsShProvider: any SkillsShProviding
+    nonisolated private let skillsShProvider: any SkillsShProviding
     private let trash: any SkillTrashing
     private let writeCoordinator = SkillWriteCoordinator()
     private let fileManager: FileManager
@@ -362,10 +368,20 @@ public actor GlobalSkillsService {
 
         for adapter in agentAdapters {
             guard let capability = adapter.globalSkills else { continue }
-            guard let root = capability.reliablyResolveDirectory(
+            let primaryRoot = capability.reliablyResolveDirectory(
                 homeDirectory: homeDirectory,
                 environment: environment
-            ) else {
+            )
+            if let primaryRoot {
+                reconcilableAgents.insert(adapter.kind)
+                targets.append(SkillInstallationTarget(
+                    agent: adapter.kind,
+                    displayName: adapter.displayName,
+                    directory: primaryRoot,
+                    availability: targetAvailability[adapter.kind] ?? .available,
+                    activationHint: capability.activationHint
+                ))
+            } else {
                 targets.append(SkillInstallationTarget(
                     agent: adapter.kind,
                     displayName: adapter.displayName,
@@ -375,56 +391,53 @@ public actor GlobalSkillsService {
                     ),
                     activationHint: capability.activationHint
                 ))
-                continue
             }
-            reconcilableAgents.insert(adapter.kind)
-            targets.append(SkillInstallationTarget(
-                agent: adapter.kind,
-                displayName: adapter.displayName,
-                directory: root,
-                availability: targetAvailability[adapter.kind] ?? .available,
-                activationHint: capability.activationHint
-            ))
 
-            guard fileManager.fileExists(atPath: root.path) else { continue }
-            do {
-                let children = try fileManager.contentsOfDirectory(
-                    at: root,
-                    includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                    options: [.skipsHiddenFiles]
-                ).map {
-                    root.appendingPathComponent($0.lastPathComponent, isDirectory: true)
-                }.sorted {
-                    $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
-                }
-                for child in children {
-                    do {
-                        let installed = try parseInstalledSkill(
-                            at: child,
-                            adapter: adapter,
-                            record: recordsByPath[child.standardizedFileURL.path],
-                            sharedRegistry: sharedRegistry
-                        )
-                        parsed.append(installed)
-                        if installed.matchesInstallationRecord {
-                            matchedRecordPaths.insert(child.standardizedFileURL.path)
-                        }
-                    } catch {
-                        unrecognized.append(UnrecognizedSkillItem(
-                            agent: adapter.kind,
-                            agentDisplayName: adapter.displayName,
-                            path: child,
-                            reason: Self.userFacingReason(for: error)
-                        ))
+            for root in capability.resolveDiscoveryDirectories(
+                homeDirectory: homeDirectory,
+                environment: environment
+            ) {
+                guard fileManager.fileExists(atPath: root.path) else { continue }
+                do {
+                    let children = try fileManager.contentsOfDirectory(
+                        at: root,
+                        includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                        options: [.skipsHiddenFiles]
+                    ).map {
+                        root.appendingPathComponent($0.lastPathComponent, isDirectory: true)
+                    }.sorted {
+                        $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
+                            == .orderedAscending
                     }
+                    for child in children {
+                        do {
+                            let installed = try parseInstalledSkill(
+                                at: child,
+                                adapter: adapter,
+                                record: recordsByPath[child.standardizedFileURL.path],
+                                sharedRegistry: sharedRegistry
+                            )
+                            parsed.append(installed)
+                            if installed.matchesInstallationRecord {
+                                matchedRecordPaths.insert(child.standardizedFileURL.path)
+                            }
+                        } catch {
+                            unrecognized.append(UnrecognizedSkillItem(
+                                agent: adapter.kind,
+                                agentDisplayName: adapter.displayName,
+                                path: child,
+                                reason: Self.userFacingReason(for: error)
+                            ))
+                        }
+                    }
+                } catch {
+                    unrecognized.append(UnrecognizedSkillItem(
+                        agent: adapter.kind,
+                        agentDisplayName: adapter.displayName,
+                        path: root,
+                        reason: "The Agent Skills directory could not be read."
+                    ))
                 }
-            } catch {
-                unrecognized.append(UnrecognizedSkillItem(
-                    agent: adapter.kind,
-                    agentDisplayName: adapter.displayName,
-                    path: root,
-                    reason: "The Agent Skills directory could not be read."
-                ))
             }
         }
 
@@ -540,28 +553,30 @@ public actor GlobalSkillsService {
     private func directoriesToMonitor() -> [URL] {
         var directories: [URL] = []
         for adapter in agentAdapters {
-            guard let root = adapter.globalSkills?.reliablyResolveDirectory(
+            guard let capability = adapter.globalSkills else { continue }
+            for root in capability.resolveDiscoveryDirectories(
                 homeDirectory: homeDirectory,
                 environment: environment
-            ) else { continue }
-            var existing = root
-            while !fileManager.fileExists(atPath: existing.path),
-                  existing.path != "/"
-            {
-                existing.deleteLastPathComponent()
-            }
-            directories.append(existing)
-            guard existing.standardizedFileURL == root.standardizedFileURL,
-                  let enumerator = fileManager.enumerator(
-                    at: root,
-                    includingPropertiesForKeys: [.isDirectoryKey],
-                    options: [.skipsHiddenFiles],
-                    errorHandler: { _, _ in false }
-                  )
-            else { continue }
-            while let item = enumerator.nextObject() as? URL {
-                if (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-                    directories.append(item)
+            ) {
+                var existing = root
+                while !fileManager.fileExists(atPath: existing.path),
+                      existing.path != "/"
+                {
+                    existing.deleteLastPathComponent()
+                }
+                directories.append(existing)
+                guard existing.standardizedFileURL == root.standardizedFileURL,
+                      let enumerator = fileManager.enumerator(
+                        at: root,
+                        includingPropertiesForKeys: [.isDirectoryKey],
+                        options: [.skipsHiddenFiles],
+                        errorHandler: { _, _ in false }
+                      )
+                else { continue }
+                while let item = enumerator.nextObject() as? URL {
+                    if (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                        directories.append(item)
+                    }
                 }
             }
         }
@@ -573,23 +588,10 @@ public actor GlobalSkillsService {
             existingSharedContainer.deleteLastPathComponent()
         }
         directories.append(existingSharedContainer)
-        let sharedRoot = sharedContainer.appendingPathComponent("skills", isDirectory: true)
-        if fileManager.fileExists(atPath: sharedRoot.path) {
-            directories.append(sharedRoot)
-            if let enumerator = fileManager.enumerator(
-                at: sharedRoot,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles],
-                errorHandler: { _, _ in false }
-            ) {
-                while let item = enumerator.nextObject() as? URL {
-                    if (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-                        directories.append(item)
-                    }
-                }
-            }
+        var seen: Set<String> = []
+        return directories.filter {
+            seen.insert($0.standardizedFileURL.path).inserted
         }
-        return directories
     }
 
     private static func hasSameContents(
@@ -735,7 +737,7 @@ public actor GlobalSkillsService {
         )
     }
 
-    public func searchSkillsSh(
+    public nonisolated func searchSkillsSh(
         query: String,
         limit: Int = 50
     ) async throws -> [SkillsShSearchResult] {
@@ -1036,7 +1038,7 @@ public actor GlobalSkillsService {
             return SkillUninstallPreview(items: [], createdAt: now())
         }
         let items = skill.copies.filter {
-            targetAgents.contains($0.agent)
+            targetAgents.contains($0.agent) && !$0.isSharedAgentDiscoveryCopy
         }.map { copy in
             SkillUninstallPreviewItem(
                 skillID: skill.id,

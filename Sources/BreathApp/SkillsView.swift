@@ -143,7 +143,7 @@ struct SkillsView: View {
                         .frame(width: 16, height: 16)
                 } else {
                     Image(systemName: "arrow.clockwise")
-                        .offset(y: 2)
+                        .offset(y: -1)
                 }
             }
             .buttonStyle(.borderless)

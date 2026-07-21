@@ -154,7 +154,7 @@ Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数�
 
 - 读取支持矩阵解析出的全部 Agent 全局 Skill 目录。
 - 识别普通目录和符号链接。
-- 将 `~/.agents/skills` 视为 skills CLI 管理的共享内容库：Agent 目录软链接到其中的 Skill 时，仍按该 Agent 的已安装副本展示；共享库本身不是一个 Agent 安装目标。
+- 将 `~/.agents/skills` 视为 skills CLI 管理的共享内容库。Agent 适配器显式声明该目录为额外发现根时（当前 Codex 支持），其中的 Skill 直接计为该 Agent 的已安装副本；其他 Agent 的 Skill 目录软链接到其中时，仍按对应 Agent 的已安装副本展示。共享库只读发现，不是 Breath 的安装或卸载目标。
 - 只读解析 `~/.agents/.skill-lock.json`，按 skills CLI 的目录规范化规则将锁文件 Skill 标识关联到共享目录，并恢复 Repo 和来源内路径；规范化后发生歧义时不关联来源。Breath 不修改该清单，也不根据 `SKILL.md` 名称猜测来源。skills.sh 搜索返回结果后，只有锁文件 Repo、Skill 标识与结果中的 Repo、`skillId`、完整目录条目 ID 彼此一致，才视为同一目录条目。
 - 不跟随形成循环或越界到不可读位置的链接。
 - 解析 `SKILL.md` 的 YAML frontmatter，读取 `name`、`description` 及可选的 `license`、`compatibility`、`metadata` 和 `allowed-tools`。
@@ -265,7 +265,7 @@ Breath 不向 Skill 目录写入 `.breath-*` 文件、扩展属性或其他私�
 
 Breath 可以只读识别能安全匹配的生态兼容清单，例如 skills CLI 的全局锁定信息；不修改其他工具的清单，也不根据 Skill 名称猜测上游。
 
-对于 skills CLI 的共享安装，`~/.agents/skills` 中的目录提供本地内容，`~/.agents/.skill-lock.json` 提供可验证来源身份，Agent 自身 Skill 目录中的符号链接决定该 Agent 是否已安装。Breath 监听共享目录和锁文件的外部变化；识别和复制过程中不改写共享目录、锁文件或既有符号链接。从共享副本安装到其他 Agent 时，只在目标 Agent 目录创建完整副本，并为该副本保留共享来源身份；共享来源没有可验证 Commit，因此不由 Breath 提供更新检查。
+对于 skills CLI 的共享安装，`~/.agents/skills` 中的目录提供本地内容，`~/.agents/.skill-lock.json` 提供可验证来源身份。是否计为某个 Agent 已安装由该 Agent 适配器声明的发现根和 Agent 自身 Skill 目录中的符号链接共同决定；当前 Codex 会直接发现全局 `~/.agents/skills`。Breath 监听共享目录和锁文件的外部变化；识别和复制过程中不改写共享目录、锁文件或既有符号链接。从共享副本安装到其他 Agent 时，只在目标 Agent 目录创建完整副本，并为该副本保留共享来源身份；共享来源没有可验证 Commit，因此不由 Breath 提供更新检查。
 
 ## 11. 更新
 

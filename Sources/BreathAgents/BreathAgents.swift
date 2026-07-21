@@ -97,17 +97,20 @@ public struct AgentGlobalSkillsCapability: Equatable, Sendable {
     public let configurationRootEnvironmentVariable: String?
     public let defaultConfigurationRootRelativePath: String
     public let skillsRelativePath: String
+    public let additionalDiscoveryRootRelativePaths: [String]
     public let activationHint: String
 
     public init(
         configurationRootEnvironmentVariable: String? = nil,
         defaultConfigurationRootRelativePath: String,
         skillsRelativePath: String = "skills",
+        additionalDiscoveryRootRelativePaths: [String] = [],
         activationHint: String
     ) {
         self.configurationRootEnvironmentVariable = configurationRootEnvironmentVariable
         self.defaultConfigurationRootRelativePath = defaultConfigurationRootRelativePath
         self.skillsRelativePath = skillsRelativePath
+        self.additionalDiscoveryRootRelativePaths = additionalDiscoveryRootRelativePaths
         self.activationHint = activationHint
     }
 
@@ -145,6 +148,21 @@ public struct AgentGlobalSkillsCapability: Equatable, Sendable {
         return configurationRoot
             .appendingPathComponent(skillsRelativePath, isDirectory: true)
             .standardizedFileURL
+    }
+
+    public func resolveDiscoveryDirectories(
+        homeDirectory: URL,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [URL] {
+        var directories = reliablyResolveDirectory(
+            homeDirectory: homeDirectory,
+            environment: environment
+        ).map { [$0] } ?? []
+        directories.append(contentsOf: additionalDiscoveryRootRelativePaths.map {
+            homeDirectory.appendingPathComponent($0, isDirectory: true).standardizedFileURL
+        })
+        var seen: Set<String> = []
+        return directories.filter { seen.insert($0.path).inserted }
     }
 }
 
@@ -194,6 +212,7 @@ public struct AgentAdapterRegistry: Sendable {
             globalSkills: AgentGlobalSkillsCapability(
                 configurationRootEnvironmentVariable: "CODEX_HOME",
                 defaultConfigurationRootRelativePath: ".codex",
+                additionalDiscoveryRootRelativePaths: [".agents/skills"],
                 activationHint: "Start a new Codex session to load changed Skills."
             )
         ),
