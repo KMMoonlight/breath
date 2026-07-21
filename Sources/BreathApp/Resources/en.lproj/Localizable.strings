@@ -519,6 +519,8 @@
 "覆盖" = "Replace";
 "跳过" = "Skip";
 "安装" = "Install";
+"安装 %@" = "Install %@";
+"安装 GitHub Repo" = "Install GitHub Repo";
 "已安装相同内容" = "Same Content Already Installed";
 "不可安装" = "Cannot Install";
 "我已审阅高风险提示并仍要安装" = "I reviewed the high-risk warning and still want to install";

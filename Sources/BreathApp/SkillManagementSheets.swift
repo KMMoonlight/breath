@@ -154,6 +154,7 @@ struct SkillInstallationWizard: View {
                 } else {
                     Button(localizer.string("安装"), action: resolveGitHubInput)
                         .buttonStyle(.borderedProminent)
+                        .accessibilityLabel(localizer.string("安装 GitHub Repo"))
                         .disabled(
                             githubInput.trimmingCharacters(in: .whitespaces).isEmpty
                                 || isWorking
@@ -228,6 +229,7 @@ struct SkillInstallationWizard: View {
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .disabled(isWorking)
+                                .accessibilityLabel(localizer.format("安装 %@", item.name))
                                 .accessibilityHint(localizer.string(
                                     "从 GitHub 下载来源并进入安装内容检查"
                                 ))

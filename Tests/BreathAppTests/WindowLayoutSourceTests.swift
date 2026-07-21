@@ -139,6 +139,9 @@ struct WindowLayoutSourceTests {
             "Button(localizer.string(\"安装\"), action: resolveGitHubInput)"
         ))
         #expect(sourceStep.contains("Button(localizer.string(\"安装\"))"))
+        #expect(sourceStep.contains(
+            ".accessibilityLabel(localizer.format(\"安装 %@\", item.name))"
+        ))
         #expect(sourceStep.contains(".task(id: skillsShInput)"))
         #expect(sourceStep.contains("searchSkillsShAfterDebounce"))
         #expect(!sourceStep.contains("Button(localizer.string(\"搜索\")"))
