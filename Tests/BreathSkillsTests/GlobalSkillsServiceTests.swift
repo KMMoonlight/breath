@@ -17,6 +17,8 @@ struct GlobalSkillsServiceTests {
                 ---
                 name: review # YAML comments are not part of the value
                 description: Review a change before it ships.
+                metadata:
+                  author: example-org
                 ---
                 # Review
                 """,
@@ -33,6 +35,7 @@ struct GlobalSkillsServiceTests {
         let skill = try #require(snapshot.skills.first)
         #expect(snapshot.skills.count == 1)
         #expect(skill.name == "review")
+        #expect(skill.author == "example-org")
         #expect(skill.description == "Review a change before it ships.")
         #expect(skill.copies.map(\.agent) == [.codex])
         #expect(skill.files.map(\.relativePath) == ["SKILL.md", "references/checklist.md"])
@@ -447,6 +450,7 @@ struct GlobalSkillsServiceTests {
             $0.targetID.agent == .codex && $0.candidate.name == "review"
         })
         #expect(codexReview.action == .skip)
+        #expect(codexReview.existingMatch == .sameName)
         #expect(codexReview.existingDescription == "Existing review behavior.")
         #expect(preview.items.filter { $0.action == .install }.count == 3)
 
@@ -896,9 +900,135 @@ struct GlobalSkillsServiceTests {
             confirmedRiskCandidateIDs: [confirmedCandidate.id]
         )
         #expect(confirmed.items.first?.status == .succeeded)
+        #expect(
+            confirmed.snapshot.skills.first?.copies.first?.catalogSkillID
+                == "example/skills/review"
+        )
         #expect(try await records.loadSkillInstallationRecords().first?.source == .skillsSh)
         #expect(await catalog.queries() == ["review"])
         #expect(await catalog.auditedIDs() == ["example/skills/review"])
+    }
+
+    @Test("skills.sh identity recognizes an installed Skill after its manifest name changes")
+    func matchesInstalledSkillsShIdentity() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        try fixture.writeSkill(
+            agent: .codex,
+            directoryName: "old-review",
+            manifest: """
+                ---
+                name: old-review
+                description: Previously installed review behavior.
+                ---
+                old
+                """
+        )
+        let initial = await GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:]
+        ).scan()
+        let installed = try #require(initial.skills.first)
+        let installedCopy = try #require(installed.copies.first)
+        let records = MemorySkillRecordRepository(records: [
+            SkillInstallationRecord(
+                agent: .codex,
+                installationDirectory: installedCopy.directory,
+                skillName: installed.name,
+                origin: .remote(SkillRemoteProvenance(
+                    source: .skillsSh,
+                    repository: "example/skills",
+                    sourceRelativePath: "review",
+                    reference: SkillSourceReference(kind: .branch, value: "main"),
+                    resolvedCommit: "old-commit",
+                    catalogSkillID: "example/skills/review"
+                )),
+                installedContentDigest: installed.contentDigest,
+                installedAt: .distantPast,
+                updatedAt: .distantPast
+            ),
+        ])
+        let searchResult = SkillsShSearchResult(
+            id: "example/skills/review",
+            slug: "review",
+            name: "Renamed Review",
+            description: nil,
+            source: "example/skills",
+            installs: 42,
+            sourceType: "github",
+            installURL: try #require(URL(string: "https://github.com/example/skills")),
+            pageURL: try #require(URL(string: "https://skills.sh/example/skills/review"))
+        )
+        let archive = StoredZIP.make([
+            "example-skills-commit/review/SKILL.md": Data(
+                """
+                ---
+                name: renamed-review
+                description: Renamed review behavior.
+                ---
+                new
+                """.utf8
+            ),
+        ])
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            recordRepository: records,
+            githubProvider: StubGitHubProvider(archiveData: archive),
+            skillsShProvider: StubSkillsShProvider(results: [searchResult], audit: .unknown)
+        )
+        let batch = try await service.discoverSkill(fromSkillsSh: searchResult)
+        let candidate = try #require(batch.candidates.first)
+        let preview = await service.previewInstallation(
+            batch: batch,
+            candidateIDs: [candidate.id],
+            targetAgents: [.codex]
+        )
+        let item = try #require(preview.items.first)
+
+        #expect(item.action == .skip)
+        #expect(item.existingMatch == .sameSourceIdentity)
+        #expect(candidate.remoteProvenance?.sourceIdentity == .skillsSh(
+            catalogSkillID: "example/skills/review"
+        ))
+        #expect(item.existingDirectory == installedCopy.directory)
+        #expect(item.expectedSameNamePaths.isEmpty)
+
+        let replacement = await service.previewInstallation(
+            batch: batch,
+            candidateIDs: [candidate.id],
+            targetAgents: [.codex],
+            replacementChoices: [item.targetID: .replace]
+        )
+        let result = await service.install(replacement)
+
+        #expect(result.items.first?.status == .succeeded)
+        #expect(result.snapshot.skills.first?.name == "renamed-review")
+        #expect(result.snapshot.skills.first?.copies.first?.catalogSkillID == searchResult.id)
+        #expect(result.snapshot.skills.first?.copies.first?.directory == installedCopy.directory)
+    }
+
+    @Test("GitHub source identity normalizes repository case and path separators")
+    func normalizesGitHubSourceIdentity() {
+        #expect(
+            SkillSourceIdentity(
+                source: .github,
+                repository: "/Example/Skills/",
+                sourceRelativePath: "/skills/review/",
+                catalogSkillID: nil
+            ) == .github(
+                repository: "example/skills",
+                sourceRelativePath: "skills/review"
+            )
+        )
+        #expect(
+            SkillSourceIdentity(
+                source: .skillsSh,
+                repository: "Example/Skills",
+                sourceRelativePath: "Review",
+                catalogSkillID: " Example/Skills/Review "
+            ) == .skillsSh(catalogSkillID: "Example/Skills/Review")
+        )
     }
 
     @Test("skills.sh selects the slug-matched nested Skill over a repository manifest")
@@ -1284,6 +1414,7 @@ struct GlobalSkillsServiceTests {
                 license: Apache-2.0
                 compatibility: Requires git 2.40 or newer.
                 metadata:
+                  author: example-org
                   owner: platform
                   category: engineering
                 allowed-tools:
@@ -1301,6 +1432,7 @@ struct GlobalSkillsServiceTests {
         )
 
         #expect(candidate.declarations.license == "Apache-2.0")
+        #expect(candidate.declarations.author == "example-org")
         #expect(candidate.description == "Review a\nchange.")
         #expect(candidate.declarations.compatibility == "Requires git 2.40 or newer.")
         #expect(candidate.declarations.metadata?.contains("owner: platform") == true)

@@ -448,7 +448,6 @@
 "来源" = "Source";
 "状态" = "Status";
 "全部 Agent" = "All Agents";
-"全部来源" = "All Sources";
 "全部状态" = "All Statuses";
 "清除筛选" = "Clear Filters";
 "全局 Skills 列表" = "Global Skills List";
@@ -459,7 +458,7 @@
 "可更新" = "Update Available";
 "本地已修改" = "Locally Modified";
 "选择一个 Skill" = "Select a Skill";
-"查看说明、文件、来源和已安装的 Agent" = "View its description, files, source, and installed Agents";
+"查看说明、文件和已安装的 Agent" = "View its description, files, and installed Agents";
 "查看更新…" = "Review Update…";
 "卸载…" = "Uninstall…";
 "已安装的 Agent 列表" = "Installed Agents";
@@ -467,7 +466,6 @@
 "SKILL.md" = "SKILL.md";
 "文件（%d）" = "Files (%d)";
 "ZIP" = "ZIP";
-"未知来源" = "Unknown Source";
 "不可更新" = "Not Updateable";
 "正在检查" = "Checking";
 "已是最新" = "Up to Date";
@@ -511,18 +509,21 @@
 "无已知风险" = "No Known Risk";
 "每次安装默认不选择任何 Agent。每个目标将获得完整独立副本。" = "No Agent is selected by default. Each target receives a complete independent copy.";
 "说明" = "Description";
+"作者" = "Author";
+"作者：%@" = "Author: %@";
 "真实目录" = "Actual Directory";
 "写入行为" = "Write Action";
 "现有说明" = "Existing Description";
 "同名处理" = "Same-name Handling";
+"已安装处理" = "Installed Skill Handling";
 "跳过（默认）" = "Skip (Default)";
 "覆盖" = "Replace";
 "跳过" = "Skip";
 "安装" = "Install";
 "安装 %@" = "Install %@";
-"检查安装…" = "Review Installation…";
-"检查 %@ 的安装" = "Review %@ Installation";
-"同名 Skill 已安装于 %@" = "A Skill with this name is installed for %@";
+"安装状态" = "Installation Status";
+"此 Skill 已安装" = "This Skill Is Installed";
+"已安装同名 Skill" = "A Skill with This Name Is Installed";
 "安装 GitHub Repo" = "Install GitHub Repo";
 "已安装相同内容" = "Same Content Already Installed";
 "不可安装" = "Cannot Install";
@@ -545,6 +546,8 @@
 "卸载所选副本" = "Uninstall Selected Copies";
 "The same Skill content is already installed." = "The same Skill content is already installed.";
 "The existing same-name Skill was kept." = "The existing same-name Skill was kept.";
+"This Skill is already installed. The installed version will be kept unless replacement is selected." = "This Skill is already installed. The installed version will be kept unless replacement is selected.";
+"The installed Skill was kept." = "The installed Skill was kept.";
 "The Skill installation target is unavailable." = "The Skill installation target is unavailable.";
 "Confirm the high-risk security audit before installing this Skill." = "Confirm the high-risk security audit before installing this Skill.";
 "Installed. Start a new Agent session if the Skill is not visible yet." = "Installed. Start a new Agent session if the Skill is not visible yet.";
@@ -596,7 +599,7 @@
 "The configured Skills root is not an absolute path." = "The configured Skills root is not an absolute path.";
 "This Agent does not declare a global Skills directory." = "This Agent does not declare a global Skills directory.";
 "This Agent is not available." = "This Agent is not available.";
-"The Agent contains more than one existing Skill with this name." = "The Agent contains more than one existing Skill with this name.";
+"More than one installed Skill matches this installation." = "More than one installed Skill matches this installation.";
 "%@ is not installed." = "%@ is not installed.";
 "%@ is installed, but its version could not be verified." = "%@ is installed, but its version could not be verified.";
 "%@ %@ is older than the supported %@." = "%@ %@ is older than the supported %@.";

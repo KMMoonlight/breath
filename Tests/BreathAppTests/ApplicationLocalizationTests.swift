@@ -44,11 +44,9 @@ struct ApplicationLocalizationTests {
         #expect(english.string("正在下载…") == "Downloading…")
         #expect(english.string("正在安装…") == "Installing…")
         #expect(english.format("安装 %@", "Kami") == "Install Kami")
-        #expect(english.string("检查安装…") == "Review Installation…")
-        #expect(
-            chinese.format("同名 Skill 已安装于 %@", "Claude Code, Codex")
-                == "同名 Skill 已安装于 Claude Code, Codex"
-        )
+        #expect(english.string("安装状态") == "Installation Status")
+        #expect(chinese.string("此 Skill 已安装") == "此 Skill 已安装")
+        #expect(english.format("作者：%@", "Example") == "Author: Example")
         #expect(
             localizedSkillMessage(
                 "SKILL.md is missing.",

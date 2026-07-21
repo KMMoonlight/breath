@@ -181,7 +181,6 @@ struct SkillInstallationWizard: View {
             }
             if !searchResults.isEmpty {
                 List(searchResults) { item in
-                    let installedAgents = installedAgentNames(matching: item)
                     HStack(alignment: .center, spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(item.name).fontWeight(.medium)
@@ -192,17 +191,6 @@ struct SkillInstallationWizard: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
-                            }
-                            Text(item.source)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.tertiary)
-                            if !installedAgents.isEmpty {
-                                Text(localizer.format(
-                                    "同名 Skill 已安装于 %@",
-                                    installedAgents.joined(separator: ", ")
-                                ))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
                             }
                             if item.securityAudit.riskLevel != .unknown {
                                 HStack(spacing: 6) {
@@ -232,21 +220,13 @@ struct SkillInstallationWizard: View {
                             if activity == .downloadingCatalog(item.id) {
                                 progressStatus("正在下载…")
                             } else {
-                                Button(
-                                    installedAgents.isEmpty
-                                        ? localizer.string("安装")
-                                        : localizer.string("检查安装…")
-                                ) {
+                                Button(localizer.string("安装")) {
                                     discoverCatalogResult(item)
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .disabled(isWorking)
-                                .accessibilityLabel(
-                                    installedAgents.isEmpty
-                                        ? localizer.format("安装 %@", item.name)
-                                        : localizer.format("检查 %@ 的安装", item.name)
-                                )
+                                .accessibilityLabel(localizer.format("安装 %@", item.name))
                                 .accessibilityHint(localizer.string(
                                     "从 GitHub 下载来源并进入安装内容检查"
                                 ))
@@ -260,18 +240,6 @@ struct SkillInstallationWizard: View {
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .task(id: skillsShInput) {
             await searchSkillsShAfterDebounce()
-        }
-    }
-
-    private func installedAgentNames(matching item: SkillsShSearchResult) -> [String] {
-        let name = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return Array(Set(
-            snapshot.skills
-                .filter { $0.name == name }
-                .flatMap(\.copies)
-                .map(\.agentDisplayName)
-        )).sorted {
-            $0.localizedStandardCompare($1) == .orderedAscending
         }
     }
 
@@ -304,6 +272,11 @@ struct SkillInstallationWizard: View {
                             Text(candidate.description)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            if let author = candidate.declarations.author {
+                                Text(localizer.format("作者：%@", author))
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
                             Text(localizer.format("%d 个文件", candidate.files.count))
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
@@ -374,6 +347,9 @@ struct SkillInstallationWizard: View {
                     GroupBox {
                         VStack(alignment: .leading, spacing: 10) {
                             LabeledContent(localizer.string("说明"), value: item.candidate.description)
+                            if let author = item.candidate.declarations.author {
+                                LabeledContent(localizer.string("作者"), value: author)
+                            }
                             if let license = item.candidate.declarations.license {
                                 LabeledContent(localizer.string("许可证"), value: license)
                             }
@@ -410,6 +386,12 @@ struct SkillInstallationWizard: View {
                                     value: provenance.resolvedCommit
                                 )
                             }
+                            if let existingMatch = item.existingMatch {
+                                LabeledContent(
+                                    localizer.string("安装状态"),
+                                    value: existingMatch.displayName(localizer)
+                                )
+                            }
                             LabeledContent(
                                 localizer.string("写入行为"),
                                 value: item.action.displayName(localizer)
@@ -422,7 +404,7 @@ struct SkillInstallationWizard: View {
                                     .font(.caption.weight(.semibold))
                                 Text(existingDescription).foregroundStyle(.secondary)
                                 Picker(
-                                    localizer.string("同名处理"),
+                                    (item.existingMatch ?? .sameName).replacementLabel(localizer),
                                     selection: replacementBinding(for: item)
                                 ) {
                                     Text(localizer.string("跳过（默认）")).tag(SkillReplacementChoice.skip)
@@ -1129,6 +1111,22 @@ private extension SkillInstallationAction {
         case .skip: localizer.string("跳过")
         case .replace: localizer.string("覆盖")
         case .unavailable: localizer.string("不可安装")
+        }
+    }
+}
+
+private extension ExistingSkillMatch {
+    func displayName(_ localizer: ApplicationLocalizer) -> String {
+        switch self {
+        case .sameSourceIdentity: localizer.string("此 Skill 已安装")
+        case .sameName: localizer.string("已安装同名 Skill")
+        }
+    }
+
+    func replacementLabel(_ localizer: ApplicationLocalizer) -> String {
+        switch self {
+        case .sameSourceIdentity: localizer.string("已安装处理")
+        case .sameName: localizer.string("同名处理")
         }
     }
 }

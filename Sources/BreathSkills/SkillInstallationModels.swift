@@ -62,6 +62,54 @@ public struct SkillRemoteProvenance: Codable, Hashable, Sendable {
     }
 }
 
+public enum SkillSourceIdentity: Codable, Hashable, Sendable {
+    case skillsSh(catalogSkillID: String)
+    case github(repository: String, sourceRelativePath: String)
+
+    public init?(
+        source: SkillRemoteSourceKind,
+        repository: String,
+        sourceRelativePath: String,
+        catalogSkillID: String?
+    ) {
+        switch source {
+        case .skillsSh:
+            guard let catalogSkillID else { return nil }
+            let normalizedID = catalogSkillID.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            guard !normalizedID.isEmpty else { return nil }
+            self = .skillsSh(catalogSkillID: normalizedID)
+        case .github:
+            let normalizedRepository = repository.trimmingCharacters(
+                in: CharacterSet.whitespacesAndNewlines.union(
+                    CharacterSet(charactersIn: "/")
+                )
+            ).lowercased()
+            guard !normalizedRepository.isEmpty else { return nil }
+            let trimmedPath = sourceRelativePath.trimmingCharacters(
+                in: CharacterSet(charactersIn: "/")
+            )
+            let normalizedPath = trimmedPath == "." ? "" : trimmedPath
+            self = .github(
+                repository: normalizedRepository,
+                sourceRelativePath: normalizedPath
+            )
+        }
+    }
+}
+
+public extension SkillRemoteProvenance {
+    var sourceIdentity: SkillSourceIdentity? {
+        SkillSourceIdentity(
+            source: source,
+            repository: repository,
+            sourceRelativePath: sourceRelativePath,
+            catalogSkillID: catalogSkillID
+        )
+    }
+}
+
 public enum SkillInstallationOrigin: Codable, Hashable, Sendable {
     case zip
     case remote(SkillRemoteProvenance)
@@ -80,17 +128,20 @@ public enum SkillInstallationOrigin: Codable, Hashable, Sendable {
 }
 
 public struct SkillManifestDeclarations: Codable, Hashable, Sendable {
+    public let author: String?
     public let license: String?
     public let compatibility: String?
     public let metadata: String?
     public let allowedTools: String?
 
     public init(
+        author: String? = nil,
         license: String? = nil,
         compatibility: String? = nil,
         metadata: String? = nil,
         allowedTools: String? = nil
     ) {
+        self.author = author
         self.license = license
         self.compatibility = compatibility
         self.metadata = metadata
@@ -98,7 +149,8 @@ public struct SkillManifestDeclarations: Codable, Hashable, Sendable {
     }
 
     public var isEmpty: Bool {
-        license == nil && compatibility == nil && metadata == nil && allowedTools == nil
+        author == nil && license == nil && compatibility == nil && metadata == nil
+            && allowedTools == nil
     }
 }
 
@@ -210,6 +262,11 @@ public enum SkillInstallationAction: String, Codable, Hashable, Sendable {
     case unavailable
 }
 
+public enum ExistingSkillMatch: String, Codable, Hashable, Sendable {
+    case sameSourceIdentity
+    case sameName
+}
+
 public struct SkillFileChange: Codable, Hashable, Identifiable, Sendable {
     public enum Kind: String, Codable, Hashable, Sendable {
         case added
@@ -238,7 +295,9 @@ public struct SkillInstallationPreviewItem: Identifiable, Hashable, Sendable {
     public let action: SkillInstallationAction
     public let changes: [SkillFileChange]
     public let reason: String?
+    public let existingMatch: ExistingSkillMatch?
     let expectedExistingDigest: String?
+    let expectedSameNamePaths: Set<String>
     let removesExistingProvenance: Bool
 
     init(
@@ -251,7 +310,9 @@ public struct SkillInstallationPreviewItem: Identifiable, Hashable, Sendable {
         action: SkillInstallationAction,
         changes: [SkillFileChange],
         reason: String?,
+        existingMatch: ExistingSkillMatch?,
         expectedExistingDigest: String?,
+        expectedSameNamePaths: Set<String>,
         removesExistingProvenance: Bool
     ) {
         self.targetID = targetID
@@ -263,7 +324,9 @@ public struct SkillInstallationPreviewItem: Identifiable, Hashable, Sendable {
         self.action = action
         self.changes = changes
         self.reason = reason
+        self.existingMatch = existingMatch
         self.expectedExistingDigest = expectedExistingDigest
+        self.expectedSameNamePaths = expectedSameNamePaths
         self.removesExistingProvenance = removesExistingProvenance
     }
 }

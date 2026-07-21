@@ -14,7 +14,6 @@ final class SkillsViewModel: ObservableObject {
     )
     @Published var searchText = ""
     @Published var selectedAgent: AgentKind?
-    @Published var selectedSource: SkillSourceKind?
     @Published var selectedStatus: SkillUpdateState?
     @Published private(set) var isRefreshing = false
     @Published var errorMessage: String?
@@ -41,16 +40,13 @@ final class SkillsViewModel: ObservableObject {
             let matchesAgent = selectedAgent.map { agent in
                 skill.copies.contains { $0.agent == agent }
             } ?? true
-            let matchesSource = selectedSource.map { source in
-                skill.copies.contains { $0.source == source }
-            } ?? true
             let matchesStatus = selectedStatus.map { status in
                 if status == .locallyModified {
                     return skill.copies.contains(where: \.isLocallyModified)
                 }
                 return skill.copies.contains { $0.updateState == status }
             } ?? true
-            return matchesSearch && matchesAgent && matchesSource && matchesStatus
+            return matchesSearch && matchesAgent && matchesStatus
         }
     }
 

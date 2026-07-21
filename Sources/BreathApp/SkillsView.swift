@@ -166,26 +166,17 @@ struct SkillsView: View {
                     Text(target.displayName).tag(target.agent as AgentKind?)
                 }
             }
-            Picker(localizer.string("来源"), selection: $model.selectedSource) {
-                Text(localizer.string("全部来源")).tag(nil as SkillSourceKind?)
-                ForEach(SkillSourceKind.allCases, id: \.self) { source in
-                    Text(source.displayName(localizer)).tag(source as SkillSourceKind?)
-                }
-            }
             Picker(localizer.string("状态"), selection: $model.selectedStatus) {
                 Text(localizer.string("全部状态")).tag(nil as SkillUpdateState?)
                 ForEach(SkillUpdateState.allCasesForFiltering, id: \.self) { status in
                     Text(status.displayName(localizer)).tag(status as SkillUpdateState?)
                 }
             }
-            if model.selectedAgent != nil
-                || model.selectedSource != nil
-                || model.selectedStatus != nil
+            if model.selectedAgent != nil || model.selectedStatus != nil
             {
                 Divider()
                 Button(localizer.string("清除筛选")) {
                     model.selectedAgent = nil
-                    model.selectedSource = nil
                     model.selectedStatus = nil
                 }
             }
@@ -277,7 +268,7 @@ struct SkillsView: View {
             ContentUnavailableView(
                 localizer.string("选择一个 Skill"),
                 systemImage: "sparkles",
-                description: Text(localizer.string("查看说明、文件、来源和已安装的 Agent"))
+                description: Text(localizer.string("查看说明、文件和已安装的 Agent"))
             )
         }
     }
@@ -325,6 +316,11 @@ private struct SkillListRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+            if let author = skill.author {
+                Text(localizer.format("作者：%@", author))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
             HStack(spacing: 4) {
                 ForEach(skill.copies) { copy in
                     Text(copy.agentDisplayName)
@@ -333,15 +329,20 @@ private struct SkillListRow: View {
                         .padding(.vertical, 2)
                         .background(.quaternary, in: Capsule())
                 }
-                Spacer()
-                Text(skill.sourceKinds.map { $0.displayName(localizer) }.sorted().joined(separator: ", "))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(skill.name), \(skill.description), \(skill.copies.map(\.agentDisplayName).joined(separator: ", "))")
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        var values = [skill.name, skill.description]
+        if let author = skill.author {
+            values.append(localizer.format("作者：%@", author))
+        }
+        values.append(skill.copies.map(\.agentDisplayName).joined(separator: ", "))
+        return values.joined(separator: ", ")
     }
 }
 
@@ -363,6 +364,11 @@ private struct SkillDetailView: View {
                             .font(.title3)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
+                        if let author = skill.author {
+                            Text(localizer.format("作者：%@", author))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     Spacer()
                     if let update {
@@ -387,23 +393,6 @@ private struct SkillDetailView: View {
                                     Text(copyStatus(copy))
                                         .font(.caption)
                                         .foregroundStyle(copy.isLocallyModified ? .orange : .secondary)
-                                    if let repository = copy.repository {
-                                        Text([
-                                            repository,
-                                            copy.sourceRelativePath,
-                                        ].compactMap { $0 }.filter { !$0.isEmpty }
-                                            .joined(separator: " · "))
-                                            .font(.caption.monospaced())
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    if let reference = copy.reference,
-                                       let commit = copy.resolvedCommit
-                                    {
-                                        Text("\(reference.kind.rawValue):\(reference.value) · \(commit)")
-                                            .font(.caption2.monospaced())
-                                            .foregroundStyle(.tertiary)
-                                            .textSelection(.enabled)
-                                    }
                                 }
                                 Spacer()
                                 Button(localizer.string("在 Finder 中显示")) {
@@ -449,23 +438,12 @@ private struct SkillDetailView: View {
     }
 
     private func copyStatus(_ copy: InstalledSkillCopy) -> String {
-        var values = [copy.source.displayName(localizer), copy.updateState.displayName(localizer)]
+        var values = [copy.updateState.displayName(localizer)]
         if copy.isLocallyModified, copy.updateState != .locallyModified {
             values.append(localizer.string("本地已修改"))
         }
         if copy.isSymbolicLink { values.append(localizer.string("外部符号链接")) }
         return values.joined(separator: " · ")
-    }
-}
-
-extension SkillSourceKind {
-    func displayName(_ localizer: ApplicationLocalizer) -> String {
-        switch self {
-        case .zip: localizer.string("ZIP")
-        case .github: "GitHub"
-        case .skillsSh: "skills.sh"
-        case .unknown: localizer.string("未知来源")
-        }
     }
 }
 

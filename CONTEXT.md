@@ -116,6 +116,10 @@ _Avoid_: 默认 Agent、受支持 Agent CLI、自动分发目标
 用户用来发现待安装 Skill 的 ZIP 文件、GitHub Repo 或 skills.sh 条目；一个来源可以包含一个或多个候选 Skill，来源本身不等同于全局 Skill。
 _Avoid_: 全局 Skill、Skill 安装目标、Agent 仓库
 
+**Skill 来源身份（Skill Source Identity）**：
+安装预览用来确认候选 Skill 与既有副本是否来自同一远程条目的稳定标识；skills.sh 使用目录条目 ID，GitHub 使用仓库与来源内相对路径。它不作为 Skills 浏览列表信息，缺失时只能退化为同名或内容比较。
+_Avoid_: Skill 名称、作者、Skill 来源、内容摘要
+
 **候选 Skill（Skill Candidate）**：
 从 Skill 来源中发现、尚未写入 Agent 目录的 Skill；缺少可解析的 `SKILL.md`、`name` 或 `description` 时不能安装，非致命的格式偏差可以带警告进入安装预览。
 _Avoid_: 全局 Skill、无效文件夹、已安装 Skill

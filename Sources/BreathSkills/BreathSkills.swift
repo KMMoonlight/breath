@@ -46,6 +46,7 @@ public struct SkillInstallationRecord: Codable, Hashable, Identifiable, Sendable
     public var sourceRelativePath: String? { origin.remoteProvenance?.sourceRelativePath }
     public var reference: SkillSourceReference? { origin.remoteProvenance?.reference }
     public var resolvedCommit: String? { origin.remoteProvenance?.resolvedCommit }
+    public var catalogSkillID: String? { origin.remoteProvenance?.catalogSkillID }
 
     public init(
         agent: AgentKind,
@@ -112,6 +113,7 @@ public struct InstalledSkillCopy: Codable, Hashable, Identifiable, Sendable {
     public let sourceRelativePath: String?
     public let reference: SkillSourceReference?
     public let resolvedCommit: String?
+    public let catalogSkillID: String?
     public let updateState: SkillUpdateState
     public let isLocallyModified: Bool
 
@@ -126,6 +128,7 @@ public struct InstalledSkillCopy: Codable, Hashable, Identifiable, Sendable {
         sourceRelativePath: String? = nil,
         reference: SkillSourceReference? = nil,
         resolvedCommit: String? = nil,
+        catalogSkillID: String? = nil,
         updateState: SkillUpdateState = .unavailable,
         isLocallyModified: Bool = false
     ) {
@@ -139,14 +142,26 @@ public struct InstalledSkillCopy: Codable, Hashable, Identifiable, Sendable {
         self.sourceRelativePath = sourceRelativePath
         self.reference = reference
         self.resolvedCommit = resolvedCommit
+        self.catalogSkillID = catalogSkillID
         self.updateState = updateState
         self.isLocallyModified = isLocallyModified
+    }
+
+    public var sourceIdentity: SkillSourceIdentity? {
+        guard let remoteSource = SkillRemoteSourceKind(source) else { return nil }
+        return SkillSourceIdentity(
+            source: remoteSource,
+            repository: repository ?? "",
+            sourceRelativePath: sourceRelativePath ?? "",
+            catalogSkillID: catalogSkillID
+        )
     }
 }
 
 public struct GlobalSkill: Codable, Hashable, Identifiable, Sendable {
     public let id: String
     public let name: String
+    public let author: String?
     public let description: String
     public let manifest: String
     public let contentDigest: String
@@ -155,6 +170,7 @@ public struct GlobalSkill: Codable, Hashable, Identifiable, Sendable {
 
     public init(
         name: String,
+        author: String? = nil,
         description: String,
         manifest: String,
         contentDigest: String,
@@ -163,6 +179,7 @@ public struct GlobalSkill: Codable, Hashable, Identifiable, Sendable {
     ) {
         id = "\(name):\(contentDigest)"
         self.name = name
+        self.author = author
         self.description = description
         self.manifest = manifest
         self.contentDigest = contentDigest
@@ -392,6 +409,7 @@ public actor GlobalSkillsService {
             guard let first = entries.first else { return nil }
             return GlobalSkill(
                 name: first.name,
+                author: first.author,
                 description: first.description,
                 manifest: first.manifest,
                 contentDigest: first.contentDigest,
@@ -574,6 +592,7 @@ public actor GlobalSkillsService {
         let recordedUpdateState = updateStates[presentedURL.standardizedFileURL.path]
         return ParsedInstalledSkill(
             name: metadata.name,
+            author: metadata.declarations.author,
             description: metadata.description,
             manifest: manifest,
             contentDigest: digest,
@@ -589,6 +608,7 @@ public actor GlobalSkillsService {
                 sourceRelativePath: matchingRecord?.sourceRelativePath,
                 reference: matchingRecord?.reference,
                 resolvedCommit: matchingRecord?.resolvedCommit,
+                catalogSkillID: matchingRecord?.catalogSkillID,
                 updateState: recordedUpdateState ?? matchingRecord.map {
                     guard case .remote(let provenance) = $0.origin else {
                         return .unavailable
@@ -1031,15 +1051,19 @@ public actor GlobalSkillsService {
                     continue
                 }
 
-                let matchingSkills = snapshot.skills.filter { skill in
-                    skill.name == candidate.name
-                        && skill.copies.contains(where: { $0.agent == agent })
-                }
-                let existing = matchingSkills.compactMap { skill -> (GlobalSkill, InstalledSkillCopy)? in
-                    guard let copy = skill.copies.first(where: { $0.agent == agent }) else {
-                        return nil
+                let candidateSourceIdentity = candidate.remoteProvenance?.sourceIdentity
+                let existing = snapshot.skills.flatMap { skill in
+                    skill.copies.compactMap {
+                        copy -> (GlobalSkill, InstalledSkillCopy, ExistingSkillMatch)? in
+                        guard copy.agent == agent else { return nil }
+                        if let candidateSourceIdentity,
+                           copy.sourceIdentity == candidateSourceIdentity
+                        {
+                            return (skill, copy, .sameSourceIdentity)
+                        }
+                        guard skill.name == candidate.name else { return nil }
+                        return (skill, copy, .sameName)
                     }
-                    return (skill, copy)
                 }
                 if existing.count > 1 {
                     items.append(unavailablePreviewItem(
@@ -1047,11 +1071,11 @@ public actor GlobalSkillsService {
                         candidate: candidate,
                         agentDisplayName: adapter.displayName,
                         targetDirectory: target,
-                        reason: "The Agent contains more than one existing Skill with this name."
+                        reason: "More than one installed Skill matches this installation."
                     ))
                     continue
                 }
-                if let (existingSkill, existingCopy) = existing.first {
+                if let (existingSkill, existingCopy, existingMatch) = existing.first {
                     let action: SkillInstallationAction
                     if existingSkill.contentDigest == candidate.contentDigest {
                         action = .alreadyInstalled
@@ -1060,6 +1084,18 @@ public actor GlobalSkillsService {
                     } else {
                         action = .skip
                     }
+                    let reason: String?
+                    if action == .skip {
+                        reason = existingMatch == .sameSourceIdentity
+                            ? "This Skill is already installed. The installed version will be kept unless replacement is selected."
+                            : "An existing same-name Skill will be kept unless replacement is selected."
+                    } else {
+                        reason = nil
+                    }
+                    let expectedSameNamePaths: Set<String> = existingSkill.name
+                        == candidate.name
+                        ? [existingCopy.directory.standardizedFileURL.path]
+                        : []
                     items.append(SkillInstallationPreviewItem(
                         targetID: targetID,
                         candidate: candidate,
@@ -1073,10 +1109,10 @@ public actor GlobalSkillsService {
                             candidate: candidate.files,
                             contentsDiffer: existingSkill.contentDigest != candidate.contentDigest
                         ),
-                        reason: action == .skip
-                            ? "An existing same-name Skill will be kept unless replacement is selected."
-                            : nil,
+                        reason: reason,
+                        existingMatch: existingMatch,
                         expectedExistingDigest: existingSkill.contentDigest,
+                        expectedSameNamePaths: expectedSameNamePaths,
                         removesExistingProvenance: existingCopy.source == .github
                             || existingCopy.source == .skillsSh
                     ))
@@ -1093,7 +1129,9 @@ public actor GlobalSkillsService {
                             SkillFileChange(kind: .added, relativePath: $0.relativePath)
                         },
                         reason: nil,
+                        existingMatch: nil,
                         expectedExistingDigest: nil,
+                        expectedSameNamePaths: [],
                         removesExistingProvenance: false
                     ))
                 }
@@ -1146,7 +1184,9 @@ public actor GlobalSkillsService {
                         result = Self.resultItem(
                             for: item,
                             status: .skipped,
-                            message: "The existing same-name Skill was kept."
+                            message: item.existingMatch == .sameSourceIdentity
+                                ? "The installed Skill was kept."
+                                : "The existing same-name Skill was kept."
                         )
                     case .unavailable:
                         result = Self.resultItem(
@@ -1554,7 +1594,9 @@ public actor GlobalSkillsService {
             action: .unavailable,
             changes: [],
             reason: reason,
+            existingMatch: nil,
             expectedExistingDigest: nil,
+            expectedSameNamePaths: [],
             removesExistingProvenance: false
         )
     }
@@ -1675,6 +1717,7 @@ public actor GlobalSkillsService {
 
 private struct ParsedInstalledSkill {
     let name: String
+    let author: String?
     let description: String
     let manifest: String
     let contentDigest: String
@@ -1771,10 +1814,18 @@ enum SkillManifestParser {
             let trimmed = serialized.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
         }
+        func optionalMetadataValue(_ key: String) -> String? {
+            guard let metadata = values["metadata"] as? [String: Any],
+                  let value = metadata[key] as? String
+            else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
         return SkillManifestMetadata(
             name: name,
             description: description,
             declarations: SkillManifestDeclarations(
+                author: optionalMetadataValue("author"),
                 license: optionalValue("license"),
                 compatibility: optionalValue("compatibility"),
                 metadata: optionalValue("metadata"),

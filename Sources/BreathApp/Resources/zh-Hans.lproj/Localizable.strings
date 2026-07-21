@@ -448,7 +448,6 @@
 "来源" = "来源";
 "状态" = "状态";
 "全部 Agent" = "全部 Agent";
-"全部来源" = "全部来源";
 "全部状态" = "全部状态";
 "清除筛选" = "清除筛选";
 "全局 Skills 列表" = "全局 Skills 列表";
@@ -459,7 +458,7 @@
 "可更新" = "可更新";
 "本地已修改" = "本地已修改";
 "选择一个 Skill" = "选择一个 Skill";
-"查看说明、文件、来源和已安装的 Agent" = "查看说明、文件、来源和已安装的 Agent";
+"查看说明、文件和已安装的 Agent" = "查看说明、文件和已安装的 Agent";
 "查看更新…" = "查看更新…";
 "卸载…" = "卸载…";
 "已安装的 Agent 列表" = "已安装的 Agent 列表";
@@ -467,7 +466,6 @@
 "SKILL.md" = "SKILL.md";
 "文件（%d）" = "文件（%d）";
 "ZIP" = "ZIP";
-"未知来源" = "未知来源";
 "不可更新" = "不可更新";
 "正在检查" = "正在检查";
 "已是最新" = "已是最新";
@@ -511,18 +509,21 @@
 "无已知风险" = "无已知风险";
 "每次安装默认不选择任何 Agent。每个目标将获得完整独立副本。" = "每次安装默认不选择任何 Agent。每个目标将获得完整独立副本。";
 "说明" = "说明";
+"作者" = "作者";
+"作者：%@" = "作者：%@";
 "真实目录" = "真实目录";
 "写入行为" = "写入行为";
 "现有说明" = "现有说明";
 "同名处理" = "同名处理";
+"已安装处理" = "已安装处理";
 "跳过（默认）" = "跳过（默认）";
 "覆盖" = "覆盖";
 "跳过" = "跳过";
 "安装" = "安装";
 "安装 %@" = "安装 %@";
-"检查安装…" = "检查安装…";
-"检查 %@ 的安装" = "检查 %@ 的安装";
-"同名 Skill 已安装于 %@" = "同名 Skill 已安装于 %@";
+"安装状态" = "安装状态";
+"此 Skill 已安装" = "此 Skill 已安装";
+"已安装同名 Skill" = "已安装同名 Skill";
 "安装 GitHub Repo" = "安装 GitHub Repo";
 "已安装相同内容" = "已安装相同内容";
 "不可安装" = "不可安装";
@@ -545,6 +546,8 @@
 "卸载所选副本" = "卸载所选副本";
 "The same Skill content is already installed." = "相同内容的 Skill 已经安装。";
 "The existing same-name Skill was kept." = "已保留现有同名 Skill。";
+"This Skill is already installed. The installed version will be kept unless replacement is selected." = "此 Skill 已安装；除非选择覆盖，否则将保留已安装版本。";
+"The installed Skill was kept." = "已保留当前安装的 Skill。";
 "The Skill installation target is unavailable." = "Skill 安装目标当前不可用。";
 "Confirm the high-risk security audit before installing this Skill." = "安装此 Skill 前，请先确认高风险安全审计提示。";
 "Installed. Start a new Agent session if the Skill is not visible yet." = "安装成功。如果暂时看不到该 Skill，请新建 Agent 会话。";
@@ -596,7 +599,7 @@
 "The configured Skills root is not an absolute path." = "配置的 Skills 根目录不是绝对路径。";
 "This Agent does not declare a global Skills directory." = "该 Agent 未声明全局 Skills 目录。";
 "This Agent is not available." = "该 Agent 当前不可用。";
-"The Agent contains more than one existing Skill with this name." = "该 Agent 中存在多个同名 Skill。";
+"More than one installed Skill matches this installation." = "有多个已安装 Skill 与本次安装匹配。";
 "%@ is not installed." = "未安装 %@。";
 "%@ is installed, but its version could not be verified." = "已安装 %@，但无法验证其版本。";
 "%@ %@ is older than the supported %@." = "%@ %@ 低于受支持的最低版本 %@。";

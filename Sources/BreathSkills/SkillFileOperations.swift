@@ -166,13 +166,10 @@ struct SkillInstallationCommitter: @unchecked Sendable {
         } else if fileManager.fileExists(atPath: destination.path) {
             throw SkillInstallationError.stalePreview
         }
-        let expectedSameNamePaths = Set(
-            [item.existingDirectory?.standardizedFileURL.path].compactMap { $0 }
-        )
         guard try sameNameSkillPaths(
             in: parent,
             skillName: item.candidate.name
-        ) == expectedSameNamePaths else {
+        ) == item.expectedSameNamePaths else {
             throw SkillInstallationError.stalePreview
         }
 
