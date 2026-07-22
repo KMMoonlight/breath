@@ -629,9 +629,6 @@ struct GitWorkbenchView: View {
     private func branchRow(_ reference: GitReference) -> some View {
         Button {
             selectedBranchReferenceID = reference.id
-            if !reference.isCurrent {
-                model.checkout(reference: reference)
-            }
         } label: {
             HStack(spacing: 6) {
                 Image(
@@ -684,6 +681,12 @@ struct GitWorkbenchView: View {
             }
         }
         .buttonStyle(.plain)
+        .simultaneousGesture(
+            TapGesture(count: 2)
+                .onEnded {
+                    checkoutBranch(reference)
+                }
+        )
         .contextMenu {
             branchContextMenu(reference)
         }
@@ -695,6 +698,14 @@ struct GitWorkbenchView: View {
         .accessibilityAddTraits(
             isBranchSelected(reference) ? .isSelected : []
         )
+        .accessibilityAction(named: Text(localizer.string("Checkout"))) {
+            checkoutBranch(reference)
+        }
+    }
+
+    private func checkoutBranch(_ reference: GitReference) {
+        guard !reference.isCurrent else { return }
+        model.checkout(reference: reference)
     }
 
     @ViewBuilder

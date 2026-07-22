@@ -1546,6 +1546,44 @@ struct WindowLayoutSourceTests {
         #expect(branchList.contains(".selectedContentBackgroundColor"))
     }
 
+    @Test("branch rows select on one click and checkout on double click")
+    func branchRowsSeparateSelectionFromCheckout() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/GitWorkbenchView.swift"
+            ),
+            encoding: .utf8
+        )
+        let branchRowStart = try #require(
+            source.range(of: "private func branchRow(_ reference: GitReference)")
+        )
+        let contextMenuStart = try #require(
+            source.range(
+                of: "private func branchContextMenu(_ reference: GitReference)",
+                range: branchRowStart.upperBound..<source.endIndex
+            )
+        )
+        let branchRow = source[
+            branchRowStart.lowerBound..<contextMenuStart.lowerBound
+        ]
+        let selectionActionEnd = try #require(
+            branchRow.range(of: "} label: {")
+        )
+        let selectionAction = branchRow[
+            branchRow.startIndex..<selectionActionEnd.lowerBound
+        ]
+
+        #expect(selectionAction.contains("selectedBranchReferenceID = reference.id"))
+        #expect(!selectionAction.contains("model.checkout"))
+        #expect(branchRow.contains("TapGesture(count: 2)"))
+        #expect(branchRow.contains("checkoutBranch(reference)"))
+        #expect(branchRow.contains(".accessibilityAction("))
+    }
+
     @Test("Git branches separate local refs from collapsed remote refs")
     func branchRowsSeparateLocalAndRemoteReferences() throws {
         let root = URL(
