@@ -111,23 +111,54 @@ struct TerminalKeyboardShortcutTests {
         #expect(forwarded == event)
     }
 
-    @Test("new session shortcut bypasses terminal preflight")
-    func newSessionShortcutBypassesTerminalPreflight() throws {
-        let event = try commandKeyEvent("t")
+    @Test(
+        "terminal gets first refusal for application shortcuts",
+        arguments: ["t", "1"]
+    )
+    func terminalGetsFirstRefusalForApplicationShortcuts(
+        character: String
+    ) throws {
+        let event = try commandKeyEvent(character)
         var terminalReceivedEvent = false
 
         let forwarded = TerminalShortcutArbitrator.eventToForward(
             event,
             terminalHasInputFocus: true,
-            matchesBreathShortcut: BreathShortcutCatalog.matchesTerminalFirstShortcut,
+            matchesBreathShortcut:
+                BreathShortcutCatalog.matchesTerminalFirstShortcut,
             terminalHandler: { _ in
                 terminalReceivedEvent = true
                 return true
             }
         )
 
+        #expect(forwarded == nil)
+        #expect(terminalReceivedEvent)
+    }
+
+    @Test(
+        "Breath receives application shortcuts declined by the terminal",
+        arguments: ["t", "1"]
+    )
+    func breathReceivesApplicationShortcutsDeclinedByTerminal(
+        character: String
+    ) throws {
+        let event = try commandKeyEvent(character)
+        var terminalReceivedEvent = false
+
+        let forwarded = TerminalShortcutArbitrator.eventToForward(
+            event,
+            terminalHasInputFocus: true,
+            matchesBreathShortcut:
+                BreathShortcutCatalog.matchesTerminalFirstShortcut,
+            terminalHandler: { _ in
+                terminalReceivedEvent = true
+                return false
+            }
+        )
+
         #expect(forwarded === event)
-        #expect(!terminalReceivedEvent)
+        #expect(terminalReceivedEvent)
     }
 
     @MainActor

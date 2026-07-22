@@ -70,13 +70,14 @@ enum BreathShortcutCatalog {
 
     static func matchesTerminalFirstShortcut(_ event: NSEvent) -> Bool {
         let definitions = [
+            newWorkSession,
             previousPane,
             nextPane,
             openSettings,
             splitHorizontally,
             splitVertically,
             closePane,
-        ]
+        ] + workSessionTabs.map(\.shortcut)
         return definitions.contains { $0.matches(event) }
     }
 }
