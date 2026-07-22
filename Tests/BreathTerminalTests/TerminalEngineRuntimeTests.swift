@@ -43,12 +43,21 @@ struct TerminalEngineRuntimeTests {
         #expect(await engine.closed == [paneID])
     }
 
-    @Test("libghostty prioritizes terminal apps but declines host shortcuts")
+    @Test("libghostty creates a native surface, accepts composed text, resizes, and reloads style")
     @MainActor
     func libghosttySurfaceSmoke() async throws {
         await NativeUITestGate.shared.acquire()
         defer { NativeUITestGate.shared.release() }
         try await verifyLibghosttySurface()
+        try await Task.sleep(for: .milliseconds(100))
+    }
+
+    @Test("libghostty delivers opted-in child input but declines host shortcuts")
+    @MainActor
+    func libghosttyShortcutArbitration() async throws {
+        await NativeUITestGate.shared.acquire()
+        defer { NativeUITestGate.shared.release() }
+        try await verifyLibghosttyShortcutArbitration()
         try await Task.sleep(for: .milliseconds(100))
     }
 
@@ -132,6 +141,62 @@ private func verifyLibghosttySurface() async throws {
     let view = try #require(engine.view(for: paneID))
     view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
     view.layoutSubtreeIfNeeded()
+    let textInput = try #require(view as? any NSTextInputClient)
+    textInput.setMarkedText(
+        "拼音",
+        selectedRange: NSRange(location: 2, length: 0),
+        replacementRange: NSRange(location: NSNotFound, length: 0)
+    )
+    textInput.insertText(
+        "中文",
+        replacementRange: NSRange(location: NSNotFound, length: 0)
+    )
+    await engine.apply(
+        settings: TerminalSettings(
+            fontFamily: "SF Mono",
+            fontSize: 15,
+            colorTheme: .solarizedDark,
+            cursorStyle: .bar
+        )
+    )
+    await engine.close(paneID)
+    #expect(engine.view(for: paneID) == nil)
+}
+
+@MainActor
+private func verifyLibghosttyShortcutArbitration() async throws {
+    _ = NSApplication.shared
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+        styleMask: [.titled],
+        backing: .buffered,
+        defer: false
+    )
+    window.makeKeyAndOrderFront(nil)
+    defer { window.close() }
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(
+            "breath-ghostty-shortcuts-\(UUID().uuidString)",
+            isDirectory: true
+        )
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let engine = try GhosttyTerminalEngine(
+        configurationDirectory: directory,
+        agentSocketURL: directory.appendingPathComponent("events.sock"),
+        synchronizeRendering: false
+    )
+    guard engine.usesLibghostty else { return }
+
+    let shellPaneID = TerminalPaneID(rawValue: UUID())
+    try await engine.open(
+        TerminalLaunch(
+            paneID: shellPaneID,
+            workingDirectory: "/tmp",
+            executable: "/bin/zsh",
+            arguments: ["-l"],
+            environment: [:]
+        )
+    )
     let breathShortcuts: [(String, UInt16, NSEvent.ModifierFlags)] = [
         ("t", 17, [.command]),
         ("1", 18, [.command]),
@@ -156,8 +221,9 @@ private func verifyLibghosttySurface() async throws {
             keyCode: keyCode,
             modifiers: modifiers
         ))
-        #expect(!engine.handleShortcutKeyDown(shortcut, for: paneID))
+        #expect(!engine.handleShortcutKeyDown(shortcut, for: shellPaneID))
     }
+    await engine.close(shellPaneID)
 
     let terminalApplicationPaneID = TerminalPaneID(rawValue: UUID())
     try await engine.open(
@@ -174,37 +240,16 @@ private func verifyLibghosttySurface() async throws {
         keyCode: 17,
         modifiers: [.command]
     ))
-    var terminalApplicationHandledShortcut = false
+    var terminalApplicationReceivedShortcut = false
     for _ in 0..<20 {
         try await Task.sleep(for: .milliseconds(25))
         if engine.handleShortcutKeyDown(commandT, for: terminalApplicationPaneID) {
-            terminalApplicationHandledShortcut = true
+            terminalApplicationReceivedShortcut = true
             break
         }
     }
-    #expect(terminalApplicationHandledShortcut)
+    #expect(terminalApplicationReceivedShortcut)
     await engine.close(terminalApplicationPaneID)
-
-    let textInput = try #require(view as? any NSTextInputClient)
-    textInput.setMarkedText(
-        "拼音",
-        selectedRange: NSRange(location: 2, length: 0),
-        replacementRange: NSRange(location: NSNotFound, length: 0)
-    )
-    textInput.insertText(
-        "中文",
-        replacementRange: NSRange(location: NSNotFound, length: 0)
-    )
-    await engine.apply(
-        settings: TerminalSettings(
-            fontFamily: "SF Mono",
-            fontSize: 15,
-            colorTheme: .solarizedDark,
-            cursorStyle: .bar
-        )
-    )
-    await engine.close(paneID)
-    #expect(engine.view(for: paneID) == nil)
 }
 
 @MainActor
