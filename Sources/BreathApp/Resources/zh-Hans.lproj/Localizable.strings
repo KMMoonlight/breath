@@ -127,6 +127,17 @@
 "Breath 会先尽力创建 Git 安全快照，然后丢弃所选工作树修改。" = "Breath 会先尽力创建 Git 安全快照，然后丢弃所选工作树修改。";
 "Checkout" = "Checkout";
 "Checkout and Update" = "Checkout and Update";
+"Smart Checkout" = "Smart Checkout";
+"Force Checkout" = "Force Checkout";
+"刚刚" = "刚刚";
+"设置 Upstream…" = "设置 Upstream…";
+"选择 %@ 要跟踪的远程分支。" = "选择 %@ 要跟踪的远程分支。";
+"没有可用的远程分支" = "没有可用的远程分支";
+"本地修改会被覆盖" = "本地修改会被覆盖";
+"以下文件阻止切换到 %@：" = "以下文件阻止切换到 %@：";
+"没有列出具体文件，请查看 Git Console。" = "没有列出具体文件，请查看 Git Console。";
+"另有 %d 个文件，请查看 Git Console。" = "另有 %d 个文件，请查看 Git Console。";
+"Smart Checkout 会先暂存本地修改，切换后再恢复。Force Checkout 会丢弃这些修改，但可以从 Git 安全快照恢复。" = "Smart Checkout 会先暂存本地修改，切换后再恢复。Force Checkout 会丢弃这些修改，但可以从 Git 安全快照恢复。";
 "Cherry-pick" = "Cherry-pick";
 "Commit" = "Commit";
 "Commit %@" = "Commit %@";

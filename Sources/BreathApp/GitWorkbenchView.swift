@@ -42,9 +42,34 @@ enum GitErrorPresentation {
     }
 }
 
+enum GitCommitTimeFormatter {
+    static func string(
+        for date: Date,
+        relativeTo now: Date = Date(),
+        locale: Locale,
+        justNow: String
+    ) -> String {
+        guard abs(date.timeIntervalSince(now)) >= 60 else {
+            return justNow
+        }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = locale
+        formatter.dateTimeStyle = .numeric
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: now)
+    }
+}
+
 private struct GitDiffFileRequest: Equatable {
     let id = UUID()
     let path: String
+}
+
+private struct GitUpstreamRequest: Identifiable {
+    var id: String { branch.id }
+
+    let branch: GitReference
+    let choices: [GitReference]
 }
 
 private struct GitDialogAction: Identifiable {
@@ -157,6 +182,7 @@ struct GitWorkbenchView: View {
     @State private var rebaseBase = ""
     @State private var rebaseSteps: [GitHistoryEditStep] = []
     @State private var selectedBranchReferenceID: String?
+    @State private var upstreamRequest: GitUpstreamRequest?
     @State private var selectedDiffFileRequest: GitDiffFileRequest?
     @State private var dialogRequest: GitDialogRequest?
     @FocusState private var focusedField: GitWorkbenchFocusField?
@@ -274,6 +300,12 @@ struct GitWorkbenchView: View {
         }
         .sheet(isPresented: $showingInteractiveRebase) {
             interactiveRebaseSheet
+        }
+        .sheet(item: $upstreamRequest) { request in
+            upstreamSheet(request)
+        }
+        .sheet(item: checkoutConflictBinding) { request in
+            checkoutConflictDialog(request)
         }
         .sheet(item: primaryDialogRequest) { request in
             gitDialog(request)
@@ -741,25 +773,13 @@ struct GitWorkbenchView: View {
             Button(localizer.string("重命名…")) {
                 promptRenameBranch(reference.shortName)
             }
-            Menu(localizer.string("设置 Upstream")) {
-                ForEach(
-                    model.references.filter {
+            Button(localizer.string("设置 Upstream…")) {
+                upstreamRequest = GitUpstreamRequest(
+                    branch: reference,
+                    choices: model.references.filter {
                         $0.kind == .remoteBranch
                     }
-                ) { remote in
-                    Button(remote.shortName) {
-                        model.setUpstream(
-                            branch: reference.shortName,
-                            upstream: remote.shortName
-                        )
-                    }
-                }
-                Button(localizer.string("取消 Upstream")) {
-                    model.setUpstream(
-                        branch: reference.shortName,
-                        upstream: nil
-                    )
-                }
+                )
             }
             Button(
                 localizer.string("删除分支"),
@@ -1309,7 +1329,13 @@ struct GitWorkbenchView: View {
                 HStack(spacing: 6) {
                     Text(commit.authorName)
                     if let date = commit.authoredAt {
-                        Text(date, style: .relative)
+                        Text(
+                            GitCommitTimeFormatter.string(
+                                for: date,
+                                locale: localizer.locale,
+                                justNow: localizer.string("刚刚")
+                            )
+                        )
                     }
                     Text(String(commit.objectID.prefix(8)))
                         .monospaced()
@@ -3479,6 +3505,158 @@ struct GitWorkbenchView: View {
                 }
             }
         )
+    }
+
+    private var checkoutConflictBinding:
+        Binding<GitCheckoutConflictRequest?>
+    {
+        Binding(
+            get: { model.checkoutConflict },
+            set: { request in
+                if request == nil {
+                    model.dismissCheckoutConflict()
+                }
+            }
+        )
+    }
+
+    private func checkoutConflictDialog(
+        _ conflict: GitCheckoutConflictRequest
+    ) -> some View {
+        let maximumVisiblePaths = 8
+        let reportedPaths = conflict.rootConflicts.flatMap { rootConflict in
+            rootConflict.paths.map { path in
+                conflict.synchronizesRoots
+                    ? rootConflict.root.rootURL.lastPathComponent + ": " + path
+                    : path
+            }
+        }
+        var paths = reportedPaths.prefix(maximumVisiblePaths)
+            .joined(separator: "\n")
+        if reportedPaths.isEmpty {
+            paths = localizer.string("没有列出具体文件，请查看 Git Console。")
+        } else if reportedPaths.count > maximumVisiblePaths {
+            paths += "\n" + localizer.format(
+                "另有 %d 个文件，请查看 Git Console。",
+                reportedPaths.count - maximumVisiblePaths
+            )
+        }
+        let message = localizer.format(
+            "以下文件阻止切换到 %@：",
+            conflict.reference.shortName
+        )
+            + "\n\n"
+            + paths
+            + "\n\n"
+            + localizer.string(
+                "Smart Checkout 会先暂存本地修改，切换后再恢复。Force Checkout 会丢弃这些修改，但可以从 Git 安全快照恢复。"
+            )
+        let request = GitDialogRequest(
+            title: localizer.string("本地修改会被覆盖"),
+            message: message,
+            content: .confirmation(
+                actions: [
+                    GitDialogAction(
+                        title: localizer.string("Smart Checkout"),
+                        role: nil,
+                        isDefault: true,
+                        perform: {
+                            model.resolveCheckoutConflict(
+                                conflict,
+                                using: .smart
+                            )
+                        }
+                    ),
+                    GitDialogAction(
+                        title: localizer.string("Force Checkout"),
+                        role: .destructive,
+                        isDefault: false,
+                        perform: {
+                            model.resolveCheckoutConflict(
+                                conflict,
+                                using: .force
+                            )
+                        }
+                    ),
+                ]
+            )
+        )
+        return GitCompactDialog(
+            request: request,
+            cancelTitle: localizer.string("取消"),
+            onDismiss: model.dismissCheckoutConflict
+        )
+    }
+
+    private func upstreamSheet(_ request: GitUpstreamRequest) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(localizer.string("设置 Upstream"))
+                .font(.headline)
+            Text(
+                localizer.format(
+                    "选择 %@ 要跟踪的远程分支。",
+                    request.branch.shortName
+                )
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+
+            Divider()
+
+            if request.choices.isEmpty {
+                Text(localizer.string("没有可用的远程分支"))
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(request.choices) { remote in
+                            Button {
+                                model.setUpstream(
+                                    branch: request.branch.shortName,
+                                    upstream: remote.shortName
+                                )
+                                upstreamRequest = nil
+                            } label: {
+                                HStack {
+                                    Image(systemName: "arrow.triangle.branch")
+                                        .foregroundStyle(.secondary)
+                                    Text(remote.shortName)
+                                    Spacer()
+                                    if request.branch.upstream == remote.shortName {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 240)
+            }
+
+            Divider()
+
+            HStack {
+                Button(localizer.string("取消 Upstream")) {
+                    model.setUpstream(
+                        branch: request.branch.shortName,
+                        upstream: nil
+                    )
+                    upstreamRequest = nil
+                }
+                Spacer()
+                Button(localizer.string("取消"), role: .cancel) {
+                    upstreamRequest = nil
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(18)
+        .frame(width: 420)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var localizer: ApplicationLocalizer {

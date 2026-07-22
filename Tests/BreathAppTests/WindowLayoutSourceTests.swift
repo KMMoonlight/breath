@@ -1584,6 +1584,104 @@ struct WindowLayoutSourceTests {
         #expect(branchRow.contains(".accessibilityAction("))
     }
 
+    @Test("commit rows omit seconds from relative timestamps")
+    func commitRowsUseMinuteLevelTimestamps() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/GitWorkbenchView.swift"
+            ),
+            encoding: .utf8
+        )
+        let rowStart = try #require(
+            source.range(of: "private func commitRow(")
+        )
+        let menuStart = try #require(
+            source.range(
+                of: "private func commitContextMenu(",
+                range: rowStart.upperBound..<source.endIndex
+            )
+        )
+        let row = source[rowStart.lowerBound..<menuStart.lowerBound]
+
+        #expect(row.contains("GitCommitTimeFormatter.string("))
+        #expect(!row.contains("Text(date, style: .relative)"))
+    }
+
+    @Test("commit time formatting never exposes seconds")
+    func commitTimeFormattingOmitsSeconds() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let recent = GitCommitTimeFormatter.string(
+            for: now.addingTimeInterval(-31),
+            relativeTo: now,
+            locale: Locale(identifier: "zh-Hans"),
+            justNow: "刚刚"
+        )
+        let minutes = GitCommitTimeFormatter.string(
+            for: now.addingTimeInterval(-191),
+            relativeTo: now,
+            locale: Locale(identifier: "en"),
+            justNow: "Just now"
+        )
+
+        #expect(recent == "刚刚")
+        #expect(!minutes.localizedCaseInsensitiveContains("second"))
+        #expect(minutes.localizedCaseInsensitiveContains("minute"))
+    }
+
+    @Test("upstream choices use a stable sheet instead of a live submenu")
+    func upstreamChoicesDoNotRebuildAContextSubmenu() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/GitWorkbenchView.swift"
+            ),
+            encoding: .utf8
+        )
+
+        #expect(!source.contains("Menu(localizer.string(\"设置 Upstream\"))"))
+        #expect(source.contains("upstreamRequest = GitUpstreamRequest("))
+        #expect(source.contains(".sheet(item: $upstreamRequest)"))
+    }
+
+    @Test("checkout conflicts offer Smart and Force resolution")
+    func checkoutConflictsExposeResolutionDialog() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/GitWorkbenchView.swift"
+            ),
+            encoding: .utf8
+        )
+        let modelSource = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/GitWorkbenchViewModel.swift"
+            ),
+            encoding: .utf8
+        )
+
+        #expect(source.contains(".sheet(item: checkoutConflictBinding)"))
+        #expect(source.contains("resolveCheckoutConflict(\n                                conflict,"))
+        #expect(source.contains("using: .smart"))
+        #expect(source.contains("using: .force"))
+        #expect(
+            modelSource.contains(
+                "func resolveCheckoutConflict(\n        _ request: GitCheckoutConflictRequest"
+            )
+        )
+        #expect(modelSource.contains("performSynchronizedCheckout("))
+        #expect(modelSource.contains("synchronizesRoots: true"))
+    }
+
     @Test("Git branches separate local refs from collapsed remote refs")
     func branchRowsSeparateLocalAndRemoteReferences() throws {
         let root = URL(

@@ -50,6 +50,62 @@ enum GitResetMode: String, CaseIterable, Codable, Sendable {
     case keep
 }
 
+enum GitCheckoutTarget: Equatable, Sendable {
+    case reference(String)
+    case remote(remoteBranch: String, localName: String)
+}
+
+enum GitCheckoutResolution: Sendable {
+    case smart
+    case force
+}
+
+struct GitCheckoutConflictError: LocalizedError, Equatable, Sendable {
+    let paths: [String]
+
+    var errorDescription: String? {
+        "Local changes would be overwritten by checkout."
+    }
+
+    init?(output: String) {
+        let markers = [
+            "would be overwritten by checkout:",
+            "would be overwritten by switch:",
+        ]
+        var foundConflict = false
+        var isCollectingPaths = false
+        var parsedPaths: [String] = []
+        for line in output.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        ) {
+            if markers.contains(where: { line.contains($0) }) {
+                foundConflict = true
+                isCollectingPaths = true
+                continue
+            }
+            guard isCollectingPaths else { continue }
+            let path: String
+            if line.first == "\t" {
+                path = String(line.dropFirst())
+            } else if line.hasPrefix("    ") {
+                path = String(line.dropFirst(4))
+            } else {
+                isCollectingPaths = false
+                continue
+            }
+            if path.isEmpty {
+                continue
+            }
+            if !parsedPaths.contains(path) {
+                parsedPaths.append(path)
+            }
+        }
+        guard foundConflict else { return nil }
+        paths = parsedPaths
+    }
+}
+
 enum GitHistoryEditAction: String, Codable, Sendable {
     case pick
     case reword
@@ -291,11 +347,9 @@ extension GitWorkbenchService {
     }
 
     func checkout(rootURL: URL, reference: String) async throws {
-        let supportsSwitch = try await gitExecutableInfo()
-            .supportsSwitchAndRestore
-        _ = try await requiredGit(
+        try await checkout(
             rootURL: rootURL,
-            arguments: [supportsSwitch ? "switch" : "checkout", reference]
+            target: .reference(reference)
         )
     }
 
@@ -304,13 +358,135 @@ extension GitWorkbenchService {
         remoteBranch: String,
         localName: String
     ) async throws {
+        try await checkout(
+            rootURL: rootURL,
+            target: .remote(
+                remoteBranch: remoteBranch,
+                localName: localName
+            )
+        )
+    }
+
+    func checkout(
+        rootURL: URL,
+        target: GitCheckoutTarget,
+        discardChanges: Bool = false,
+        conflictingPaths: [String] = []
+    ) async throws {
+        if discardChanges, !conflictingPaths.isEmpty {
+            _ = try await requiredGit(
+                rootURL: rootURL,
+                arguments: ["clean", "-f", "-d", "--"] + conflictingPaths
+            )
+        }
         let supportsSwitch = try await gitExecutableInfo()
             .supportsSwitchAndRestore
+        var arguments: [String]
+        switch target {
+        case .reference(let reference):
+            arguments = [supportsSwitch ? "switch" : "checkout"]
+            if discardChanges {
+                arguments.append(supportsSwitch ? "--discard-changes" : "--force")
+            }
+            arguments.append(reference)
+        case let .remote(remoteBranch, localName):
+            arguments = [supportsSwitch ? "switch" : "checkout"]
+            if discardChanges {
+                arguments.append(supportsSwitch ? "--discard-changes" : "--force")
+            }
+            arguments += supportsSwitch
+                ? ["--track", "-c", localName, remoteBranch]
+                : ["--track", "-b", localName, remoteBranch]
+        }
+        var environment = ProcessInfo.processInfo.environment
+        environment["LC_ALL"] = "C"
+        let result = try await runner.run(
+            arguments: ["-C", rootURL.path] + arguments,
+            environment: environment
+        )
+        guard result.exitCode == 0 else {
+            if !discardChanges,
+               let conflict = GitCheckoutConflictError(
+                   output: result.combinedOutput
+               )
+            {
+                throw conflict
+            }
+            throw GitCommandError.failed(
+                command: result.displayCommand,
+                exitCode: result.exitCode,
+                output: result.combinedOutput
+            )
+        }
+    }
+
+    func smartCheckout(
+        rootURL: URL,
+        target: GitCheckoutTarget
+    ) async throws {
+        let previousStashCount = try await stashEntryCount(rootURL: rootURL)
+        try await createStash(
+            rootURL: rootURL,
+            message: "Breath Smart Checkout",
+            includeUntracked: true,
+            keepIndex: false
+        )
+        let createdStashCount = try await stashEntryCount(rootURL: rootURL)
+        guard createdStashCount > previousStashCount else {
+            try await checkout(rootURL: rootURL, target: target)
+            return
+        }
+        do {
+            try await checkout(rootURL: rootURL, target: target)
+        } catch {
+            do {
+                try await restoreSmartCheckoutStash(rootURL: rootURL)
+            } catch let restoreError {
+                throw GitMutationError.partialSuccess(
+                    error.localizedDescription
+                        + "\n\nThe checkout failed, and Breath could not restore "
+                        + "the Smart Checkout stash:\n"
+                        + restoreError.localizedDescription
+                )
+            }
+            throw error
+        }
+        try await restoreSmartCheckoutStash(rootURL: rootURL)
+    }
+
+    func checkout(
+        rootURL: URL,
+        target: GitCheckoutTarget,
+        resolution: GitCheckoutResolution?,
+        conflictingPaths: [String]
+    ) async throws {
+        switch resolution {
+        case .smart:
+            try await smartCheckout(rootURL: rootURL, target: target)
+        case .force:
+            try await checkout(
+                rootURL: rootURL,
+                target: target,
+                discardChanges: true,
+                conflictingPaths: conflictingPaths
+            )
+        case nil:
+            try await checkout(rootURL: rootURL, target: target)
+        }
+    }
+
+    private func stashEntryCount(rootURL: URL) async throws -> Int {
+        let result = try await requiredGit(
+            rootURL: rootURL,
+            arguments: ["stash", "list", "--format=%gd"]
+        )
+        return result.standardOutput.split(separator: "\n").count
+    }
+
+    private func restoreSmartCheckoutStash(rootURL: URL) async throws {
         _ = try await requiredGit(
             rootURL: rootURL,
-            arguments: supportsSwitch
-                ? ["switch", "--track", "-c", localName, remoteBranch]
-                : ["checkout", "--track", "-b", localName, remoteBranch]
+            arguments: ["stash", "pop", "--index", "stash@{0}"]
         )
     }
 

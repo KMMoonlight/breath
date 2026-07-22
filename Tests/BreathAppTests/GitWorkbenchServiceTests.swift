@@ -39,6 +39,129 @@ struct GitWorkbenchServiceTests {
         )
     }
 
+    @Test("checkout reports overwritten files and force checkout discards them")
+    func reportsAndForcesCheckoutConflicts() async throws {
+        let repository = try GitWorkbenchTestRepository()
+        let spacedPath = " leading and trailing.txt "
+        let unicodePath = "冲突 文件.txt"
+        try repository.write("notes.txt", "base\n")
+        try repository.run(["add", "notes.txt"])
+        try repository.run(["commit", "-m", "base"])
+        try repository.run(["switch", "-c", "feature"])
+        try repository.write("notes.txt", "feature\n")
+        try repository.write("collision.txt", "feature file\n")
+        try repository.write(spacedPath, "spaced feature file\n")
+        try repository.write(unicodePath, "unicode feature file\n")
+        try repository.run([
+            "add", "notes.txt", "collision.txt", spacedPath, unicodePath,
+        ])
+        try repository.run(["commit", "-m", "feature"])
+        try repository.run(["switch", "main"])
+        try repository.write("notes.txt", "local\n")
+        try repository.write("collision.txt", "untracked local file\n")
+        try repository.write(spacedPath, "spaced untracked local file\n")
+        try repository.write(unicodePath, "unicode untracked local file\n")
+        let service = GitWorkbenchService(
+            workspaceURL: repository.url,
+            gitExecutableURL: URL(fileURLWithPath: "/usr/bin/git")
+        )
+        let target = GitCheckoutTarget.reference("feature")
+        var conflictingPaths: [String] = []
+
+        do {
+            try await service.checkout(rootURL: repository.url, target: target)
+            Issue.record("Checkout should report the overwritten local file")
+        } catch let conflict as GitCheckoutConflictError {
+            #expect(Set(conflict.paths) == [
+                "notes.txt", "collision.txt", spacedPath, unicodePath,
+            ])
+            conflictingPaths = conflict.paths
+        }
+
+        try await service.checkout(
+            rootURL: repository.url,
+            target: target,
+            discardChanges: true,
+            conflictingPaths: conflictingPaths
+        )
+
+        #expect(try repository.output(["branch", "--show-current"]) == "feature")
+        #expect(try repository.output(["show", "HEAD:notes.txt"]) == "feature")
+        #expect(try repository.read("notes.txt") == "feature\n")
+        #expect(try repository.read("collision.txt") == "feature file\n")
+        #expect(try repository.read(spacedPath) == "spaced feature file\n")
+        #expect(try repository.read(unicodePath) == "unicode feature file\n")
+    }
+
+    @Test("Smart Checkout restores tracked, staged, and untracked changes")
+    func smartCheckoutRestoresLocalChanges() async throws {
+        let repository = try GitWorkbenchTestRepository()
+        try repository.write("notes.txt", "base\n")
+        try repository.run(["add", "notes.txt"])
+        try repository.run(["commit", "-m", "base"])
+        try repository.run(["switch", "-c", "feature"])
+        try repository.write("feature.txt", "feature\n")
+        try repository.run(["add", "feature.txt"])
+        try repository.run(["commit", "-m", "feature"])
+        try repository.run(["switch", "main"])
+        try repository.write("prior.txt", "prior stash\n")
+        try repository.run([
+            "stash", "push", "--include-untracked", "-m", "prior",
+        ])
+        try repository.write("notes.txt", "local\n")
+        try repository.run(["add", "notes.txt"])
+        try repository.write("scratch.txt", "untracked\n")
+        let service = GitWorkbenchService(
+            workspaceURL: repository.url,
+            gitExecutableURL: URL(fileURLWithPath: "/usr/bin/git")
+        )
+
+        try await service.smartCheckout(
+            rootURL: repository.url,
+            target: .reference("feature")
+        )
+
+        #expect(try repository.output(["branch", "--show-current"]) == "feature")
+        #expect(try repository.read("notes.txt") == "local\n")
+        #expect(try repository.read("scratch.txt") == "untracked\n")
+        #expect(try repository.output(["diff", "--cached", "--name-only"]) == "notes.txt")
+        let remainingStashes = try repository.output(["stash", "list"])
+        #expect(remainingStashes.contains("prior"))
+        #expect(!remainingStashes.contains("Breath Smart Checkout"))
+    }
+
+    @Test("Smart Checkout keeps its stash when restoring creates conflicts")
+    func smartCheckoutKeepsConflictingStash() async throws {
+        let repository = try GitWorkbenchTestRepository()
+        try repository.write("notes.txt", "base\n")
+        try repository.run(["add", "notes.txt"])
+        try repository.run(["commit", "-m", "base"])
+        try repository.run(["switch", "-c", "feature"])
+        try repository.write("notes.txt", "feature\n")
+        try repository.run(["add", "notes.txt"])
+        try repository.run(["commit", "-m", "feature"])
+        try repository.run(["switch", "main"])
+        try repository.write("notes.txt", "local\n")
+        let service = GitWorkbenchService(
+            workspaceURL: repository.url,
+            gitExecutableURL: URL(fileURLWithPath: "/usr/bin/git")
+        )
+
+        await #expect(throws: GitCommandError.self) {
+            try await service.smartCheckout(
+                rootURL: repository.url,
+                target: .reference("feature")
+            )
+        }
+
+        #expect(try repository.output(["branch", "--show-current"]) == "feature")
+        #expect(try repository.output(["status", "--porcelain"]).contains("UU notes.txt"))
+        #expect(
+            try repository.output(["stash", "list"])
+                .contains("Breath Smart Checkout")
+        )
+    }
+
     @Test("branch references omit the remote default-branch alias")
     func omitsRemoteHEADAlias() async throws {
         let repository = try GitWorkbenchTestRepository()
@@ -1775,6 +1898,94 @@ struct GitWorkbenchServiceTests {
         #expect(model.errorMessage?.contains("bad") == true)
     }
 
+    @Test("multi-root checkout offers Smart resolution for conflicting roots")
+    @MainActor
+    func synchronizedCheckoutResolvesOnlyConflictingRoots() async throws {
+        let workspaceDirectory = try TemporaryDirectory()
+        let clean = try GitWorkbenchTestRepository(
+            at: workspaceDirectory.url.appendingPathComponent(
+                "clean",
+                isDirectory: true
+            )
+        )
+        let conflicted = try GitWorkbenchTestRepository(
+            at: workspaceDirectory.url.appendingPathComponent(
+                "conflicted",
+                isDirectory: true
+            )
+        )
+        for repository in [clean, conflicted] {
+            try repository.write("notes.txt", "one\nmiddle\nlast\n")
+            try repository.run(["add", "notes.txt"])
+            try repository.run(["commit", "-m", "initial"])
+            try repository.run(["switch", "-c", "feature"])
+            try repository.write("notes.txt", "feature\nmiddle\nlast\n")
+            try repository.run(["add", "notes.txt"])
+            try repository.run(["commit", "-m", "feature"])
+            try repository.run(["switch", "main"])
+        }
+        try conflicted.write("notes.txt", "one\nmiddle\nlocal\n")
+
+        let storage = try TemporaryDirectory()
+        let registry = GitOperationRegistry(
+            store: GitConsoleStore(
+                fileURL: storage.url.appendingPathComponent("console.json")
+            )
+        )
+        let defaults = try #require(
+            UserDefaults(suiteName: "GitWorkbenchServiceTests.\(UUID())")
+        )
+        let model = GitWorkspaceViewModel(
+            workspace: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: workspaceDirectory.url.path,
+                displayName: "Multi Root Checkout"
+            ),
+            operationRegistry: registry,
+            preferencesStore: GitPreferencesStore(
+                defaults: defaults,
+                key: "preferences"
+            ),
+            metadataStore: GitWorkspaceMetadataStore(baseURL: storage.url)
+        )
+        await model.load()
+        model.selectRoot(nil)
+        model.metadata.synchronizeMultiRootOperations = true
+
+        model.synchronizeCheckout(reference: "feature")
+        for _ in 0..<100 {
+            if registry.runningCount == 0, model.checkoutConflict != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let request = try #require(model.checkoutConflict)
+        #expect(request.synchronizesRoots)
+        #expect(request.rootConflicts.map(\.root.rootURL.lastPathComponent) == [
+            "conflicted",
+        ])
+        #expect(request.rootConflicts.first?.paths == ["notes.txt"])
+        #expect(try clean.output(["branch", "--show-current"]) == "feature")
+        #expect(try conflicted.output(["branch", "--show-current"]) == "main")
+
+        model.resolveCheckoutConflict(request, using: .smart)
+        for _ in 0..<100 {
+            if registry.records.count >= 3,
+               registry.runningCount == 0,
+               try conflicted.output(["branch", "--show-current"]) == "feature"
+            {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(model.checkoutConflict == nil)
+        #expect(try clean.output(["branch", "--show-current"]) == "feature")
+        #expect(try conflicted.output(["branch", "--show-current"]) == "feature")
+        #expect(try conflicted.read("notes.txt") == "feature\nmiddle\nlocal\n")
+    }
+
     @Test("successful Commit and Push opens push review without an error alert")
     @MainActor
     func successfulCommitAndPushDoesNotTreatGitOutputAsFailure() async throws {
@@ -1930,6 +2141,13 @@ private struct GitWorkbenchTestRepository {
 
     func write(_ path: String, _ contents: String) throws {
         try Data(contents.utf8).write(to: url.appendingPathComponent(path))
+    }
+
+    func read(_ path: String) throws -> String {
+        String(
+            decoding: try Data(contentsOf: url.appendingPathComponent(path)),
+            as: UTF8.self
+        )
     }
 
     func run(_ arguments: [String]) throws {

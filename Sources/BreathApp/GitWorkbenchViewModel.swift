@@ -52,6 +52,29 @@ final class GitWorkbenchCoordinator: ObservableObject {
     }
 }
 
+struct GitCheckoutRootConflict: Equatable, Sendable {
+    let root: GitRootSnapshot
+    let paths: [String]
+}
+
+struct GitCheckoutConflictRequest: Equatable, Identifiable, Sendable {
+    var id: String {
+        reference.id + (updatesAfterCheckout ? "\u{0}update" : "\u{0}checkout")
+    }
+
+    let reference: GitReference
+    let rootConflicts: [GitCheckoutRootConflict]
+    let synchronizesRoots: Bool
+    let updatesAfterCheckout: Bool
+    let pullStrategy: GitPullStrategy
+}
+
+private enum GitSynchronizedCheckoutOutcome: Sendable {
+    case success
+    case conflict(GitCheckoutRootConflict)
+    case failure(String)
+}
+
 @MainActor
 final class GitWorkspaceViewModel: ObservableObject {
     let workspace: Workspace
@@ -96,6 +119,7 @@ final class GitWorkspaceViewModel: ObservableObject {
     @Published private(set) var isLoadingSelectedDetail = false
     @Published var errorMessage: String?
     @Published var errorGuidanceKey: String?
+    @Published private(set) var checkoutConflict: GitCheckoutConflictRequest?
     @Published var authenticationUsername = ""
     @Published var authenticationSecret = ""
     @Published var authenticationConfirmHostKey = false
@@ -1278,6 +1302,12 @@ final class GitWorkspaceViewModel: ObservableObject {
     }
 
     func checkout(reference: String) {
+        if let resolvedReference = references.first(where: {
+            $0.shortName == reference || $0.fullName == reference
+        }) {
+            checkout(reference: resolvedReference)
+            return
+        }
         guard ensureNoSequencedOperation() else { return }
         guard let root = selectedRoot else { return }
         withSafetySnapshot(action: "checkout \(reference)", root: root) {
@@ -1289,26 +1319,7 @@ final class GitWorkspaceViewModel: ObservableObject {
     }
 
     func checkout(reference: GitReference) {
-        guard ensureNoSequencedOperation() else { return }
-        if reference.kind == .remoteBranch {
-            guard let remoteBranch = remoteBranchIdentity(for: reference),
-                  let root = selectedRoot
-            else {
-                return
-            }
-            withSafetySnapshot(
-                action: "checkout \(reference.shortName)",
-                root: root
-            ) {
-                try await self.service.checkoutRemote(
-                    rootURL: root.rootURL,
-                    remoteBranch: remoteBranch.fullName,
-                    localName: remoteBranch.checkoutLocalBranchName
-                )
-            }
-        } else {
-            checkout(reference: reference.shortName)
-        }
+        performCheckout(reference: reference, updatesAfterCheckout: false)
     }
 
     func checkoutAndUpdate(reference: String, strategy: GitPullStrategy = .merge) {
@@ -1330,33 +1341,112 @@ final class GitWorkspaceViewModel: ObservableObject {
         reference: GitReference,
         strategy: GitPullStrategy = .merge
     ) {
+        performCheckout(
+            reference: reference,
+            updatesAfterCheckout: true,
+            pullStrategy: strategy
+        )
+    }
+
+    func resolveCheckoutConflict(
+        _ request: GitCheckoutConflictRequest,
+        using resolution: GitCheckoutResolution
+    ) {
+        if checkoutConflict?.id == request.id {
+            checkoutConflict = nil
+        }
+        if request.synchronizesRoots {
+            performSynchronizedCheckout(
+                reference: request.reference,
+                roots: request.rootConflicts.map(\.root),
+                conflictingPaths: Dictionary(
+                    uniqueKeysWithValues: request.rootConflicts.map {
+                        ($0.root.id, $0.paths)
+                    }
+                ),
+                resolution: resolution
+            )
+            return
+        }
+        performCheckout(
+            reference: request.reference,
+            updatesAfterCheckout: request.updatesAfterCheckout,
+            pullStrategy: request.pullStrategy,
+            conflictingPaths: request.rootConflicts.first?.paths ?? [],
+            resolution: resolution
+        )
+    }
+
+    func dismissCheckoutConflict() {
+        checkoutConflict = nil
+    }
+
+    private func performCheckout(
+        reference: GitReference,
+        updatesAfterCheckout: Bool,
+        pullStrategy: GitPullStrategy = .merge,
+        conflictingPaths: [String] = [],
+        resolution: GitCheckoutResolution? = nil
+    ) {
         guard ensureNoSequencedOperation() else { return }
-        if reference.kind == .remoteBranch {
-            guard let remoteBranch = remoteBranchIdentity(for: reference),
-                  let root = selectedRoot
-            else {
-                return
-            }
-            withSafetySnapshot(
-                action: "checkout and update \(reference.shortName)",
-                root: root
-            ) {
-                try await self.service.checkoutRemote(
-                    rootURL: root.rootURL,
-                    remoteBranch: remoteBranch.fullName,
-                    localName: remoteBranch.checkoutLocalBranchName
+        guard let root = selectedRoot,
+              let target = checkoutTarget(for: reference)
+        else {
+            return
+        }
+        let action = updatesAfterCheckout
+            ? "checkout and update \(reference.shortName)"
+            : "checkout \(reference.shortName)"
+        withSafetySnapshot(
+            action: action,
+            root: root,
+            onError: resolution == nil ? { [weak self] error in
+                guard let conflict = error as? GitCheckoutConflictError else {
+                    return false
+                }
+                self?.checkoutConflict = GitCheckoutConflictRequest(
+                    reference: reference,
+                    rootConflicts: [
+                        GitCheckoutRootConflict(
+                            root: root,
+                            paths: conflict.paths
+                        ),
+                    ],
+                    synchronizesRoots: false,
+                    updatesAfterCheckout: updatesAfterCheckout,
+                    pullStrategy: pullStrategy
                 )
+                return true
+            } : nil
+        ) {
+            try await self.service.checkout(
+                rootURL: root.rootURL,
+                target: target,
+                resolution: resolution,
+                conflictingPaths: conflictingPaths
+            )
+            if updatesAfterCheckout {
                 _ = try await self.service.pull(
                     rootURL: root.rootURL,
-                    strategy: strategy
+                    strategy: pullStrategy
                 )
             }
-        } else {
-            checkoutAndUpdate(
-                reference: reference.shortName,
-                strategy: strategy
-            )
         }
+    }
+
+    private func checkoutTarget(
+        for reference: GitReference
+    ) -> GitCheckoutTarget? {
+        guard reference.kind == .remoteBranch else {
+            return .reference(reference.shortName)
+        }
+        guard let remoteBranch = remoteBranchIdentity(for: reference) else {
+            return nil
+        }
+        return .remote(
+            remoteBranch: remoteBranch.fullName,
+            localName: remoteBranch.checkoutLocalBranchName
+        )
     }
 
     func synchronizeCheckout(reference: String) {
@@ -1367,11 +1457,104 @@ final class GitWorkspaceViewModel: ObservableObject {
             checkout(reference: reference)
             return
         }
-        synchronizeMutation(title: "Checkout \(reference)") { service, root in
-            try await service.checkout(
-                rootURL: root.rootURL,
-                reference: reference
-            )
+        guard let branchReference = references.first(where: {
+            $0.kind == .localBranch && $0.shortName == reference
+        }) else {
+            checkout(reference: reference)
+            return
+        }
+        performSynchronizedCheckout(
+            reference: branchReference,
+            roots: snapshot.roots.filter { !$0.isSubmoduleRoot }
+        )
+    }
+
+    private func performSynchronizedCheckout(
+        reference: GitReference,
+        roots: [GitRootSnapshot],
+        conflictingPaths: [GitRootID: [String]] = [:],
+        resolution: GitCheckoutResolution? = nil
+    ) {
+        let service = service
+        let registry = operationRegistry
+        let workspaceURL = workspaceURL
+        let snapshotStore = snapshotStore
+        let retention = preferencesStore.preferences.snapshotRetentionWorkingDays
+        let title = "Checkout \(reference.shortName)"
+        Task {
+            var conflicts: [GitCheckoutRootConflict] = []
+            var failures: [String] = []
+            await withTaskGroup(
+                of: GitSynchronizedCheckoutOutcome.self
+            ) { group in
+                for root in roots {
+                    group.addTask {
+                        _ = await snapshotStore.create(
+                            rootURL: root.rootURL,
+                            action: title,
+                            retentionWorkingDays: retention
+                        )
+                        do {
+                            try await registry.run(
+                                workspaceURL: workspaceURL,
+                                rootURL: root.rootURL,
+                                title: title,
+                                isMutation: true
+                            ) {
+                                let target = GitCheckoutTarget.reference(
+                                    reference.shortName
+                                )
+                                try await service.checkout(
+                                    rootURL: root.rootURL,
+                                    target: target,
+                                    resolution: resolution,
+                                    conflictingPaths: conflictingPaths[
+                                        root.id
+                                    ] ?? []
+                                )
+                            }
+                            return .success
+                        } catch let conflict as GitCheckoutConflictError {
+                            return .conflict(
+                                GitCheckoutRootConflict(
+                                    root: root,
+                                    paths: conflict.paths
+                                )
+                            )
+                        } catch {
+                            return .failure(
+                                root.rootURL.lastPathComponent + ": "
+                                    + error.localizedDescription
+                            )
+                        }
+                    }
+                }
+                for await outcome in group {
+                    switch outcome {
+                    case .success:
+                        break
+                    case .conflict(let conflict):
+                        conflicts.append(conflict)
+                    case .failure(let failure):
+                        failures.append(failure)
+                    }
+                }
+            }
+            if !conflicts.isEmpty {
+                checkoutConflict = GitCheckoutConflictRequest(
+                    reference: reference,
+                    rootConflicts: conflicts.sorted {
+                        $0.root.rootURL.path < $1.root.rootURL.path
+                    },
+                    synchronizesRoots: true,
+                    updatesAfterCheckout: false,
+                    pullStrategy: .merge
+                )
+            }
+            if !failures.isEmpty {
+                errorMessage = failures.sorted().joined(separator: "\n")
+            }
+            await refresh()
         }
     }
 
@@ -2412,6 +2595,7 @@ final class GitWorkspaceViewModel: ObservableObject {
     private func runMutation(
         title: String,
         rootURL: URL,
+        onError: ((Error) -> Bool)? = nil,
         operation: @escaping @Sendable () async throws -> Void
     ) {
         Task {
@@ -2425,6 +2609,12 @@ final class GitWorkspaceViewModel: ObservableObject {
                 )
                 await refresh()
             } catch {
+                if onError?(error) == true {
+                    errorMessage = nil
+                    errorGuidanceKey = nil
+                    await refresh()
+                    return
+                }
                 errorMessage = error.localizedDescription
                 if title.hasPrefix("Push"),
                    (
@@ -2456,10 +2646,15 @@ final class GitWorkspaceViewModel: ObservableObject {
     private func withSafetySnapshot(
         action: String,
         root: GitRootSnapshot,
+        onError: ((Error) -> Bool)? = nil,
         operation: @escaping @Sendable () async throws -> Void
     ) {
         let retention = preferencesStore.preferences.snapshotRetentionWorkingDays
-        runMutation(title: action, rootURL: root.rootURL) {
+        runMutation(
+            title: action,
+            rootURL: root.rootURL,
+            onError: onError
+        ) {
             _ = await self.snapshotStore.create(
                 rootURL: root.rootURL,
                 action: action,
