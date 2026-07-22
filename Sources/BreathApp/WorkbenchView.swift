@@ -220,6 +220,8 @@ struct WorkbenchView: View {
                 SkillActivityIcon()
             }
 
+            Spacer(minLength: 0)
+
             activityBarButton(
                 systemName: "gearshape",
                 accessibilityLabel: WorkbenchAccessibility.openSettings,
@@ -227,8 +229,6 @@ struct WorkbenchView: View {
             ) {
                 detailMode = .settings
             }
-
-            Spacer(minLength: 0)
         }
         .frame(width: WorkbenchLayout.activityBarWidth)
         .background(Color(nsColor: .windowBackgroundColor))
