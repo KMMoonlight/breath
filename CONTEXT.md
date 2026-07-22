@@ -20,6 +20,42 @@ _Avoid_: Agent Git、会话 Git、Git Diff 查看器
 主窗口最左侧固定的图标导航；“工作区、任务、Git、Skills”从顶部依次排列，“设置”固定在活动栏底部。只有选择“工作区”时才展示会话树与终端分栏；选择其他入口时隐藏会话树，并让对应页面占满活动栏右侧区域。
 _Avoid_: 侧栏底栏、状态栏、工具栏
 
+**浏览器自动化会话（Browser Automation Session）**：
+Agent 对话拥有的、由 Agent 驱动并由用户监督的隔离网页操作上下文；一个 Agent 对话至多拥有一个浏览器自动化会话，会话可以包含多个浏览器页面。同一工作会话中的多个 Agent 对话可以并行拥有各自会话，但它不是供用户日常浏览的内置浏览器。
+_Avoid_: 内置浏览器、浏览器 Tab、Computer Use 会话
+
+**浏览器页面（Browser Page）**：
+浏览器自动化会话中具有稳定身份的单个网页操作目标；一个 Agent 可以拥有多个页面，但不能引用其他 Agent 对话的页面。
+_Avoid_: 浏览器窗口、顶层浏览器会话、WebView
+
+**浏览器配置档案（Browser Profile）**：
+Agent 对话拥有的隔离浏览器身份，包含其浏览器自动化会话使用的 Cookie、Local Storage 和登录状态；它可以跨运行时恢复，但不与其他 Agent 对话共享，并随 Agent 对话或其工作会话永久删除。
+_Avoid_: 工作区浏览器状态、工作会话共享 Profile、用户默认浏览器 Profile
+
+**浏览器运行时（Browser Runtime）**：
+工作会话按需启动并管理的浏览器控制进程集合；首版使用一个 Chromium 实例承载该工作会话内多个 Agent 对话相互隔离的 Browser Context。它是可替换的基础设施，不是 Agent 或用户直接操作的浏览器会话。
+_Avoid_: 浏览器自动化会话、内置浏览器、Agent 浏览器进程
+
+**浏览器集成（Browser Integration）**：
+用户为某个 Agent CLI 显式启用的可逆集成，使 Agent 可以发现当前工作会话的浏览器自动化会话；它只在 Breath 环境标识和本地实例握手同时有效时激活，在普通终端中保持休眠。
+_Avoid_: 默认浏览器 Hook、全局浏览器注入、Prompt 监听
+
+**浏览器自动化网关（Browser Automation Gateway）**：
+Breath 向浏览器集成提供的稳定、版本化 CLI/JSON 协议；它验证当前应用实例、工作会话和 Agent 对话身份，执行权限与配置档案边界，并把操作转交给可替换的浏览器控制适配器。Agent 不直接依赖第三方控制器的命令或会话模型。
+_Avoid_: agent-browser 命令包装、Playwright API、浏览器 MCP
+
+**浏览器控制适配器（Browser Controller Adapter）**：
+浏览器自动化网关内部把 Breath 的会话、页面、观察、操作和错误模型映射到具体自动化控制器的实现；首个适配器使用 Playwright Library 驱动 Chromium，但 Playwright 及其定位器和对象模型不属于 Breath 的公开协议。
+_Avoid_: 浏览器自动化网关、Agent 工具、固定浏览器后端
+
+**浏览器结构化快照（Browser Structured Snapshot）**：
+浏览器页面在某一时刻的可访问性结构、稳定元素引用、URL 和标题，是 Agent 观察页面和定位交互目标的默认数据；它不是原始 DOM，也不证明页面视觉呈现正确。
+_Avoid_: 页面截图、HTML 转储、视觉验证
+
+**浏览器视觉验证（Browser Visual Verification）**：
+使用具备图形渲染能力的浏览器引擎生成页面截图，并据此检查布局、样式或视觉缺陷的验证步骤；首版必须由 Chromium 完成，Lightpanda 的结构化结果不能标记为视觉验证。
+_Avoid_: 结构化快照、每步截图、无头抓取
+
 **Git Root**：
 工作区内由 Git 独立管理的一个仓库根目录。一个工作区可以包含多个 Git Root；Git 工作台既可以聚合展示全部 Git Root，也可以聚焦操作其中一个。
 _Avoid_: 子工作区、模块仓库、项目仓库
