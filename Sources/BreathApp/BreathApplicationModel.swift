@@ -151,11 +151,13 @@ final class BreathApplicationModel: ObservableObject {
 
     func updateTerminalInputFocus(
         paneID: TerminalPaneID,
+        workSessionID: WorkSessionID,
         isFocused: Bool
     ) {
         var priority = shortcutPriority
         priority.updateTerminalFocus(
             paneID: paneID,
+            workSessionID: workSessionID,
             isFocused: isFocused
         )
         shortcutPriority = priority

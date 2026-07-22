@@ -69,17 +69,28 @@ enum BreathShortcutCatalog {
 struct BreathShortcutPriority: Equatable {
     private(set) var focusedTerminalPaneID: TerminalPaneID?
     private(set) var lastFocusedTerminalPaneID: TerminalPaneID?
+    private var lastFocusedPaneIDsByWorkSession: [WorkSessionID: TerminalPaneID] = [:]
 
     mutating func updateTerminalFocus(
         paneID: TerminalPaneID,
+        workSessionID: WorkSessionID? = nil,
         isFocused: Bool
     ) {
         if isFocused {
             focusedTerminalPaneID = paneID
             lastFocusedTerminalPaneID = paneID
+            if let workSessionID {
+                lastFocusedPaneIDsByWorkSession[workSessionID] = paneID
+            }
         } else if focusedTerminalPaneID == paneID {
             focusedTerminalPaneID = nil
         }
+    }
+
+    func lastFocusedTerminalPaneID(
+        in workSessionID: WorkSessionID
+    ) -> TerminalPaneID? {
+        lastFocusedPaneIDsByWorkSession[workSessionID]
     }
 
     func allowsBreathShortcut(targeting paneID: TerminalPaneID? = nil) -> Bool {

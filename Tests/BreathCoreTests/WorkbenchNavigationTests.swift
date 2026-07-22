@@ -52,6 +52,31 @@ struct WorkbenchNavigationTests {
         #expect(snapshot.nextActiveWorkSessionID(in: workspaceID) == nil)
     }
 
+    @Test("archiving the selected tab prefers its right neighbor and then its left")
+    func archiveFallbackFollowsTabOrder() {
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let firstSessionID = WorkSessionID(rawValue: UUID())
+        let middleSessionID = WorkSessionID(rawValue: UUID())
+        let lastSessionID = WorkSessionID(rawValue: UUID())
+        var snapshot = WorkbenchSnapshot(
+            workspaces: [
+                Workspace(id: workspaceID, path: "/tmp/tabs", displayName: "Tabs"),
+            ],
+            workSessions: [
+                session(id: firstSessionID, workspaceID: workspaceID),
+                session(id: middleSessionID, workspaceID: workspaceID),
+                session(id: lastSessionID, workspaceID: workspaceID),
+            ],
+            selectedWorkSessionID: middleSessionID
+        )
+
+        #expect(snapshot.archiveFallbackWorkSessionID(for: middleSessionID) == lastSessionID)
+
+        snapshot.selectedWorkSessionID = lastSessionID
+        #expect(snapshot.archiveFallbackWorkSessionID(for: lastSessionID) == middleSessionID)
+        #expect(snapshot.archiveFallbackWorkSessionID(for: firstSessionID) == nil)
+    }
+
     @Test("pane navigation follows layout order and wraps at both ends")
     func paneNavigationCyclesInLayoutOrder() {
         let firstPaneID = TerminalPaneID(rawValue: UUID())

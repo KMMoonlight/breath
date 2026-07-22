@@ -482,6 +482,28 @@ public struct WorkbenchSnapshot: Equatable, Codable, Sendable {
         }
         return sessionIDs[(selectedIndex + 1) % sessionIDs.count]
     }
+
+    public func archiveFallbackWorkSessionID(
+        for workSessionID: WorkSessionID
+    ) -> WorkSessionID? {
+        guard selectedWorkSessionID == workSessionID,
+              let session = activeWorkSessions.first(where: {
+                  $0.id == workSessionID
+              })
+        else {
+            return nil
+        }
+        let sessionIDs = activeWorkSessions
+            .filter { $0.workspaceID == session.workspaceID }
+            .map(\.id)
+        guard sessionIDs.count > 1,
+              let index = sessionIDs.firstIndex(of: workSessionID)
+        else {
+            return nil
+        }
+        let fallbackIndex = index + 1 < sessionIDs.count ? index + 1 : index - 1
+        return sessionIDs[fallbackIndex]
+    }
 }
 
 public struct TerminalLaunch: Equatable, Sendable {

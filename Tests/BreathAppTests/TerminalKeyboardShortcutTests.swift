@@ -54,6 +54,29 @@ struct TerminalKeyboardShortcutTests {
         #expect(!priority.allowsBreathShortcut(targeting: firstPaneID))
     }
 
+    @Test("each work session remembers its last focused pane")
+    func workSessionsRememberLastFocusedPane() {
+        let firstSessionID = WorkSessionID(rawValue: UUID())
+        let secondSessionID = WorkSessionID(rawValue: UUID())
+        let firstPaneID = TerminalPaneID(rawValue: UUID())
+        let secondPaneID = TerminalPaneID(rawValue: UUID())
+        var priority = BreathShortcutPriority()
+
+        priority.updateTerminalFocus(
+            paneID: firstPaneID,
+            workSessionID: firstSessionID,
+            isFocused: true
+        )
+        priority.updateTerminalFocus(
+            paneID: secondPaneID,
+            workSessionID: secondSessionID,
+            isFocused: true
+        )
+
+        #expect(priority.lastFocusedTerminalPaneID(in: firstSessionID) == firstPaneID)
+        #expect(priority.lastFocusedTerminalPaneID(in: secondSessionID) == secondPaneID)
+    }
+
     @Test("terminal-consumed shortcut does not reach Breath")
     func terminalConsumedShortcutStopsRouting() {
         let event = "shift-tab"

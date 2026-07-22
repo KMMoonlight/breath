@@ -120,7 +120,9 @@ struct WorkbenchView: View {
             Button(localizer.string("停止并归档"), role: .destructive) {
                 model.archive(
                     session.id,
-                    selecting: archiveFallbackID(for: session)
+                    selecting: model.snapshot.archiveFallbackWorkSessionID(
+                        for: session.id
+                    )
                 )
                 pendingArchive = nil
             }
@@ -478,7 +480,12 @@ struct WorkbenchView: View {
         else {
             return
         }
-        pendingTerminalFocusID = session.layout.paneIDs.first
+        pendingTerminalFocusID = model.shortcutPriority
+            .lastFocusedTerminalPaneID(in: session.id)
+            .flatMap { paneID in
+                session.layout.paneIDs.contains(paneID) ? paneID : nil
+            }
+            ?? session.layout.paneIDs.first
         selectWorkSession(sessionID)
     }
 
@@ -492,6 +499,7 @@ struct WorkbenchView: View {
         }
         let currentPaneID = [
             model.shortcutPriority.focusedTerminalPaneID,
+            model.shortcutPriority.lastFocusedTerminalPaneID(in: session.id),
             model.shortcutPriority.lastFocusedTerminalPaneID,
         ]
         .compactMap { $0 }
@@ -761,20 +769,6 @@ struct WorkbenchView: View {
         pendingWorkspaceRemoval = workspace
     }
 
-    private func archiveFallbackID(for session: WorkSession) -> WorkSessionID? {
-        guard model.snapshot.selectedWorkSessionID == session.id else { return nil }
-        let sessions = model.snapshot.activeWorkSessions.filter {
-            $0.workspaceID == session.workspaceID
-        }
-        guard sessions.count > 1,
-              let index = sessions.firstIndex(where: { $0.id == session.id })
-        else {
-            return nil
-        }
-        let fallbackIndex = index + 1 < sessions.count ? index + 1 : index - 1
-        return sessions[fallbackIndex].id
-    }
-
     private var archiveAlertPresented: Binding<Bool> {
         Binding(
             get: { pendingArchive != nil },
@@ -1011,10 +1005,18 @@ private struct WorkSessionTabBar: View {
 
     @ViewBuilder
     private func sessionMarker(_ session: WorkSession) -> some View {
-        if session.layout.panes.count == 1,
-           let pane = session.layout.panes.first
-        {
-            StateDot(state: pane.state)
+        if session.layout.panes.count == 1 {
+            if let agent = session.layout.panes.first?.agentBinding?.agent {
+                AgentTypeLabel(agent: agent)
+            } else {
+                Image(systemName: "terminal")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(
+                        width: WorkbenchLayout.agentIconFrameSize,
+                        height: WorkbenchLayout.agentIconFrameSize
+                    )
+            }
         } else {
             Image(systemName: "rectangle.split.2x1")
                 .font(.system(size: 11, weight: .medium))
@@ -1069,6 +1071,7 @@ private struct PaneLayoutView: View {
         case .pane(let pane):
             TerminalPaneView(
                 pane: pane,
+                workSessionID: workSessionID,
                 canClose: paneOrder.count > 1,
                 model: model
             )
@@ -1630,6 +1633,7 @@ final class NativeSplitHostingView: NSHostingView<AnyView> {
 
 private struct TerminalPaneView: View {
     let pane: TerminalPane
+    let workSessionID: WorkSessionID
     let canClose: Bool
     @ObservedObject var model: BreathApplicationModel
     @Environment(\.controlActiveState) private var controlActiveState
@@ -1708,6 +1712,7 @@ private struct TerminalPaneView: View {
                     hasInputFocus = isFocused
                     model.updateTerminalInputFocus(
                         paneID: pane.id,
+                        workSessionID: workSessionID,
                         isFocused: isFocused
                     )
                 },
