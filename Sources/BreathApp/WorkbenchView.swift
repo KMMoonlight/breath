@@ -935,6 +935,7 @@ private struct WorkSessionTabBar: View {
     let onCreate: () -> Void
     let onArchive: (WorkSession) -> Void
     @Environment(\.applicationLanguage) private var applicationLanguage
+    @Environment(\.colorScheme) private var colorScheme
     @State private var hoveredSessionID: WorkSessionID?
 
     var body: some View {
@@ -999,6 +1000,7 @@ private struct WorkSessionTabBar: View {
                 HStack(spacing: 7) {
                     sessionMarker(session)
                     Text(presentation.title)
+                        .fontWeight(isSelected ? .semibold : .regular)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer(minLength: 0)
@@ -1012,12 +1014,18 @@ private struct WorkSessionTabBar: View {
                                 )
                             )
                             .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(
+                                isSelected ? Color.accentColor : Color.secondary
+                            )
                             .padding(.horizontal, 5)
                             .padding(.vertical, 2)
                             .background {
                                 RoundedRectangle(cornerRadius: 4)
-                                    .fill(Color.primary.opacity(0.08))
+                                    .fill(
+                                        isSelected
+                                            ? Color.accentColor.opacity(0.2)
+                                            : Color.primary.opacity(0.08)
+                                    )
                             }
                     }
                 }
@@ -1057,9 +1065,22 @@ private struct WorkSessionTabBar: View {
                     topLeadingRadius: WorkbenchLayout.sessionTabCornerRadius,
                     topTrailingRadius: WorkbenchLayout.sessionTabCornerRadius
                 )
-                .fill(.bar)
+                .fill(
+                    Color.accentColor.opacity(
+                        colorScheme == .dark ? 0.18 : 0.1
+                    )
+                )
             } else if hoveredSessionID == session.id {
                 Color.primary.opacity(0.06)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if isSelected {
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(
+                        height: WorkbenchLayout.sessionTabSelectionIndicatorHeight
+                    )
             }
         }
         .overlay(alignment: .trailing) {
@@ -2026,6 +2047,7 @@ enum WorkbenchLayout {
     static let sessionTabWidth: CGFloat = 180
     static let sessionTabActionSize: CGFloat = 28
     static let sessionTabSeparatorWidth: CGFloat = 1
+    static let sessionTabSelectionIndicatorHeight: CGFloat = 2
     static let sessionTabCornerRadius: CGFloat = 6
     static let bottomBarHeight: CGFloat = 32
     static let agentIconFrameSize: CGFloat = 16

@@ -47,6 +47,34 @@ struct WindowLayoutSourceTests {
         )
     }
 
+    @Test("the selected Work Session Tab has a persistent accent indicator")
+    func selectedWorkSessionTabUsesAccentIndicator() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/WorkbenchView.swift"
+            ),
+            encoding: .utf8
+        )
+        let tabBarStart = try #require(
+            source.range(of: "private struct WorkSessionTabBar: View")
+        )
+        let layoutStart = try #require(
+            source.range(
+                of: "private struct WorkSessionTerminalLayoutView",
+                range: tabBarStart.upperBound..<source.endIndex
+            )
+        )
+        let tabBarSource = source[tabBarStart.lowerBound..<layoutStart.lowerBound]
+
+        #expect(tabBarSource.contains("Color.accentColor.opacity"))
+        #expect(tabBarSource.contains(".overlay(alignment: .bottom)"))
+        #expect(tabBarSource.contains("WorkbenchLayout.sessionTabSelectionIndicatorHeight"))
+    }
+
     @Test("expanding a split session does not animate pane rows")
     func splitSessionDisclosureDoesNotAnimatePaneRows() throws {
         let root = URL(
@@ -1516,6 +1544,35 @@ struct WindowLayoutSourceTests {
         #expect(branchList.contains("selectedBranchReferenceID = reference.id"))
         #expect(branchList.contains("if isBranchSelected(reference)"))
         #expect(branchList.contains(".selectedContentBackgroundColor"))
+    }
+
+    @Test("Git branches separate local refs from collapsed remote refs")
+    func branchRowsSeparateLocalAndRemoteReferences() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/GitWorkbenchView.swift"),
+            encoding: .utf8
+        )
+        let branchListStart = try #require(
+            source.range(of: "private var branchList: some View")
+        )
+        let changesHeaderStart = try #require(
+            source.range(
+                of: "private var changesHeader: some View",
+                range: branchListStart.upperBound..<source.endIndex
+            )
+        )
+        let branchList = source[
+            branchListStart.lowerBound..<changesHeaderStart.lowerBound
+        ]
+
+        #expect(source.contains("@State private var showingRemoteBranches = false"))
+        #expect(branchList.contains("localizer.string(\"本地分支\")"))
+        #expect(branchList.contains("localizer.string(\"远程分支\")"))
+        #expect(branchList.contains("if remoteBranchesAreVisible"))
     }
 
     @Test("Git toolbar keeps repository and remote actions task-scoped")

@@ -32,6 +32,8 @@
 "新建工作会话（⌘T）" = "New Work Session (⌘T)";
 "导航" = "Navigate";
 "切换会话 Tab" = "Select Work Session Tab";
+"本地分支" = "Local Branches";
+"远程分支" = "Remote Branches";
 "切换到会话 Tab %d" = "Select Work Session Tab %d";
 "上一个分屏" = "Previous Pane";
 "下一个分屏" = "Next Pane";

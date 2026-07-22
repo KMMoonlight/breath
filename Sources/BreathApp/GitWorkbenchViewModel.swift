@@ -1259,25 +1259,19 @@ final class GitWorkspaceViewModel: ObservableObject {
         _ reference: GitReference,
         authentication: GitAuthentication? = nil
     ) {
-        guard reference.kind == .remoteBranch,
-              !reference.shortName.hasSuffix("/HEAD"),
-              let separator = reference.shortName.firstIndex(of: "/"),
+        guard let remoteBranch = remoteBranchIdentity(for: reference),
               let root = selectedRoot
         else {
             return
         }
-        let remote = String(reference.shortName[..<separator])
-        let branch = String(
-            reference.shortName[reference.shortName.index(after: separator)...]
-        )
         runMutation(
             title: "Delete Remote Branch \(reference.shortName)",
             rootURL: root.rootURL
         ) {
             try await self.service.deleteRemoteBranch(
                 rootURL: root.rootURL,
-                remote: remote,
-                branch: branch,
+                remote: remoteBranch.remoteName,
+                branch: remoteBranch.branchName,
                 authentication: authentication
             )
         }
@@ -1297,17 +1291,19 @@ final class GitWorkspaceViewModel: ObservableObject {
     func checkout(reference: GitReference) {
         guard ensureNoSequencedOperation() else { return }
         if reference.kind == .remoteBranch {
-            guard let root = selectedRoot else { return }
-            let localName = reference.shortName.split(separator: "/").last
-                .map(String.init) ?? reference.shortName
+            guard let remoteBranch = remoteBranchIdentity(for: reference),
+                  let root = selectedRoot
+            else {
+                return
+            }
             withSafetySnapshot(
                 action: "checkout \(reference.shortName)",
                 root: root
             ) {
                 try await self.service.checkoutRemote(
                     rootURL: root.rootURL,
-                    remoteBranch: reference.shortName,
-                    localName: localName
+                    remoteBranch: remoteBranch.fullName,
+                    localName: remoteBranch.checkoutLocalBranchName
                 )
             }
         } else {
@@ -1336,17 +1332,19 @@ final class GitWorkspaceViewModel: ObservableObject {
     ) {
         guard ensureNoSequencedOperation() else { return }
         if reference.kind == .remoteBranch {
-            guard let root = selectedRoot else { return }
-            let localName = reference.shortName.split(separator: "/").last
-                .map(String.init) ?? reference.shortName
+            guard let remoteBranch = remoteBranchIdentity(for: reference),
+                  let root = selectedRoot
+            else {
+                return
+            }
             withSafetySnapshot(
                 action: "checkout and update \(reference.shortName)",
                 root: root
             ) {
                 try await self.service.checkoutRemote(
                     rootURL: root.rootURL,
-                    remoteBranch: reference.shortName,
-                    localName: localName
+                    remoteBranch: remoteBranch.fullName,
+                    localName: remoteBranch.checkoutLocalBranchName
                 )
                 _ = try await self.service.pull(
                     rootURL: root.rootURL,
@@ -1375,6 +1373,14 @@ final class GitWorkspaceViewModel: ObservableObject {
                 reference: reference
             )
         }
+    }
+
+    private func remoteBranchIdentity(
+        for reference: GitReference
+    ) -> GitRemoteBranchIdentity? {
+        reference.remoteBranchIdentity(
+            configuredRemoteNames: remotes.map(\.name)
+        )
     }
 
     func synchronizeMerge(reference: String) {

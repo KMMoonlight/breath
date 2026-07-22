@@ -142,6 +142,7 @@ struct GitWorkbenchView: View {
     @State private var showingFileHistory = false
     @State private var showingBlame = false
     @State private var showingInteractiveRebase = false
+    @State private var showingRemoteBranches = false
     @State private var branchName = ""
     @State private var remoteName = "origin"
     @State private var includeTags = false
@@ -506,7 +507,11 @@ struct GitWorkbenchView: View {
     }
 
     private var branchList: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let localBranches = visibleBranches(of: .localBranch)
+        let remoteBranches = visibleBranches(of: .remoteBranch)
+        let remoteBranchesAreVisible = showingRemoteBranches
+            || !(model.metadata.branchFilter ?? "").isEmpty
+        return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Label(localizer.string("分支"), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                     .font(.subheadline.weight(.semibold))
@@ -545,163 +550,220 @@ struct GitWorkbenchView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
-                    ForEach(
-                        model.references.filter {
-                            ($0.kind == .localBranch || $0.kind == .remoteBranch)
-                                && (
-                                    (model.metadata.branchFilter ?? "").isEmpty
-                                        || $0.shortName.localizedCaseInsensitiveContains(
-                                            model.metadata.branchFilter ?? ""
-                                        )
-                                )
-                        }.sorted {
-                            let favorites = model.metadata.favoriteReferenceNames ?? []
-                            let leftFavorite = favorites.contains($0.fullName)
-                            let rightFavorite = favorites.contains($1.fullName)
-                            if leftFavorite != rightFavorite {
-                                return leftFavorite
-                            }
-                            return $0.shortName.localizedStandardCompare(
-                                $1.shortName
-                            ) == .orderedAscending
-                        }
-                    ) { reference in
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .opacity(0)
+                            .frame(width: 10)
+                        Text(localizer.string("本地分支"))
+                        Spacer(minLength: 4)
+                        Text("\(localBranches.count)")
+                            .monospacedDigit()
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 9)
+                    .padding(.top, 3)
+
+                    ForEach(localBranches) { reference in
+                        branchRow(reference)
+                    }
+
+                    if !remoteBranches.isEmpty {
                         Button {
-                            selectedBranchReferenceID = reference.id
-                            if !reference.isCurrent {
-                                model.checkout(reference: reference)
-                            }
+                            showingRemoteBranches.toggle()
                         } label: {
                             HStack(spacing: 6) {
-                                Image(systemName: reference.isCurrent ? "checkmark" : "arrow.triangle.branch")
-                                    .frame(width: 14)
-                                    .foregroundStyle(reference.isCurrent ? .green : .secondary)
-                                VStack(alignment: .leading, spacing: 0) {
-                                    Text(reference.shortName)
-                                        .lineLimit(1)
-                                    if reference.shortName.contains("/") {
-                                        Text(
-                                            reference.shortName.split(
-                                                separator: "/"
-                                            ).dropLast().joined(separator: "/")
-                                        )
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                    }
-                                }
-                                Spacer(minLength: 4)
                                 Image(
-                                    systemName: (
-                                        model.metadata.favoriteReferenceNames ?? []
-                                    ).contains(reference.fullName)
-                                        ? "star.fill"
-                                        : "star"
+                                    systemName: remoteBranchesAreVisible
+                                        ? "chevron.down"
+                                        : "chevron.right"
                                 )
-                                .foregroundStyle(.secondary)
-                                if let track = reference.upstreamTrack, !track.isEmpty {
-                                    Text(track)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
+                                    .frame(width: 10)
+                                Text(localizer.string("远程分支"))
+                                Spacer(minLength: 4)
+                                Text("\(remoteBranches.count)")
+                                    .monospacedDigit()
                             }
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
                             .padding(.horizontal, 9)
-                            .padding(.vertical, 3)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 5)
                             .contentShape(Rectangle())
-                            .background {
-                                if isBranchSelected(reference) {
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(
-                                            Color(
-                                                nsColor: .selectedContentBackgroundColor
-                                            )
-                                            .opacity(colorScheme == .dark ? 0.42 : 0.24)
-                                        )
-                                }
-                            }
                         }
                         .buttonStyle(.plain)
-                        .contextMenu {
-                            Button(localizer.string("收藏分支")) {
-                                model.toggleFavoriteReference(reference)
-                            }
-                            Button(localizer.string("从此分支创建…")) {
-                                branchName = ""
-                                commitSearch = reference.shortName
-                                showingBranchCreator = true
-                            }
-                            Button(localizer.string("Checkout")) {
-                                model.checkout(reference: reference)
-                            }
-                            Button(localizer.string("Checkout and Update")) {
-                                model.checkoutAndUpdate(reference: reference)
-                            }
-                            Button(localizer.string("Merge 到当前分支")) {
-                                confirmBranchOperation(
-                                    kind: "Merge",
-                                    reference: reference.shortName
-                                )
-                            }
-                            Button(localizer.string("Rebase 当前分支到这里")) {
-                                confirmBranchOperation(
-                                    kind: "Rebase",
-                                    reference: reference.shortName
-                                )
-                            }
-                            if reference.kind == .localBranch {
-                                Divider()
-                                Button(localizer.string("重命名…")) {
-                                    promptRenameBranch(reference.shortName)
-                                }
-                                Menu(localizer.string("设置 Upstream")) {
-                                    ForEach(
-                                        model.references.filter {
-                                            $0.kind == .remoteBranch
-                                        }
-                                    ) { remote in
-                                        Button(remote.shortName) {
-                                            model.setUpstream(
-                                                branch: reference.shortName,
-                                                upstream: remote.shortName
-                                            )
-                                        }
-                                    }
-                                    Button(localizer.string("取消 Upstream")) {
-                                        model.setUpstream(
-                                            branch: reference.shortName,
-                                            upstream: nil
-                                        )
-                                    }
-                                }
-                                Button(
-                                    localizer.string("删除分支"),
-                                    role: .destructive
-                                ) {
-                                    confirmDeleteBranch(reference.shortName)
-                                }
-                            } else if !reference.shortName.hasSuffix("/HEAD") {
-                                Divider()
-                                Button(
-                                    localizer.string("删除远程分支"),
-                                    role: .destructive
-                                ) {
-                                    confirmDeleteRemoteBranch(reference)
-                                }
+
+                        if remoteBranchesAreVisible {
+                            ForEach(remoteBranches) { reference in
+                                branchRow(reference)
+                                    .padding(.leading, 10)
                             }
                         }
-                        .accessibilityLabel(
-                            reference.isCurrent
-                                ? localizer.format("当前分支 %@", reference.shortName)
-                                : reference.shortName
-                        )
-                        .accessibilityAddTraits(
-                            isBranchSelected(reference) ? .isSelected : []
-                        )
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: 150)
+        }
+    }
+
+    private func visibleBranches(of kind: GitReferenceKind) -> [GitReference] {
+        let filter = model.metadata.branchFilter ?? ""
+        let favorites = model.metadata.favoriteReferenceNames ?? []
+        return model.references.filter { reference in
+            reference.kind == kind
+                && (
+                    filter.isEmpty
+                        || reference.shortName.localizedCaseInsensitiveContains(filter)
+                )
+        }.sorted {
+            let leftFavorite = favorites.contains($0.fullName)
+            let rightFavorite = favorites.contains($1.fullName)
+            if leftFavorite != rightFavorite {
+                return leftFavorite
+            }
+            return $0.shortName.localizedStandardCompare($1.shortName)
+                == .orderedAscending
+        }
+    }
+
+    private func branchRow(_ reference: GitReference) -> some View {
+        Button {
+            selectedBranchReferenceID = reference.id
+            if !reference.isCurrent {
+                model.checkout(reference: reference)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(
+                    systemName: reference.isCurrent
+                        ? "checkmark"
+                        : "arrow.triangle.branch"
+                )
+                    .frame(width: 14)
+                    .foregroundStyle(reference.isCurrent ? .green : .secondary)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(reference.shortName)
+                        .lineLimit(1)
+                    if reference.shortName.contains("/") {
+                        Text(
+                            reference.shortName.split(
+                                separator: "/"
+                            ).dropLast().joined(separator: "/")
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 4)
+                Image(
+                    systemName: (
+                        model.metadata.favoriteReferenceNames ?? []
+                    ).contains(reference.fullName)
+                        ? "star.fill"
+                        : "star"
+                )
+                .foregroundStyle(.secondary)
+                if let track = reference.upstreamTrack, !track.isEmpty {
+                    Text(track)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .background {
+                if isBranchSelected(reference) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(
+                            Color(nsColor: .selectedContentBackgroundColor)
+                                .opacity(colorScheme == .dark ? 0.42 : 0.24)
+                        )
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            branchContextMenu(reference)
+        }
+        .accessibilityLabel(
+            reference.isCurrent
+                ? localizer.format("当前分支 %@", reference.shortName)
+                : reference.shortName
+        )
+        .accessibilityAddTraits(
+            isBranchSelected(reference) ? .isSelected : []
+        )
+    }
+
+    @ViewBuilder
+    private func branchContextMenu(_ reference: GitReference) -> some View {
+        Button(localizer.string("收藏分支")) {
+            model.toggleFavoriteReference(reference)
+        }
+        Button(localizer.string("从此分支创建…")) {
+            branchName = ""
+            commitSearch = reference.shortName
+            showingBranchCreator = true
+        }
+        Button(localizer.string("Checkout")) {
+            model.checkout(reference: reference)
+        }
+        Button(localizer.string("Checkout and Update")) {
+            model.checkoutAndUpdate(reference: reference)
+        }
+        Button(localizer.string("Merge 到当前分支")) {
+            confirmBranchOperation(
+                kind: "Merge",
+                reference: reference.shortName
+            )
+        }
+        Button(localizer.string("Rebase 当前分支到这里")) {
+            confirmBranchOperation(
+                kind: "Rebase",
+                reference: reference.shortName
+            )
+        }
+        if reference.kind == .localBranch {
+            Divider()
+            Button(localizer.string("重命名…")) {
+                promptRenameBranch(reference.shortName)
+            }
+            Menu(localizer.string("设置 Upstream")) {
+                ForEach(
+                    model.references.filter {
+                        $0.kind == .remoteBranch
+                    }
+                ) { remote in
+                    Button(remote.shortName) {
+                        model.setUpstream(
+                            branch: reference.shortName,
+                            upstream: remote.shortName
+                        )
+                    }
+                }
+                Button(localizer.string("取消 Upstream")) {
+                    model.setUpstream(
+                        branch: reference.shortName,
+                        upstream: nil
+                    )
+                }
+            }
+            Button(
+                localizer.string("删除分支"),
+                role: .destructive
+            ) {
+                confirmDeleteBranch(reference.shortName)
+            }
+        } else {
+            Divider()
+            Button(
+                localizer.string("删除远程分支"),
+                role: .destructive
+            ) {
+                confirmDeleteRemoteBranch(reference)
+            }
         }
     }
 

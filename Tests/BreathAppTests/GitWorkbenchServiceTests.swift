@@ -39,6 +39,86 @@ struct GitWorkbenchServiceTests {
         )
     }
 
+    @Test("branch references omit the remote default-branch alias")
+    func omitsRemoteHEADAlias() async throws {
+        let repository = try GitWorkbenchTestRepository()
+        try repository.write("tracked.txt", "initial\n")
+        try repository.run(["add", "tracked.txt"])
+        try repository.run(["commit", "-m", "initial"])
+        try repository.run(["remote", "add", "origin", repository.url.path])
+        try repository.run(["fetch", "origin"])
+        try repository.run(["remote", "set-head", "origin", "--auto"])
+        try repository.run(["remote", "add", "archive", repository.url.path])
+        try repository.run(["remote", "add", "team", repository.url.path])
+        try repository.run([
+            "remote", "add", "team/origin", repository.url.path,
+        ])
+        try repository.run([
+            "update-ref",
+            "refs/remotes/archive/HEAD",
+            "HEAD",
+        ])
+        try repository.run([
+            "update-ref",
+            "refs/remotes/team/origin/feature/deep",
+            "HEAD",
+        ])
+        try repository.run([
+            "update-ref",
+            "refs/remotes/team/origin/HEAD",
+            "HEAD",
+        ])
+        let service = GitWorkbenchService(
+            workspaceURL: repository.url,
+            gitExecutableURL: URL(fileURLWithPath: "/usr/bin/git")
+        )
+
+        let references = try await service.references(rootURL: repository.url)
+        let remoteNames = try await service.remotes(rootURL: repository.url)
+            .map(\.name)
+
+        #expect(references.contains { $0.fullName == "refs/heads/main" })
+        #expect(references.contains { $0.fullName == "refs/remotes/origin/main" })
+        #expect(references.contains { $0.fullName == "refs/remotes/archive/HEAD" })
+        #expect(
+            references.contains {
+                $0.fullName == "refs/remotes/team/origin/feature/deep"
+            }
+        )
+        #expect(
+            references.contains {
+                $0.fullName == "refs/remotes/team/origin/HEAD"
+            }
+        )
+        #expect(!references.contains { $0.fullName == "refs/remotes/origin/HEAD" })
+        #expect(
+            references.first { $0.fullName == "refs/remotes/origin/main" }?
+                .remoteBranchIdentity(configuredRemoteNames: remoteNames)?
+                .checkoutLocalBranchName == "main"
+        )
+        #expect(
+            references.first { $0.fullName == "refs/remotes/archive/HEAD" }?
+                .remoteBranchIdentity(configuredRemoteNames: remoteNames)?
+                .checkoutLocalBranchName == "archive-HEAD"
+        )
+        #expect(
+            references.first {
+                $0.fullName == "refs/remotes/team/origin/feature/deep"
+            }?.remoteBranchIdentity(configuredRemoteNames: remoteNames)
+                == GitRemoteBranchIdentity(
+                    fullName: "refs/remotes/team/origin/feature/deep",
+                    remoteName: "team/origin",
+                    branchName: "feature/deep"
+                )
+        )
+        #expect(
+            references.first {
+                $0.fullName == "refs/remotes/team/origin/HEAD"
+            }?.remoteBranchIdentity(configuredRemoteNames: remoteNames)?
+                .checkoutLocalBranchName == "team-origin-HEAD"
+        )
+    }
+
     @Test("opening a directory without Git returns an actionable empty workspace")
     func opensEmptyWorkspace() async throws {
         let directory = try TemporaryDirectory()

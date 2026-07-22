@@ -6,8 +6,47 @@ enum GitReferenceKind: String, Equatable, Codable, Sendable {
     case tag
 }
 
+struct GitRemoteBranchIdentity: Equatable, Sendable {
+    let fullName: String
+    let remoteName: String
+    let branchName: String
+
+    var checkoutLocalBranchName: String {
+        let leafName = branchName.split(separator: "/").last
+            .map(String.init) ?? branchName
+        let localRemoteName = remoteName.replacingOccurrences(
+            of: "/",
+            with: "-"
+        )
+        return leafName == "HEAD" ? "\(localRemoteName)-HEAD" : leafName
+    }
+}
+
 struct GitReference: Equatable, Identifiable, Sendable {
     var id: String { fullName }
+
+    func remoteBranchIdentity(
+        configuredRemoteNames: [String]
+    ) -> GitRemoteBranchIdentity? {
+        let prefix = "refs/remotes/"
+        guard kind == .remoteBranch, fullName.hasPrefix(prefix) else {
+            return nil
+        }
+        let scopedName = String(fullName.dropFirst(prefix.count))
+        guard let remoteName = configuredRemoteNames
+            .filter({ !$0.isEmpty && scopedName.hasPrefix("\($0)/") })
+            .max(by: { $0.count < $1.count })
+        else {
+            return nil
+        }
+        let branchName = String(scopedName.dropFirst(remoteName.count + 1))
+        guard !branchName.isEmpty else { return nil }
+        return GitRemoteBranchIdentity(
+            fullName: fullName,
+            remoteName: remoteName,
+            branchName: branchName
+        )
+    }
 
     let fullName: String
     let shortName: String
@@ -227,7 +266,7 @@ extension GitWorkbenchService {
             arguments: [
                 "for-each-ref",
                 "--sort=refname",
-                "--format=%(refname)%00%(refname:short)%00%(objectname)%00%(upstream:short)%00%(upstream:track)%00%(HEAD)%00%(subject)",
+                "--format=%(refname)%00%(refname:short)%00%(objectname)%00%(upstream:short)%00%(upstream:track)%00%(HEAD)%00%(subject)%00%(symref)",
                 "refs/heads",
                 "refs/remotes",
                 "refs/tags",
@@ -240,7 +279,7 @@ extension GitWorkbenchService {
                     separator: "\0",
                     omittingEmptySubsequences: false
                 ).map(String.init)
-                guard fields.count >= 7 else { return nil }
+                guard fields.count >= 8 else { return nil }
                 let kind: GitReferenceKind
                 if fields[0].hasPrefix("refs/heads/") {
                     kind = .localBranch
@@ -248,6 +287,9 @@ extension GitWorkbenchService {
                     kind = .remoteBranch
                 } else {
                     kind = .tag
+                }
+                guard kind != .remoteBranch || fields[7].isEmpty else {
+                    return nil
                 }
                 return GitReference(
                     fullName: fields[0],
