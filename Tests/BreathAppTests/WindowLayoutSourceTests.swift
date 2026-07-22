@@ -14,6 +14,39 @@ private final class TestSplitTrackingAncestor:
 
 @Suite("Main window layout source guard")
 struct WindowLayoutSourceTests {
+    @Test("Work Session Tabs use vertical separators instead of line-through dividers")
+    func workSessionTabsUseVerticalSeparators() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/WorkbenchView.swift"
+            ),
+            encoding: .utf8
+        )
+        let tabBarStart = try #require(
+            source.range(of: "private struct WorkSessionTabBar: View")
+        )
+        let layoutStart = try #require(
+            source.range(
+                of: "private struct WorkSessionTerminalLayoutView",
+                range: tabBarStart.upperBound..<source.endIndex
+            )
+        )
+        let tabBarSource = source[tabBarStart.lowerBound..<layoutStart.lowerBound]
+
+        #expect(
+            tabBarSource.contains(
+                ".frame(width: WorkbenchLayout.sessionTabSeparatorWidth)"
+            )
+        )
+        #expect(
+            !tabBarSource.contains("Divider()\n                    .padding(.vertical, 7)")
+        )
+    }
+
     @Test("terminal focus centrally arbitrates Breath shortcuts")
     func terminalFocusCentrallyArbitratesBreathShortcuts() throws {
         let root = URL(

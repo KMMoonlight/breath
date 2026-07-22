@@ -877,6 +877,23 @@ private struct StateDot: View {
     }
 }
 
+struct WorkSessionTabPresentation: Equatable {
+    let title: String
+
+    init(session: WorkSession, placeholderTitle: String) {
+        let hasTimedPlaceholder = session.titleSource == nil
+            && session.title.hasPrefix("新会话 · ")
+        title = hasTimedPlaceholder ? placeholderTitle : session.title
+    }
+
+    func shortcutLabel(at index: Int, isSelected: Bool) -> String? {
+        guard isSelected, BreathShortcut.workSessionTabs.indices.contains(index) else {
+            return nil
+        }
+        return "⌘\(index + 1)"
+    }
+}
+
 private struct WorkSessionTabBar: View {
     let sessions: [WorkSession]
     let selectedSessionID: WorkSessionID
@@ -892,8 +909,11 @@ private struct WorkSessionTabBar: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 0) {
-                        ForEach(sessions) { session in
-                            sessionTab(session)
+                        ForEach(
+                            Array(sessions.enumerated()),
+                            id: \.element.id
+                        ) { index, session in
+                            sessionTab(session, at: index)
                                 .id(session.id)
                         }
                     }
@@ -931,19 +951,45 @@ private struct WorkSessionTabBar: View {
         }
     }
 
-    private func sessionTab(_ session: WorkSession) -> some View {
+    private func sessionTab(_ session: WorkSession, at index: Int) -> some View {
         let isSelected = session.id == selectedSessionID
         let showsArchive = isSelected || hoveredSessionID == session.id
+        let presentation = WorkSessionTabPresentation(
+            session: session,
+            placeholderTitle: localizer.string("新会话")
+        )
+        let shortcutLabel = presentation.shortcutLabel(
+            at: index,
+            isSelected: isSelected
+        )
         return HStack(spacing: 0) {
             Button {
                 onSelect(session.id)
             } label: {
                 HStack(spacing: 7) {
                     sessionMarker(session)
-                    Text(session.title)
+                    Text(presentation.title)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer(minLength: 0)
+                    if let shortcutLabel {
+                        Text(shortcutLabel)
+                            .font(
+                                .system(
+                                    size: 10,
+                                    weight: .semibold,
+                                    design: .rounded
+                                )
+                            )
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color.primary.opacity(0.08))
+                            }
+                    }
                 }
                 .contentShape(Rectangle())
             }
@@ -988,7 +1034,9 @@ private struct WorkSessionTabBar: View {
         }
         .overlay(alignment: .trailing) {
             if !isSelected {
-                Divider()
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(width: WorkbenchLayout.sessionTabSeparatorWidth)
                     .padding(.vertical, 7)
             }
         }
@@ -1945,6 +1993,7 @@ enum WorkbenchLayout {
     static let sessionTabBarHeight: CGFloat = 34
     static let sessionTabWidth: CGFloat = 180
     static let sessionTabActionSize: CGFloat = 28
+    static let sessionTabSeparatorWidth: CGFloat = 1
     static let sessionTabCornerRadius: CGFloat = 6
     static let bottomBarHeight: CGFloat = 32
     static let agentIconFrameSize: CGFloat = 16
