@@ -38,10 +38,25 @@ struct BreathShortcutDefinition {
     }
 }
 
+struct WorkSessionTabShortcut: Identifiable {
+    let selectionIndex: Int
+    let displayNumber: Int
+    let shortcut: BreathShortcutDefinition
+
+    var id: Int { selectionIndex }
+}
+
 enum BreathShortcutCatalog {
     static let newWorkSession = BreathShortcutDefinition("t", modifiers: [.command])
-    static let workSessionTabs = (1...9).map {
-        BreathShortcutDefinition(Character(String($0)), modifiers: [.command])
+    static let workSessionTabs = (1...9).map { number in
+        WorkSessionTabShortcut(
+            selectionIndex: number - 1,
+            displayNumber: number,
+            shortcut: BreathShortcutDefinition(
+                Character(String(number)),
+                modifiers: [.command]
+            )
+        )
     }
     static let previousPane = BreathShortcutDefinition("[", modifiers: [.command])
     static let nextPane = BreathShortcutDefinition("]", modifiers: [.command])
@@ -53,7 +68,7 @@ enum BreathShortcutCatalog {
     )
     static let closePane = BreathShortcutDefinition("w", modifiers: [.command])
 
-    static func matches(_ event: NSEvent) -> Bool {
+    static func matchesTerminalFirstShortcut(_ event: NSEvent) -> Bool {
         let definitions = [
             previousPane,
             nextPane,

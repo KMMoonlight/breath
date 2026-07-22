@@ -50,8 +50,8 @@ struct WorkSessionCommandTests {
             encoding: .utf8
         )
 
-        #expect(appSource.contains("ForEach(Array(1...9), id: \\.self)"))
-        #expect(appSource.contains("BreathShortcutCatalog.workSessionTabs[number - 1]"))
+        #expect(appSource.contains("ForEach(BreathShortcutCatalog.workSessionTabs)"))
+        #expect(appSource.contains("object: tab"))
         #expect(appSource.contains("name: .breathSelectWorkSessionTab"))
         #expect(!appSource.contains("BreathShortcutCatalog.nextWorkSessionTab"))
     }

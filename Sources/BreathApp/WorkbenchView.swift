@@ -79,8 +79,8 @@ struct WorkbenchView: View {
         .onReceive(
             NotificationCenter.default.publisher(for: .breathSelectWorkSessionTab)
         ) { notification in
-            guard let index = notification.object as? Int else { return }
-            selectWorkSessionTab(at: index)
+            guard let tab = notification.object as? WorkSessionTabShortcut else { return }
+            selectWorkSessionTab(at: tab.selectionIndex)
         }
         .onReceive(NotificationCenter.default.publisher(for: .breathSelectPreviousPane)) { _ in
             focusAdjacentPane(previous: true)
@@ -1721,7 +1721,7 @@ private struct TerminalPaneView: View {
                     )
                 },
                 isBreathShortcut: { event in
-                    BreathShortcutCatalog.matches(event)
+                    BreathShortcutCatalog.matchesTerminalFirstShortcut(event)
                         || GitShortcutResolver.commandID(
                             matching: event,
                             preferences: GitPreferencesStore.shared.preferences,

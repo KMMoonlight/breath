@@ -16,9 +16,11 @@ struct TerminalKeyboardShortcutTests {
         let previousPane = try commandKeyEvent("[")
         let nextPane = try commandKeyEvent("]")
 
-        #expect(BreathShortcutCatalog.workSessionTabs[0].matches(firstTab))
-        #expect(BreathShortcutCatalog.workSessionTabs[8].matches(ninthTab))
-        #expect(!BreathShortcutCatalog.matches(formerNextTab))
+        #expect(BreathShortcutCatalog.workSessionTabs[0].shortcut.matches(firstTab))
+        #expect(BreathShortcutCatalog.workSessionTabs[8].shortcut.matches(ninthTab))
+        #expect(
+            !BreathShortcutCatalog.matchesTerminalFirstShortcut(formerNextTab)
+        )
         #expect(BreathShortcutCatalog.newWorkSession.matches(newSession))
         #expect(BreathShortcutCatalog.previousPane.matches(previousPane))
         #expect(BreathShortcutCatalog.nextPane.matches(nextPane))
@@ -117,7 +119,7 @@ struct TerminalKeyboardShortcutTests {
         let forwarded = TerminalShortcutArbitrator.eventToForward(
             event,
             terminalHasInputFocus: true,
-            matchesBreathShortcut: BreathShortcutCatalog.matches,
+            matchesBreathShortcut: BreathShortcutCatalog.matchesTerminalFirstShortcut,
             terminalHandler: { _ in
                 terminalReceivedEvent = true
                 return true
