@@ -28,7 +28,11 @@
 "只会删除 Breath 元数据，不会删除项目文件或 Agent CLI 自己保存的会话。" = "This deletes only Breath metadata. Project files and conversations stored by Agent CLIs are not deleted.";
 "打开主窗口" = "Open Main Window";
 "新建工作会话" = "New Work Session";
-"切换到第 1–9 个终端" = "Switch to Terminal 1–9";
+"新建工作会话（⌘T）" = "New Work Session (⌘T)";
+"导航" = "Navigate";
+"下一个会话 Tab" = "Next Work Session Tab";
+"上一个分屏" = "Previous Pane";
+"下一个分屏" = "Next Pane";
 "横向分屏" = "Split Horizontally";
 "纵向分屏" = "Split Vertically";
 "关闭当前分屏终端" = "Close Current Terminal Pane";
@@ -89,7 +93,6 @@
 "纵向分屏（⌘⇧D）" = "Split Vertically (⌘⇧D)";
 "关闭窗格（⌘W）" = "Close Pane (⌘W)";
 "终端" = "Terminal";
-"切换到终端 %d（⌘%d）" = "Switch to Terminal %d (⌘%d)";
 "终端正在启动…" = "Terminal is starting…";
 "使用 %@ 打开工作区" = "Open Workspace in %@";
 "选择编辑器" = "Choose Editor";

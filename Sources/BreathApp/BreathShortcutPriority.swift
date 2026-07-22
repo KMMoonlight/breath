@@ -39,8 +39,10 @@ struct BreathShortcutDefinition {
 }
 
 enum BreathShortcutCatalog {
-    static let openMainWindow = BreathShortcutDefinition("n", modifiers: [.command])
     static let newWorkSession = BreathShortcutDefinition("t", modifiers: [.command])
+    static let nextWorkSessionTab = BreathShortcutDefinition("n", modifiers: [.command])
+    static let previousPane = BreathShortcutDefinition("[", modifiers: [.command])
+    static let nextPane = BreathShortcutDefinition("]", modifiers: [.command])
     static let openSettings = BreathShortcutDefinition(",", modifiers: [.command])
     static let splitHorizontally = BreathShortcutDefinition("d", modifiers: [.command])
     static let splitVertically = BreathShortcutDefinition(
@@ -49,22 +51,17 @@ enum BreathShortcutCatalog {
     )
     static let closePane = BreathShortcutDefinition("w", modifiers: [.command])
 
-    static func selectPane(_ number: Int) -> BreathShortcutDefinition {
-        BreathShortcutDefinition(
-            Character(String(number)),
-            modifiers: [.command]
-        )
-    }
-
     static func matches(_ event: NSEvent) -> Bool {
         let definitions = [
-            openMainWindow,
             newWorkSession,
+            nextWorkSessionTab,
+            previousPane,
+            nextPane,
             openSettings,
             splitHorizontally,
             splitVertically,
             closePane,
-        ] + (1...9).map(selectPane)
+        ]
         return definitions.contains { $0.matches(event) }
     }
 }

@@ -152,6 +152,32 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
 
+        let selectedTabsSnapshot = makeSnapshotWithSelectedWorkSessionTabs()
+        try fixture.use(selectedTabsSnapshot)
+        visibleText = try fixture.renderedText(WorkbenchView(model: fixture.model))
+        let tabAccessibilityText = fixture.accessibilityText()
+        require(
+            visibleText.contains("实现会话") && visibleText.contains("审查会话"),
+            "same-workspace WorkSessions did not render as visible tabs: \(visibleText)",
+            into: &failures
+        )
+        require(
+            tabAccessibilityText.contains("实现会话")
+                && tabAccessibilityText.contains("审查会话"),
+            "WorkSession tabs are missing from the accessibility tree: \(tabAccessibilityText)",
+            into: &failures
+        )
+        require(
+            fixture.model.snapshot == selectedTabsSnapshot,
+            "rendering WorkSession tabs changed the snapshot",
+            into: &failures
+        )
+        require(
+            fixture.terminalLaunchCount == 0,
+            "rendering WorkSession tabs launched a terminal",
+            into: &failures
+        )
+
         let workspaceID = WorkspaceID(rawValue: UUID())
         let noWorkSessionsSnapshot = WorkbenchSnapshot(
             workspaces: [Workspace(id: workspaceID, path: "/tmp", displayName: "空项目")],
@@ -219,6 +245,29 @@ enum AppShellEmptyStateVerifier {
                 ),
             ],
             selectedWorkSessionID: nil
+        )
+    }
+
+    private static func makeSnapshotWithSelectedWorkSessionTabs() -> WorkbenchSnapshot {
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let selectedSessionID = WorkSessionID(rawValue: UUID())
+        return WorkbenchSnapshot(
+            workspaces: [Workspace(id: workspaceID, path: "/tmp", displayName: "示例项目")],
+            workSessions: [
+                WorkSession(
+                    id: selectedSessionID,
+                    workspaceID: workspaceID,
+                    title: "实现会话",
+                    pane: TerminalPane(id: TerminalPaneID(rawValue: UUID()))
+                ),
+                WorkSession(
+                    id: WorkSessionID(rawValue: UUID()),
+                    workspaceID: workspaceID,
+                    title: "审查会话",
+                    pane: TerminalPane(id: TerminalPaneID(rawValue: UUID()))
+                ),
+            ],
+            selectedWorkSessionID: selectedSessionID
         )
     }
 }

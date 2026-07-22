@@ -189,6 +189,28 @@ public indirect enum PaneLayout: Equatable, Codable, Sendable {
         }
     }
 
+    public func previousPaneID(from paneID: TerminalPaneID) -> TerminalPaneID? {
+        adjacentPaneID(from: paneID, offset: -1)
+    }
+
+    public func nextPaneID(from paneID: TerminalPaneID) -> TerminalPaneID? {
+        adjacentPaneID(from: paneID, offset: 1)
+    }
+
+    private func adjacentPaneID(
+        from paneID: TerminalPaneID,
+        offset: Int
+    ) -> TerminalPaneID? {
+        let paneIDs = paneIDs
+        guard paneIDs.count > 1,
+              let currentIndex = paneIDs.firstIndex(of: paneID)
+        else {
+            return nil
+        }
+        let adjacentIndex = (currentIndex + offset + paneIDs.count) % paneIDs.count
+        return paneIDs[adjacentIndex]
+    }
+
     fileprivate func splitting(
         paneID: TerminalPaneID,
         orientation: SplitOrientation,
@@ -444,6 +466,21 @@ public struct WorkbenchSnapshot: Equatable, Codable, Sendable {
 
     public var archivedWorkSessions: [WorkSession] {
         workSessions.filter { $0.archivedAt != nil }
+    }
+
+    public func nextActiveWorkSessionID(
+        in workspaceID: WorkspaceID
+    ) -> WorkSessionID? {
+        let sessionIDs = activeWorkSessions
+            .filter { $0.workspaceID == workspaceID }
+            .map(\.id)
+        guard sessionIDs.count > 1 else { return nil }
+        guard let selectedWorkSessionID,
+              let selectedIndex = sessionIDs.firstIndex(of: selectedWorkSessionID)
+        else {
+            return sessionIDs.first
+        }
+        return sessionIDs[(selectedIndex + 1) % sessionIDs.count]
     }
 }
 

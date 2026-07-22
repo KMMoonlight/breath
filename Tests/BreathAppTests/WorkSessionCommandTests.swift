@@ -5,8 +5,8 @@ import Testing
 
 @Suite("Work session commands")
 struct WorkSessionCommandTests {
-    @Test("Command-T appears in the shortcuts reference")
-    func commandTAppearsInShortcutsReference() throws {
+    @Test("tab and pane navigation appear in the shortcuts reference")
+    func navigationAppearsInShortcutsReference() throws {
         let root = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
             isDirectory: true
@@ -21,6 +21,22 @@ struct WorkSessionCommandTests {
                 "ShortcutReference(action: \"新建工作会话\", keys: \"⌘T\")"
             )
         )
+        #expect(
+            source.contains(
+                "ShortcutReference(action: \"下一个会话 Tab\", keys: \"⌘N\")"
+            )
+        )
+        #expect(
+            source.contains(
+                "ShortcutReference(action: \"上一个分屏\", keys: \"⌘[\")"
+            )
+        )
+        #expect(
+            source.contains(
+                "ShortcutReference(action: \"下一个分屏\", keys: \"⌘]\")"
+            )
+        )
+        #expect(!source.contains("切换到第 1–9 个终端"))
     }
 
     @Test("current workspace follows the selected work session")

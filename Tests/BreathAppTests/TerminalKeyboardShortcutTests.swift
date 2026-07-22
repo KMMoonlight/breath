@@ -7,6 +7,19 @@ import Testing
 
 @Suite("Terminal keyboard shortcuts")
 struct TerminalKeyboardShortcutTests {
+    @Test("session tabs and split panes use the requested navigation shortcuts")
+    func requestedNavigationShortcuts() throws {
+        let nextTab = try commandKeyEvent("n")
+        let previousPane = try commandKeyEvent("[")
+        let nextPane = try commandKeyEvent("]")
+        let formerNumberShortcut = try commandKeyEvent("1")
+
+        #expect(BreathShortcutCatalog.nextWorkSessionTab.matches(nextTab))
+        #expect(BreathShortcutCatalog.previousPane.matches(previousPane))
+        #expect(BreathShortcutCatalog.nextPane.matches(nextPane))
+        #expect(!BreathShortcutCatalog.matches(formerNumberShortcut))
+    }
+
     @Test("terminal focus gives terminal shortcuts priority")
     func terminalFocusGivesTerminalPriority() {
         let paneID = TerminalPaneID(rawValue: UUID())
@@ -219,6 +232,23 @@ struct TerminalKeyboardShortcutTests {
 
         #expect(window.firstResponder !== terminalView)
         #expect(!terminalHasInputFocus)
+    }
+
+    private func commandKeyEvent(_ characters: String) throws -> NSEvent {
+        try #require(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.command],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: characters,
+                charactersIgnoringModifiers: characters,
+                isARepeat: false,
+                keyCode: 0
+            )
+        )
     }
 }
 

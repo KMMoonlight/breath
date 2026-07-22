@@ -218,6 +218,22 @@ final class BreathApplicationModel: ObservableObject {
         })?.workspaceID
     }
 
+    var canSelectNextWorkSessionTab: Bool {
+        guard let currentWorkspaceID else { return false }
+        return snapshot.nextActiveWorkSessionID(in: currentWorkspaceID) != nil
+    }
+
+    var canNavigateSplitPanes: Bool {
+        guard let selectedWorkSessionID = snapshot.selectedWorkSessionID,
+              let session = snapshot.activeWorkSessions.first(where: {
+                  $0.id == selectedWorkSessionID
+              })
+        else {
+            return false
+        }
+        return session.layout.paneIDs.count > 1
+    }
+
     func createWorkSession(in workspaceID: WorkspaceID) {
         perform {
             _ = try await self.workbench.createWorkSession(in: workspaceID)
@@ -256,8 +272,16 @@ final class BreathApplicationModel: ObservableObject {
         }
     }
 
-    func archive(_ id: WorkSessionID) {
-        perform { try await self.workbench.archiveWorkSession(id) }
+    func archive(
+        _ id: WorkSessionID,
+        selecting fallbackID: WorkSessionID? = nil
+    ) {
+        perform {
+            try await self.workbench.archiveWorkSession(id)
+            if let fallbackID {
+                try await self.workbench.selectWorkSession(fallbackID)
+            }
+        }
     }
 
     func restoreArchive(_ id: WorkSessionID) {

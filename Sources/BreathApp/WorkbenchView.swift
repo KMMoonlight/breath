@@ -76,6 +76,17 @@ struct WorkbenchView: View {
         .onReceive(NotificationCenter.default.publisher(for: .breathOpenSettings)) { _ in
             detailMode = .settings
         }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .breathSelectNextWorkSessionTab)
+        ) { _ in
+            selectNextWorkSessionTab()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .breathSelectPreviousPane)) { _ in
+            focusAdjacentPane(previous: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .breathSelectNextPane)) { _ in
+            focusAdjacentPane(previous: false)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .breathGitCommit)) { _ in
             guard GitWorkbenchReleaseGate.isEnabled else { return }
             guard let workspaceID = model.currentWorkspaceID,
@@ -107,7 +118,10 @@ struct WorkbenchView: View {
         ) { session in
             Button(localizer.string("取消"), role: .cancel) { pendingArchive = nil }
             Button(localizer.string("停止并归档"), role: .destructive) {
-                model.archive(session.id)
+                model.archive(
+                    session.id,
+                    selecting: archiveFallbackID(for: session)
+                )
                 pendingArchive = nil
             }
         } message: { _ in
@@ -455,6 +469,47 @@ struct WorkbenchView: View {
         model.selectWorkSession(sessionID)
     }
 
+    private func selectNextWorkSessionTab() {
+        guard let workspaceID = model.currentWorkspaceID,
+              let sessionID = model.snapshot.nextActiveWorkSessionID(in: workspaceID),
+              let session = model.snapshot.activeWorkSessions.first(where: {
+                  $0.id == sessionID
+              })
+        else {
+            return
+        }
+        pendingTerminalFocusID = session.layout.paneIDs.first
+        selectWorkSession(sessionID)
+    }
+
+    private func focusAdjacentPane(previous: Bool) {
+        guard let selectedSessionID = model.snapshot.selectedWorkSessionID,
+              let session = model.snapshot.activeWorkSessions.first(where: {
+                  $0.id == selectedSessionID
+              })
+        else {
+            return
+        }
+        let currentPaneID = [
+            model.shortcutPriority.focusedTerminalPaneID,
+            model.shortcutPriority.lastFocusedTerminalPaneID,
+        ]
+        .compactMap { $0 }
+        .first(where: { session.layout.paneIDs.contains($0) })
+        let targetPaneID: TerminalPaneID?
+        if let currentPaneID {
+            targetPaneID = previous
+                ? session.layout.previousPaneID(from: currentPaneID)
+                : session.layout.nextPaneID(from: currentPaneID)
+        } else {
+            targetPaneID = session.layout.paneIDs.first
+        }
+        guard let targetPaneID else { return }
+        detailMode = .workspace
+        pendingTerminalFocusID = targetPaneID
+        focusPendingTerminalAfterViewUpdate()
+    }
+
     private func focusPendingTerminalAfterViewUpdate() {
         guard pendingTerminalFocusID != nil else { return }
         DispatchQueue.main.async {
@@ -627,12 +682,25 @@ struct WorkbenchView: View {
             let workspace = model.snapshot.workspaces.first(where: {
                 $0.id == session.workspaceID
             })
-            WorkSessionTerminalLayoutView(
-                session: session,
-                workspacePath: workspace?.path ?? "",
-                model: model
-            )
-            .id(session.id)
+            let sessions = model.snapshot.activeWorkSessions.filter {
+                $0.workspaceID == session.workspaceID
+            }
+            VStack(spacing: 0) {
+                WorkSessionTabBar(
+                    sessions: sessions,
+                    selectedSessionID: selectedID,
+                    model: model,
+                    onSelect: selectWorkSession,
+                    onCreate: { createWorkSession(in: session.workspaceID) },
+                    onArchive: { pendingArchive = $0 }
+                )
+                WorkSessionTerminalLayoutView(
+                    session: session,
+                    workspacePath: workspace?.path ?? "",
+                    model: model
+                )
+                .id(session.id)
+            }
         } else {
             model.effectiveTerminalColorTheme.canvasColor
                 .accessibilityElement(children: .ignore)
@@ -693,6 +761,20 @@ struct WorkbenchView: View {
         pendingWorkspaceRemoval = workspace
     }
 
+    private func archiveFallbackID(for session: WorkSession) -> WorkSessionID? {
+        guard model.snapshot.selectedWorkSessionID == session.id else { return nil }
+        let sessions = model.snapshot.activeWorkSessions.filter {
+            $0.workspaceID == session.workspaceID
+        }
+        guard sessions.count > 1,
+              let index = sessions.firstIndex(where: { $0.id == session.id })
+        else {
+            return nil
+        }
+        let fallbackIndex = index + 1 < sessions.count ? index + 1 : index - 1
+        return sessions[fallbackIndex].id
+    }
+
     private var archiveAlertPresented: Binding<Bool> {
         Binding(
             get: { pendingArchive != nil },
@@ -718,6 +800,11 @@ struct WorkbenchView: View {
 extension Notification.Name {
     static let breathOpenSettings = Notification.Name("Breath.OpenSettings")
     static let breathOpenGitWorkbench = Notification.Name("Breath.OpenGitWorkbench")
+    static let breathSelectNextWorkSessionTab = Notification.Name(
+        "Breath.SelectNextWorkSessionTab"
+    )
+    static let breathSelectPreviousPane = Notification.Name("Breath.SelectPreviousPane")
+    static let breathSelectNextPane = Notification.Name("Breath.SelectNextPane")
     static let breathGitCommit = Notification.Name("Breath.GitCommit")
     static let breathGitPush = Notification.Name("Breath.GitPush")
     static let breathGitPreviousDifference = Notification.Name(
@@ -792,6 +879,164 @@ private struct StateDot: View {
     }
 }
 
+private struct WorkSessionTabBar: View {
+    let sessions: [WorkSession]
+    let selectedSessionID: WorkSessionID
+    @ObservedObject var model: BreathApplicationModel
+    let onSelect: (WorkSessionID) -> Void
+    let onCreate: () -> Void
+    let onArchive: (WorkSession) -> Void
+    @Environment(\.applicationLanguage) private var applicationLanguage
+    @State private var hoveredSessionID: WorkSessionID?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 0) {
+                        ForEach(sessions) { session in
+                            sessionTab(session)
+                                .id(session.id)
+                        }
+                    }
+                }
+                .onAppear {
+                    scrollSelectedTabIntoView(using: proxy)
+                }
+                .onChange(of: selectedSessionID) { _, _ in
+                    scrollSelectedTabIntoView(using: proxy)
+                }
+            }
+
+            Divider()
+
+            Button(action: onCreate) {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(
+                        width: WorkbenchLayout.sessionTabActionSize,
+                        height: WorkbenchLayout.sessionTabActionSize
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(localizer.string("新建工作会话"))
+            .help(localizer.string("新建工作会话（⌘T）"))
+            .padding(.horizontal, 3)
+        }
+        .frame(height: WorkbenchLayout.sessionTabBarHeight)
+        .background {
+            ZStack(alignment: .bottom) {
+                Color(nsColor: .windowBackgroundColor)
+                Divider()
+            }
+        }
+    }
+
+    private func sessionTab(_ session: WorkSession) -> some View {
+        let isSelected = session.id == selectedSessionID
+        let showsArchive = isSelected || hoveredSessionID == session.id
+        return HStack(spacing: 0) {
+            Button {
+                onSelect(session.id)
+            } label: {
+                HStack(spacing: 7) {
+                    sessionMarker(session)
+                    Text(session.title)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+
+            Button {
+                onArchive(session)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(
+                        width: WorkbenchLayout.sessionTabActionSize,
+                        height: WorkbenchLayout.sessionTabActionSize
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(localizer.string("归档"))
+            .help(localizer.string("归档"))
+            .opacity(showsArchive ? 1 : 0)
+            .allowsHitTesting(showsArchive)
+        }
+        .font(applicationFont(for: model, offset: -1))
+        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+        .padding(.leading, 10)
+        .padding(.trailing, 3)
+        .frame(
+            width: WorkbenchLayout.sessionTabWidth,
+            height: WorkbenchLayout.sessionTabBarHeight
+        )
+        .background {
+            if isSelected {
+                UnevenRoundedRectangle(
+                    topLeadingRadius: WorkbenchLayout.sessionTabCornerRadius,
+                    topTrailingRadius: WorkbenchLayout.sessionTabCornerRadius
+                )
+                .fill(.bar)
+            } else if hoveredSessionID == session.id {
+                Color.primary.opacity(0.06)
+            }
+        }
+        .overlay(alignment: .trailing) {
+            if !isSelected {
+                Divider()
+                    .padding(.vertical, 7)
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { isHovering in
+            if isHovering {
+                hoveredSessionID = session.id
+            } else if hoveredSessionID == session.id {
+                hoveredSessionID = nil
+            }
+        }
+        .contextMenu {
+            Button(localizer.string("归档"), role: .destructive) {
+                onArchive(session)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sessionMarker(_ session: WorkSession) -> some View {
+        if session.layout.panes.count == 1,
+           let pane = session.layout.panes.first
+        {
+            StateDot(state: pane.state)
+        } else {
+            Image(systemName: "rectangle.split.2x1")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(
+                    width: WorkbenchLayout.agentIconFrameSize,
+                    height: WorkbenchLayout.agentIconFrameSize
+                )
+        }
+    }
+
+    private func scrollSelectedTabIntoView(using proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            proxy.scrollTo(selectedSessionID, anchor: .center)
+        }
+    }
+
+    private var localizer: ApplicationLocalizer {
+        ApplicationLocalizer(language: applicationLanguage)
+    }
+}
+
 private struct WorkSessionTerminalLayoutView: View {
     let session: WorkSession
     let workspacePath: String
@@ -824,7 +1069,6 @@ private struct PaneLayoutView: View {
         case .pane(let pane):
             TerminalPaneView(
                 pane: pane,
-                shortcutNumber: shortcutNumber(for: pane.id),
                 canClose: paneOrder.count > 1,
                 model: model
             )
@@ -860,12 +1104,6 @@ private struct PaneLayoutView: View {
         }
     }
 
-    private func shortcutNumber(for paneID: TerminalPaneID) -> Int? {
-        guard let index = paneOrder.firstIndex(of: paneID), index < 9 else {
-            return nil
-        }
-        return index + 1
-    }
 }
 
 private struct SplitContainer<First: View, Second: View>: View {
@@ -1392,7 +1630,6 @@ final class NativeSplitHostingView: NSHostingView<AnyView> {
 
 private struct TerminalPaneView: View {
     let pane: TerminalPane
-    let shortcutNumber: Int?
     let canClose: Bool
     @ObservedObject var model: BreathApplicationModel
     @Environment(\.controlActiveState) private var controlActiveState
@@ -1487,42 +1724,13 @@ private struct TerminalPaneView: View {
         .background(model.effectiveTerminalColorTheme.canvasColor)
     }
 
-    @ViewBuilder
     private var terminalTitle: some View {
-        if let shortcutNumber {
-            Button(action: focusTerminal) {
-                HStack(spacing: 5) {
-                    Text(pane.agentBinding?.nativeTitle ?? localizer.string("终端"))
-                        .lineLimit(1)
-                    Text("⌘\(shortcutNumber)")
-                        .font(
-                            applicationFont(
-                                for: model,
-                                offset: -2,
-                                design: .monospaced
-                            )
-                        )
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .buttonStyle(.plain)
-            .font(applicationFont(for: model, offset: -1))
-            .breathKeyboardShortcut(
-                BreathShortcutCatalog.selectPane(shortcutNumber),
-                priority: model.shortcutPriority
-            )
-            .help(
-                localizer.format(
-                    "切换到终端 %d（⌘%d）",
-                    shortcutNumber,
-                    shortcutNumber
-                )
-            )
-        } else {
+        Button(action: focusTerminal) {
             Text(pane.agentBinding?.nativeTitle ?? localizer.string("终端"))
-                .font(applicationFont(for: model, offset: -1))
                 .lineLimit(1)
         }
+        .buttonStyle(.plain)
+        .font(applicationFont(for: model, offset: -1))
     }
 
     private func focusTerminal() {
@@ -1725,6 +1933,10 @@ enum WorkbenchLayout {
     static let sidebarStateDotSize: CGFloat = 8
     static let sidebarActionFrameSize: CGFloat = 20
     static let sidebarActionIconSize: CGFloat = 12
+    static let sessionTabBarHeight: CGFloat = 34
+    static let sessionTabWidth: CGFloat = 180
+    static let sessionTabActionSize: CGFloat = 28
+    static let sessionTabCornerRadius: CGFloat = 6
     static let bottomBarHeight: CGFloat = 32
     static let agentIconFrameSize: CGFloat = 16
     static let agentIconGlyphSize: CGFloat = 14

@@ -62,9 +62,10 @@ struct BreathSettingsView: View {
     }()
 
     private static let supportedShortcuts = [
-        ShortcutReference(action: "打开主窗口", keys: "⌘N"),
         ShortcutReference(action: "新建工作会话", keys: "⌘T"),
-        ShortcutReference(action: "切换到第 1–9 个终端", keys: "⌘1…⌘9"),
+        ShortcutReference(action: "下一个会话 Tab", keys: "⌘N"),
+        ShortcutReference(action: "上一个分屏", keys: "⌘["),
+        ShortcutReference(action: "下一个分屏", keys: "⌘]"),
         ShortcutReference(action: "横向分屏", keys: "⌘D"),
         ShortcutReference(action: "纵向分屏", keys: "⌘⇧D"),
         ShortcutReference(action: "关闭当前分屏终端", keys: "⌘W"),

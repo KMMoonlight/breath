@@ -55,8 +55,7 @@ private struct BreathDesktopApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 OpenMainWindowCommand(
-                    language: model.settings.application.language,
-                    shortcutPriority: model.shortcutPriority
+                    language: model.settings.application.language
                 )
                 Button(localizer.string("新建工作会话")) {
                     guard let workspaceID = model.currentWorkspaceID else { return }
@@ -67,6 +66,45 @@ private struct BreathDesktopApp: App {
                     priority: model.shortcutPriority
                 )
                 .disabled(!model.canPerformCommands || model.currentWorkspaceID == nil)
+            }
+            CommandMenu(localizer.string("导航")) {
+                Button(localizer.string("下一个会话 Tab")) {
+                    NotificationCenter.default.post(
+                        name: .breathSelectNextWorkSessionTab,
+                        object: nil
+                    )
+                }
+                .breathKeyboardShortcut(
+                    BreathShortcutCatalog.nextWorkSessionTab,
+                    priority: model.shortcutPriority
+                )
+                .disabled(!model.canPerformCommands || !model.canSelectNextWorkSessionTab)
+
+                Divider()
+
+                Button(localizer.string("上一个分屏")) {
+                    NotificationCenter.default.post(
+                        name: .breathSelectPreviousPane,
+                        object: nil
+                    )
+                }
+                .breathKeyboardShortcut(
+                    BreathShortcutCatalog.previousPane,
+                    priority: model.shortcutPriority
+                )
+                .disabled(!model.canPerformCommands || !model.canNavigateSplitPanes)
+
+                Button(localizer.string("下一个分屏")) {
+                    NotificationCenter.default.post(
+                        name: .breathSelectNextPane,
+                        object: nil
+                    )
+                }
+                .breathKeyboardShortcut(
+                    BreathShortcutCatalog.nextPane,
+                    priority: model.shortcutPriority
+                )
+                .disabled(!model.canPerformCommands || !model.canNavigateSplitPanes)
             }
             CommandGroup(replacing: .appSettings) {
                 OpenSettingsPageCommand(
@@ -141,7 +179,6 @@ private struct BreathDesktopApp: App {
 
 private struct OpenMainWindowCommand: View {
     let language: ApplicationLanguage
-    let shortcutPriority: BreathShortcutPriority
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -149,10 +186,6 @@ private struct OpenMainWindowCommand: View {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
         }
-        .breathKeyboardShortcut(
-            BreathShortcutCatalog.openMainWindow,
-            priority: shortcutPriority
-        )
     }
 }
 
