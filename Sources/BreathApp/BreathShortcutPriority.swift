@@ -40,7 +40,9 @@ struct BreathShortcutDefinition {
 
 enum BreathShortcutCatalog {
     static let newWorkSession = BreathShortcutDefinition("t", modifiers: [.command])
-    static let nextWorkSessionTab = BreathShortcutDefinition("n", modifiers: [.command])
+    static let workSessionTabs = (1...9).map {
+        BreathShortcutDefinition(Character(String($0)), modifiers: [.command])
+    }
     static let previousPane = BreathShortcutDefinition("[", modifiers: [.command])
     static let nextPane = BreathShortcutDefinition("]", modifiers: [.command])
     static let openSettings = BreathShortcutDefinition(",", modifiers: [.command])
@@ -53,8 +55,6 @@ enum BreathShortcutCatalog {
 
     static func matches(_ event: NSEvent) -> Bool {
         let definitions = [
-            newWorkSession,
-            nextWorkSessionTab,
             previousPane,
             nextPane,
             openSettings,

@@ -7,17 +7,21 @@ import Testing
 
 @Suite("Terminal keyboard shortcuts")
 struct TerminalKeyboardShortcutTests {
-    @Test("session tabs and split panes use the requested navigation shortcuts")
+    @Test("numbered session tabs and split panes use the requested navigation shortcuts")
     func requestedNavigationShortcuts() throws {
-        let nextTab = try commandKeyEvent("n")
+        let firstTab = try commandKeyEvent("1")
+        let ninthTab = try commandKeyEvent("9")
+        let formerNextTab = try commandKeyEvent("n")
+        let newSession = try commandKeyEvent("t")
         let previousPane = try commandKeyEvent("[")
         let nextPane = try commandKeyEvent("]")
-        let formerNumberShortcut = try commandKeyEvent("1")
 
-        #expect(BreathShortcutCatalog.nextWorkSessionTab.matches(nextTab))
+        #expect(BreathShortcutCatalog.workSessionTabs[0].matches(firstTab))
+        #expect(BreathShortcutCatalog.workSessionTabs[8].matches(ninthTab))
+        #expect(!BreathShortcutCatalog.matches(formerNextTab))
+        #expect(BreathShortcutCatalog.newWorkSession.matches(newSession))
         #expect(BreathShortcutCatalog.previousPane.matches(previousPane))
         #expect(BreathShortcutCatalog.nextPane.matches(nextPane))
-        #expect(!BreathShortcutCatalog.matches(formerNumberShortcut))
     }
 
     @Test("terminal focus gives terminal shortcuts priority")
@@ -103,6 +107,25 @@ struct TerminalKeyboardShortcutTests {
         )
 
         #expect(forwarded == event)
+    }
+
+    @Test("new session shortcut bypasses terminal preflight")
+    func newSessionShortcutBypassesTerminalPreflight() throws {
+        let event = try commandKeyEvent("t")
+        var terminalReceivedEvent = false
+
+        let forwarded = TerminalShortcutArbitrator.eventToForward(
+            event,
+            terminalHasInputFocus: true,
+            matchesBreathShortcut: BreathShortcutCatalog.matches,
+            terminalHandler: { _ in
+                terminalReceivedEvent = true
+                return true
+            }
+        )
+
+        #expect(forwarded === event)
+        #expect(!terminalReceivedEvent)
     }
 
     @MainActor

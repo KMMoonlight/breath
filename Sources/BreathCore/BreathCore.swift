@@ -468,19 +468,15 @@ public struct WorkbenchSnapshot: Equatable, Codable, Sendable {
         workSessions.filter { $0.archivedAt != nil }
     }
 
-    public func nextActiveWorkSessionID(
+    public func activeWorkSessionID(
+        at index: Int,
         in workspaceID: WorkspaceID
     ) -> WorkSessionID? {
         let sessionIDs = activeWorkSessions
             .filter { $0.workspaceID == workspaceID }
             .map(\.id)
-        guard sessionIDs.count > 1 else { return nil }
-        guard let selectedWorkSessionID,
-              let selectedIndex = sessionIDs.firstIndex(of: selectedWorkSessionID)
-        else {
-            return sessionIDs.first
-        }
-        return sessionIDs[(selectedIndex + 1) % sessionIDs.count]
+        guard sessionIDs.indices.contains(index) else { return nil }
+        return sessionIDs[index]
     }
 
     public func archiveFallbackWorkSessionID(

@@ -68,17 +68,22 @@ private struct BreathDesktopApp: App {
                 .disabled(!model.canPerformCommands || model.currentWorkspaceID == nil)
             }
             CommandMenu(localizer.string("导航")) {
-                Button(localizer.string("下一个会话 Tab")) {
-                    NotificationCenter.default.post(
-                        name: .breathSelectNextWorkSessionTab,
-                        object: nil
+                ForEach(Array(1...9), id: \.self) { number in
+                    Button(localizer.format("切换到会话 Tab %d", number)) {
+                        NotificationCenter.default.post(
+                            name: .breathSelectWorkSessionTab,
+                            object: number - 1
+                        )
+                    }
+                    .breathKeyboardShortcut(
+                        BreathShortcutCatalog.workSessionTabs[number - 1],
+                        priority: model.shortcutPriority
+                    )
+                    .disabled(
+                        !model.canPerformCommands
+                            || !model.canSelectWorkSessionTab(at: number - 1)
                     )
                 }
-                .breathKeyboardShortcut(
-                    BreathShortcutCatalog.nextWorkSessionTab,
-                    priority: model.shortcutPriority
-                )
-                .disabled(!model.canPerformCommands || !model.canSelectNextWorkSessionTab)
 
                 Divider()
 

@@ -30,7 +30,8 @@
 "新建工作会话" = "New Work Session";
 "新建工作会话（⌘T）" = "New Work Session (⌘T)";
 "导航" = "Navigate";
-"下一个会话 Tab" = "Next Work Session Tab";
+"切换会话 Tab" = "Select Work Session Tab";
+"切换到会话 Tab %d" = "Select Work Session Tab %d";
 "上一个分屏" = "Previous Pane";
 "下一个分屏" = "Next Pane";
 "横向分屏" = "Split Horizontally";

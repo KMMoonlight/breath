@@ -4,52 +4,31 @@ import Testing
 
 @Suite("Workbench navigation")
 struct WorkbenchNavigationTests {
-    @Test("next tab cycles through active sessions in the selected workspace")
-    func nextTabCyclesWithinWorkspace() {
-        let firstWorkspaceID = WorkspaceID(rawValue: UUID())
-        let secondWorkspaceID = WorkspaceID(rawValue: UUID())
+    @Test("numbered tabs select the corresponding active session in the workspace")
+    func numberedTabsSelectWithinWorkspace() {
+        let workspaceID = WorkspaceID(rawValue: UUID())
         let firstSessionID = WorkSessionID(rawValue: UUID())
-        let secondSessionID = WorkSessionID(rawValue: UUID())
         let archivedSessionID = WorkSessionID(rawValue: UUID())
-        let otherWorkspaceSessionID = WorkSessionID(rawValue: UUID())
+        let thirdSessionID = WorkSessionID(rawValue: UUID())
         let snapshot = WorkbenchSnapshot(
             workspaces: [
-                Workspace(id: firstWorkspaceID, path: "/tmp/first", displayName: "First"),
-                Workspace(id: secondWorkspaceID, path: "/tmp/second", displayName: "Second"),
+                Workspace(id: workspaceID, path: "/tmp/numbered-tabs", displayName: "Tabs"),
             ],
             workSessions: [
-                session(id: firstSessionID, workspaceID: firstWorkspaceID),
-                session(id: secondSessionID, workspaceID: firstWorkspaceID),
+                session(id: firstSessionID, workspaceID: workspaceID),
                 session(
                     id: archivedSessionID,
-                    workspaceID: firstWorkspaceID,
+                    workspaceID: workspaceID,
                     archivedAt: Date(timeIntervalSince1970: 1)
                 ),
-                session(id: otherWorkspaceSessionID, workspaceID: secondWorkspaceID),
+                session(id: thirdSessionID, workspaceID: workspaceID),
             ],
             selectedWorkSessionID: firstSessionID
         )
 
-        #expect(snapshot.nextActiveWorkSessionID(in: firstWorkspaceID) == secondSessionID)
-
-        var wrappedSnapshot = snapshot
-        wrappedSnapshot.selectedWorkSessionID = secondSessionID
-        #expect(wrappedSnapshot.nextActiveWorkSessionID(in: firstWorkspaceID) == firstSessionID)
-    }
-
-    @Test("a workspace with fewer than two active sessions has no next tab")
-    func nextTabRequiresAnotherActiveSession() {
-        let workspaceID = WorkspaceID(rawValue: UUID())
-        let sessionID = WorkSessionID(rawValue: UUID())
-        let snapshot = WorkbenchSnapshot(
-            workspaces: [
-                Workspace(id: workspaceID, path: "/tmp/only", displayName: "Only"),
-            ],
-            workSessions: [session(id: sessionID, workspaceID: workspaceID)],
-            selectedWorkSessionID: sessionID
-        )
-
-        #expect(snapshot.nextActiveWorkSessionID(in: workspaceID) == nil)
+        #expect(snapshot.activeWorkSessionID(at: 0, in: workspaceID) == firstSessionID)
+        #expect(snapshot.activeWorkSessionID(at: 1, in: workspaceID) == thirdSessionID)
+        #expect(snapshot.activeWorkSessionID(at: 2, in: workspaceID) == nil)
     }
 
     @Test("archiving the selected tab prefers its right neighbor and then its left")

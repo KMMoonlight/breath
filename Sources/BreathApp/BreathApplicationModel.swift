@@ -220,9 +220,9 @@ final class BreathApplicationModel: ObservableObject {
         })?.workspaceID
     }
 
-    var canSelectNextWorkSessionTab: Bool {
+    func canSelectWorkSessionTab(at index: Int) -> Bool {
         guard let currentWorkspaceID else { return false }
-        return snapshot.nextActiveWorkSessionID(in: currentWorkspaceID) != nil
+        return snapshot.activeWorkSessionID(at: index, in: currentWorkspaceID) != nil
     }
 
     var canNavigateSplitPanes: Bool {

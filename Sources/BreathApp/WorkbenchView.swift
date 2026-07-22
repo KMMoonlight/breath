@@ -77,9 +77,10 @@ struct WorkbenchView: View {
             detailMode = .settings
         }
         .onReceive(
-            NotificationCenter.default.publisher(for: .breathSelectNextWorkSessionTab)
-        ) { _ in
-            selectNextWorkSessionTab()
+            NotificationCenter.default.publisher(for: .breathSelectWorkSessionTab)
+        ) { notification in
+            guard let index = notification.object as? Int else { return }
+            selectWorkSessionTab(at: index)
         }
         .onReceive(NotificationCenter.default.publisher(for: .breathSelectPreviousPane)) { _ in
             focusAdjacentPane(previous: true)
@@ -471,9 +472,12 @@ struct WorkbenchView: View {
         model.selectWorkSession(sessionID)
     }
 
-    private func selectNextWorkSessionTab() {
+    private func selectWorkSessionTab(at index: Int) {
         guard let workspaceID = model.currentWorkspaceID,
-              let sessionID = model.snapshot.nextActiveWorkSessionID(in: workspaceID),
+              let sessionID = model.snapshot.activeWorkSessionID(
+                  at: index,
+                  in: workspaceID
+              ),
               let session = model.snapshot.activeWorkSessions.first(where: {
                   $0.id == sessionID
               })
@@ -794,8 +798,8 @@ struct WorkbenchView: View {
 extension Notification.Name {
     static let breathOpenSettings = Notification.Name("Breath.OpenSettings")
     static let breathOpenGitWorkbench = Notification.Name("Breath.OpenGitWorkbench")
-    static let breathSelectNextWorkSessionTab = Notification.Name(
-        "Breath.SelectNextWorkSessionTab"
+    static let breathSelectWorkSessionTab = Notification.Name(
+        "Breath.SelectWorkSessionTab"
     )
     static let breathSelectPreviousPane = Notification.Name("Breath.SelectPreviousPane")
     static let breathSelectNextPane = Notification.Name("Breath.SelectNextPane")

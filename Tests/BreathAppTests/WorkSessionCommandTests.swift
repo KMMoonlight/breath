@@ -23,7 +23,7 @@ struct WorkSessionCommandTests {
         )
         #expect(
             source.contains(
-                "ShortcutReference(action: \"下一个会话 Tab\", keys: \"⌘N\")"
+                "ShortcutReference(action: \"切换会话 Tab\", keys: \"⌘1…⌘9\")"
             )
         )
         #expect(
@@ -36,7 +36,24 @@ struct WorkSessionCommandTests {
                 "ShortcutReference(action: \"下一个分屏\", keys: \"⌘]\")"
             )
         )
-        #expect(!source.contains("切换到第 1–9 个终端"))
+        #expect(!source.contains("下一个会话 Tab"))
+    }
+
+    @Test("numbered tab commands replace the former next-tab command")
+    func numberedTabCommandsReplaceNextTabCommand() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let appSource = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/BreathApp.swift"),
+            encoding: .utf8
+        )
+
+        #expect(appSource.contains("ForEach(Array(1...9), id: \\.self)"))
+        #expect(appSource.contains("BreathShortcutCatalog.workSessionTabs[number - 1]"))
+        #expect(appSource.contains("name: .breathSelectWorkSessionTab"))
+        #expect(!appSource.contains("BreathShortcutCatalog.nextWorkSessionTab"))
     }
 
     @Test("current workspace follows the selected work session")
