@@ -27,6 +27,7 @@
 "取消" = "Cancel";
 "只会删除 Breath 元数据，不会删除项目文件或 Agent CLI 自己保存的会话。" = "This deletes only Breath metadata. Project files and conversations stored by Agent CLIs are not deleted.";
 "打开主窗口" = "Open Main Window";
+"新会话" = "New Session";
 "新建工作会话" = "New Work Session";
 "新建工作会话（⌘T）" = "New Work Session (⌘T)";
 "导航" = "Navigate";
@@ -78,6 +79,8 @@
 "移除工作区…" = "Remove Workspace…";
 "终端 %d" = "Terminal %d";
 "归档" = "Archive";
+"展开终端窗格" = "Expand Terminal Panes";
+"收起终端窗格" = "Collapse Terminal Panes";
 "请先添加工作区" = "Add a workspace first";
 "添加" = "Add";
 "选择一个项目目录" = "Choose a project directory";

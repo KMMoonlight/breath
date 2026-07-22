@@ -10,36 +10,32 @@ struct WorkSessionTabPresentationTests {
         let presentation = WorkSessionTabPresentation(
             session: placeholderSession,
             index: 0,
-            isSelected: true,
             placeholderTitle: "新会话"
         )
 
         #expect(presentation.title == "新会话")
     }
 
-    @Test("only the selected first nine tabs expose their command number")
-    func selectedTabShowsCommandNumber() {
-        let selected = WorkSessionTabPresentation(
+    @Test("the first nine tabs always expose their command number")
+    func firstNineTabsShowCommandNumber() {
+        let first = WorkSessionTabPresentation(
             session: placeholderSession,
-            index: 2,
-            isSelected: true,
+            index: 0,
             placeholderTitle: "新会话"
         )
-        let unselected = WorkSessionTabPresentation(
+        let ninth = WorkSessionTabPresentation(
             session: placeholderSession,
-            index: 2,
-            isSelected: false,
+            index: 8,
             placeholderTitle: "新会话"
         )
         let tenth = WorkSessionTabPresentation(
             session: placeholderSession,
             index: 9,
-            isSelected: true,
             placeholderTitle: "新会话"
         )
 
-        #expect(selected.shortcutLabel == "⌘3")
-        #expect(unselected.shortcutLabel == nil)
+        #expect(first.shortcutLabel == "⌘1")
+        #expect(ninth.shortcutLabel == "⌘9")
         #expect(tenth.shortcutLabel == nil)
     }
 
@@ -52,7 +48,6 @@ struct WorkSessionTabPresentationTests {
         let presentation = WorkSessionTabPresentation(
             session: session,
             index: 0,
-            isSelected: true,
             placeholderTitle: "新会话"
         )
 

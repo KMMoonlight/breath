@@ -47,6 +47,38 @@ struct WindowLayoutSourceTests {
         )
     }
 
+    @Test("expanding a split session does not animate pane rows")
+    func splitSessionDisclosureDoesNotAnimatePaneRows() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/WorkbenchView.swift"
+            ),
+            encoding: .utf8
+        )
+        let sessionTreeStart = try #require(
+            source.range(of: "private func sessionTree(_ session: WorkSession)")
+        )
+        let focusStart = try #require(
+            source.range(
+                of: "private func requestTerminalFocus",
+                range: sessionTreeStart.upperBound..<source.endIndex
+            )
+        )
+        let sessionTreeSource = source[
+            sessionTreeStart.lowerBound..<focusStart.lowerBound
+        ]
+
+        #expect(!sessionTreeSource.contains("DisclosureGroup"))
+        #expect(!sessionTreeSource.contains(".animation("))
+        #expect(!sessionTreeSource.contains(".transition("))
+        #expect(sessionTreeSource.contains("transaction.disablesAnimations = true"))
+        #expect(sessionTreeSource.contains("withTransaction(transaction)"))
+    }
+
     @Test("terminal focus centrally arbitrates Breath shortcuts")
     func terminalFocusCentrallyArbitratesBreathShortcuts() throws {
         let root = URL(

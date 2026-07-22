@@ -30,6 +30,7 @@ struct WorkbenchView: View {
     @State private var pendingWorkspaceRemoval: Workspace?
     @State private var dismissedUnavailableWorkspaces: Set<WorkspaceID> = []
     @State private var expandedWorkspaceIDs: Set<WorkspaceID> = []
+    @State private var expandedSessionIDs: Set<WorkSessionID> = []
     @State private var hoveredSessionID: WorkSessionID?
     @State private var pendingTerminalFocusID: TerminalPaneID?
     @State private var detailMode = WorkbenchDetailMode.workspace
@@ -423,7 +424,39 @@ struct WorkbenchView: View {
         if panes.count == 1 {
             sessionRow(session, pane: panes[0])
         } else {
-            DisclosureGroup {
+            HStack(spacing: 0) {
+                Button {
+                    toggleSessionExpansion(session.id)
+                } label: {
+                    Image(
+                        systemName: expandedSessionIDs.contains(session.id)
+                            ? "chevron.down"
+                            : "chevron.right"
+                    )
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(
+                            width: WorkbenchLayout.sidebarSessionDisclosureWidth,
+                            height: WorkbenchLayout.sidebarActionFrameSize
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    localizer.string(
+                        expandedSessionIDs.contains(session.id)
+                            ? "收起终端窗格"
+                            : "展开终端窗格"
+                    )
+                )
+                sessionRowContent(
+                    session,
+                    pane: nil,
+                    selectionBackgroundLeadingPadding: -25,
+                    contentLeadingPadding: WorkbenchLayout.sidebarDisclosureLabelSpacing
+                )
+            }
+            if expandedSessionIDs.contains(session.id) {
                 ForEach(Array(panes.enumerated()), id: \.element.id) { index, pane in
                     Button {
                         requestTerminalFocus(session: session, pane: pane)
@@ -444,19 +477,20 @@ struct WorkbenchView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .padding(.leading, 4)
+                    .padding(.leading, WorkbenchLayout.sidebarPaneLeadingInset)
                 }
-            } label: {
-                sessionRowContent(
-                    session,
-                    pane: nil,
-                    selectionBackgroundLeadingPadding: -25,
-                    contentLeadingPadding: WorkbenchLayout.sidebarDisclosureLabelSpacing
-                )
             }
-            .transaction { transaction in
-                transaction.animation = nil
-                transaction.disablesAnimations = true
+        }
+    }
+
+    private func toggleSessionExpansion(_ sessionID: WorkSessionID) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            if expandedSessionIDs.contains(sessionID) {
+                expandedSessionIDs.remove(sessionID)
+            } else {
+                expandedSessionIDs.insert(sessionID)
             }
         }
     }
@@ -884,12 +918,10 @@ struct WorkSessionTabPresentation: Equatable {
     init(
         session: WorkSession,
         index: Int,
-        isSelected: Bool,
         placeholderTitle: String
     ) {
         title = session.titleSource == nil ? placeholderTitle : session.title
-        shortcutLabel = isSelected
-            && BreathShortcut.workSessionTabs.indices.contains(index)
+        shortcutLabel = BreathShortcut.workSessionTabs.indices.contains(index)
             ? "⌘\(index + 1)"
             : nil
     }
@@ -958,7 +990,6 @@ private struct WorkSessionTabBar: View {
         let presentation = WorkSessionTabPresentation(
             session: session,
             index: index,
-            isSelected: isSelected,
             placeholderTitle: localizer.string("新会话")
         )
         return HStack(spacing: 0) {
@@ -1986,6 +2017,8 @@ enum WorkbenchLayout {
     static let sidebarItemSpacing: CGFloat = 8
     static let sidebarDisclosureLabelSpacing: CGFloat = 3
     static let sidebarWorkspaceDisclosureSpacing: CGFloat = 6
+    static let sidebarSessionDisclosureWidth: CGFloat = 17
+    static let sidebarPaneLeadingInset: CGFloat = 21
     static let sidebarStateDotSize: CGFloat = 8
     static let sidebarActionFrameSize: CGFloat = 20
     static let sidebarActionIconSize: CGFloat = 12
