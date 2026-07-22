@@ -43,7 +43,7 @@ struct TerminalEngineRuntimeTests {
         #expect(await engine.closed == [paneID])
     }
 
-    @Test("libghostty creates a native surface, accepts composed text, resizes, and reloads style")
+    @Test("libghostty prioritizes terminal apps but declines host shortcuts")
     @MainActor
     func libghosttySurfaceSmoke() async throws {
         await NativeUITestGate.shared.acquire()
@@ -132,6 +132,59 @@ private func verifyLibghosttySurface() async throws {
     let view = try #require(engine.view(for: paneID))
     view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
     view.layoutSubtreeIfNeeded()
+    let breathShortcuts: [(String, UInt16, NSEvent.ModifierFlags)] = [
+        ("t", 17, [.command]),
+        ("1", 18, [.command]),
+        ("2", 19, [.command]),
+        ("3", 20, [.command]),
+        ("4", 21, [.command]),
+        ("5", 23, [.command]),
+        ("6", 22, [.command]),
+        ("7", 26, [.command]),
+        ("8", 28, [.command]),
+        ("9", 25, [.command]),
+        ("[", 33, [.command]),
+        ("]", 30, [.command]),
+        (",", 43, [.command]),
+        ("d", 2, [.command]),
+        ("D", 2, [.command, .shift]),
+        ("w", 13, [.command]),
+    ]
+    for (characters, keyCode, modifiers) in breathShortcuts {
+        let shortcut = try #require(shortcutKeyEvent(
+            characters,
+            keyCode: keyCode,
+            modifiers: modifiers
+        ))
+        #expect(!engine.handleShortcutKeyDown(shortcut, for: paneID))
+    }
+
+    let terminalApplicationPaneID = TerminalPaneID(rawValue: UUID())
+    try await engine.open(
+        TerminalLaunch(
+            paneID: terminalApplicationPaneID,
+            workingDirectory: "/tmp",
+            executable: "/bin/zsh",
+            arguments: ["-lc", "printf '\\033[>1u'; exec /bin/cat"],
+            environment: [:]
+        )
+    )
+    let commandT = try #require(shortcutKeyEvent(
+        "t",
+        keyCode: 17,
+        modifiers: [.command]
+    ))
+    var terminalApplicationHandledShortcut = false
+    for _ in 0..<20 {
+        try await Task.sleep(for: .milliseconds(25))
+        if engine.handleShortcutKeyDown(commandT, for: terminalApplicationPaneID) {
+            terminalApplicationHandledShortcut = true
+            break
+        }
+    }
+    #expect(terminalApplicationHandledShortcut)
+    await engine.close(terminalApplicationPaneID)
+
     let textInput = try #require(view as? any NSTextInputClient)
     textInput.setMarkedText(
         "拼音",
@@ -152,6 +205,26 @@ private func verifyLibghosttySurface() async throws {
     )
     await engine.close(paneID)
     #expect(engine.view(for: paneID) == nil)
+}
+
+@MainActor
+private func shortcutKeyEvent(
+    _ characters: String,
+    keyCode: UInt16,
+    modifiers: NSEvent.ModifierFlags
+) -> NSEvent? {
+    NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: modifiers,
+        timestamp: 0,
+        windowNumber: 0,
+        context: nil,
+        characters: characters,
+        charactersIgnoringModifiers: characters.lowercased(),
+        isARepeat: false,
+        keyCode: keyCode
+    )
 }
 
 private actor RecordingTerminalEngine: TerminalEngine {

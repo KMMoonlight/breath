@@ -170,6 +170,31 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         window-vsync = \(synchronizeRendering)
         window-decoration = false
         confirm-close-surface = false
+        keybind = super+t=unbind
+        # Ghostty registers Cmd+1...8 as both character and physical bindings.
+        keybind = super+1=unbind
+        keybind = super+digit_1=unbind
+        keybind = super+2=unbind
+        keybind = super+digit_2=unbind
+        keybind = super+3=unbind
+        keybind = super+digit_3=unbind
+        keybind = super+4=unbind
+        keybind = super+digit_4=unbind
+        keybind = super+5=unbind
+        keybind = super+digit_5=unbind
+        keybind = super+6=unbind
+        keybind = super+digit_6=unbind
+        keybind = super+7=unbind
+        keybind = super+digit_7=unbind
+        keybind = super+8=unbind
+        keybind = super+digit_8=unbind
+        keybind = super+9=unbind
+        keybind = super+[=unbind
+        keybind = super+]=unbind
+        keybind = super+,=unbind
+        keybind = super+d=unbind
+        keybind = super+shift+d=unbind
+        keybind = super+w=unbind
         """
         try Data(contents.utf8).write(to: url, options: .atomic)
         try FileManager.default.setAttributes(
