@@ -9,6 +9,8 @@ struct WorkSessionTabPresentationTests {
     func placeholderTitleOmitsTime() {
         let presentation = WorkSessionTabPresentation(
             session: placeholderSession,
+            index: 0,
+            isSelected: true,
             placeholderTitle: "新会话"
         )
 
@@ -17,23 +19,40 @@ struct WorkSessionTabPresentationTests {
 
     @Test("only the selected first nine tabs expose their command number")
     func selectedTabShowsCommandNumber() {
-        let presentation = WorkSessionTabPresentation(
+        let selected = WorkSessionTabPresentation(
             session: placeholderSession,
+            index: 2,
+            isSelected: true,
+            placeholderTitle: "新会话"
+        )
+        let unselected = WorkSessionTabPresentation(
+            session: placeholderSession,
+            index: 2,
+            isSelected: false,
+            placeholderTitle: "新会话"
+        )
+        let tenth = WorkSessionTabPresentation(
+            session: placeholderSession,
+            index: 9,
+            isSelected: true,
             placeholderTitle: "新会话"
         )
 
-        #expect(presentation.shortcutLabel(at: 2, isSelected: true) == "⌘3")
-        #expect(presentation.shortcutLabel(at: 2, isSelected: false) == nil)
-        #expect(presentation.shortcutLabel(at: 9, isSelected: true) == nil)
+        #expect(selected.shortcutLabel == "⌘3")
+        #expect(unselected.shortcutLabel == nil)
+        #expect(tenth.shortcutLabel == nil)
     }
 
-    @Test("an existing non-placeholder title remains visible")
-    func existingTitleRemainsVisible() {
+    @Test("an Agent native title remains visible")
+    func agentNativeTitleRemainsVisible() {
         var session = placeholderSession
         session.title = "修复登录流程"
+        session.titleSource = .agentNative
 
         let presentation = WorkSessionTabPresentation(
             session: session,
+            index: 0,
+            isSelected: true,
             placeholderTitle: "新会话"
         )
 

@@ -879,18 +879,19 @@ private struct StateDot: View {
 
 struct WorkSessionTabPresentation: Equatable {
     let title: String
+    let shortcutLabel: String?
 
-    init(session: WorkSession, placeholderTitle: String) {
-        let hasTimedPlaceholder = session.titleSource == nil
-            && session.title.hasPrefix("新会话 · ")
-        title = hasTimedPlaceholder ? placeholderTitle : session.title
-    }
-
-    func shortcutLabel(at index: Int, isSelected: Bool) -> String? {
-        guard isSelected, BreathShortcut.workSessionTabs.indices.contains(index) else {
-            return nil
-        }
-        return "⌘\(index + 1)"
+    init(
+        session: WorkSession,
+        index: Int,
+        isSelected: Bool,
+        placeholderTitle: String
+    ) {
+        title = session.titleSource == nil ? placeholderTitle : session.title
+        shortcutLabel = isSelected
+            && BreathShortcut.workSessionTabs.indices.contains(index)
+            ? "⌘\(index + 1)"
+            : nil
     }
 }
 
@@ -956,11 +957,9 @@ private struct WorkSessionTabBar: View {
         let showsArchive = isSelected || hoveredSessionID == session.id
         let presentation = WorkSessionTabPresentation(
             session: session,
+            index: index,
+            isSelected: isSelected,
             placeholderTitle: localizer.string("新会话")
-        )
-        let shortcutLabel = presentation.shortcutLabel(
-            at: index,
-            isSelected: isSelected
         )
         return HStack(spacing: 0) {
             Button {
@@ -972,7 +971,7 @@ private struct WorkSessionTabBar: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer(minLength: 0)
-                    if let shortcutLabel {
+                    if let shortcutLabel = presentation.shortcutLabel {
                         Text(shortcutLabel)
                             .font(
                                 .system(
