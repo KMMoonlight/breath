@@ -156,6 +156,9 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         let palette = colors.ansiColors.enumerated()
             .map { "palette = \($0.offset)=\($0.element.ghosttyHex)" }
             .joined(separator: "\n")
+        let shortcutUnbinds = BreathShortcut.terminalFirst
+            .flatMap(\.ghosttyUnbindConfigurationLines)
+            .joined(separator: "\n")
         let contents = """
         font-family = \(fontFamily)
         font-size = \(settings.fontSize)
@@ -170,31 +173,8 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         window-vsync = \(synchronizeRendering)
         window-decoration = false
         confirm-close-surface = false
-        keybind = super+t=unbind
-        # Ghostty registers Cmd+1...8 as both character and physical bindings.
-        keybind = super+1=unbind
-        keybind = super+digit_1=unbind
-        keybind = super+2=unbind
-        keybind = super+digit_2=unbind
-        keybind = super+3=unbind
-        keybind = super+digit_3=unbind
-        keybind = super+4=unbind
-        keybind = super+digit_4=unbind
-        keybind = super+5=unbind
-        keybind = super+digit_5=unbind
-        keybind = super+6=unbind
-        keybind = super+digit_6=unbind
-        keybind = super+7=unbind
-        keybind = super+digit_7=unbind
-        keybind = super+8=unbind
-        keybind = super+digit_8=unbind
-        keybind = super+9=unbind
-        keybind = super+[=unbind
-        keybind = super+]=unbind
-        keybind = super+,=unbind
-        keybind = super+d=unbind
-        keybind = super+shift+d=unbind
-        keybind = super+w=unbind
+        # Breath owns these shortcuts; Ghostty host actions must not consume them.
+        \(shortcutUnbinds)
         """
         try Data(contents.utf8).write(to: url, options: .atomic)
         try FileManager.default.setAttributes(
@@ -207,6 +187,25 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
 private extension TerminalRGBColor {
     var ghosttyHex: String {
         String(format: "#%02X%02X%02X", red, green, blue)
+    }
+}
+
+private extension BreathShortcut {
+    var ghosttyUnbindConfigurationLines: [String] {
+        var modifierNames: [String] = []
+        if modifiers.contains(.command) { modifierNames.append("super") }
+        if modifiers.contains(.control) { modifierNames.append("ctrl") }
+        if modifiers.contains(.option) { modifierNames.append("alt") }
+        if modifiers.contains(.shift) { modifierNames.append("shift") }
+
+        var keys = [String(character)]
+        if let digit = character.wholeNumberValue {
+            // Ghostty registers numbered tabs as Unicode and physical keys.
+            keys.append("digit_\(digit)")
+        }
+        return keys.map { key in
+            "keybind = \((modifierNames + [key]).joined(separator: "+"))=unbind"
+        }
     }
 }
 

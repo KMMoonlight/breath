@@ -108,24 +108,43 @@ private extension NSFontManager {
 }
 
 @MainActor
+private struct LibghosttyTestFixture {
+    let engine: GhosttyTerminalEngine
+    private let window: NSWindow
+    private let directory: URL
+
+    init(directoryPrefix: String) throws {
+        _ = NSApplication.shared
+        window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.makeKeyAndOrderFront(nil)
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "\(directoryPrefix)-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        engine = try GhosttyTerminalEngine(
+            configurationDirectory: directory,
+            agentSocketURL: directory.appendingPathComponent("events.sock"),
+            synchronizeRendering: false
+        )
+    }
+
+    func tearDown() {
+        window.close()
+        try? FileManager.default.removeItem(at: directory)
+    }
+}
+
+@MainActor
 private func verifyLibghosttySurface() async throws {
-    _ = NSApplication.shared
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
-        styleMask: [.titled],
-        backing: .buffered,
-        defer: false
-    )
-    window.makeKeyAndOrderFront(nil)
-    defer { window.close() }
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("breath-ghostty-\(UUID().uuidString)", isDirectory: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let engine = try GhosttyTerminalEngine(
-        configurationDirectory: directory,
-        agentSocketURL: directory.appendingPathComponent("events.sock"),
-        synchronizeRendering: false
-    )
+    let fixture = try LibghosttyTestFixture(directoryPrefix: "breath-ghostty")
+    defer { fixture.tearDown() }
+    let engine = fixture.engine
     guard engine.usesLibghostty else { return }
 
     let paneID = TerminalPaneID(rawValue: UUID())
@@ -165,26 +184,11 @@ private func verifyLibghosttySurface() async throws {
 
 @MainActor
 private func verifyLibghosttyShortcutArbitration() async throws {
-    _ = NSApplication.shared
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
-        styleMask: [.titled],
-        backing: .buffered,
-        defer: false
+    let fixture = try LibghosttyTestFixture(
+        directoryPrefix: "breath-ghostty-shortcuts"
     )
-    window.makeKeyAndOrderFront(nil)
-    defer { window.close() }
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent(
-            "breath-ghostty-shortcuts-\(UUID().uuidString)",
-            isDirectory: true
-        )
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let engine = try GhosttyTerminalEngine(
-        configurationDirectory: directory,
-        agentSocketURL: directory.appendingPathComponent("events.sock"),
-        synchronizeRendering: false
-    )
+    defer { fixture.tearDown() }
+    let engine = fixture.engine
     guard engine.usesLibghostty else { return }
 
     let shellPaneID = TerminalPaneID(rawValue: UUID())
@@ -197,31 +201,34 @@ private func verifyLibghosttyShortcutArbitration() async throws {
             environment: [:]
         )
     )
-    let breathShortcuts: [(String, UInt16, NSEvent.ModifierFlags)] = [
-        ("t", 17, [.command]),
-        ("1", 18, [.command]),
-        ("2", 19, [.command]),
-        ("3", 20, [.command]),
-        ("4", 21, [.command]),
-        ("5", 23, [.command]),
-        ("6", 22, [.command]),
-        ("7", 26, [.command]),
-        ("8", 28, [.command]),
-        ("9", 25, [.command]),
-        ("[", 33, [.command]),
-        ("]", 30, [.command]),
-        (",", 43, [.command]),
-        ("d", 2, [.command]),
-        ("D", 2, [.command, .shift]),
-        ("w", 13, [.command]),
+    let shortcutKeyCodes: [Character: UInt16] = [
+        "t": 17,
+        "1": 18,
+        "2": 19,
+        "3": 20,
+        "4": 21,
+        "5": 23,
+        "6": 22,
+        "7": 26,
+        "8": 28,
+        "9": 25,
+        "[": 33,
+        "]": 30,
+        ",": 43,
+        "d": 2,
+        "w": 13,
     ]
-    for (characters, keyCode, modifiers) in breathShortcuts {
-        let shortcut = try #require(shortcutKeyEvent(
+    for shortcut in BreathShortcut.terminalFirst {
+        let keyCode = try #require(shortcutKeyCodes[shortcut.character])
+        let characters = shortcut.modifiers.contains(.shift)
+            ? String(shortcut.character).uppercased()
+            : String(shortcut.character)
+        let event = try #require(shortcutKeyEvent(
             characters,
             keyCode: keyCode,
-            modifiers: modifiers
+            modifiers: shortcut.modifiers.nsEventModifierFlags
         ))
-        #expect(!engine.handleShortcutKeyDown(shortcut, for: shellPaneID))
+        #expect(!engine.handleShortcutKeyDown(event, for: shellPaneID))
     }
     await engine.close(shellPaneID)
 
@@ -270,6 +277,17 @@ private func shortcutKeyEvent(
         isARepeat: false,
         keyCode: keyCode
     )
+}
+
+private extension BreathShortcut.Modifiers {
+    var nsEventModifierFlags: NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if contains(.command) { flags.insert(.command) }
+        if contains(.option) { flags.insert(.option) }
+        if contains(.control) { flags.insert(.control) }
+        if contains(.shift) { flags.insert(.shift) }
+        return flags
+    }
 }
 
 private actor RecordingTerminalEngine: TerminalEngine {

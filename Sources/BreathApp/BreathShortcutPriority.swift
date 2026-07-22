@@ -6,9 +6,14 @@ struct BreathShortcutDefinition {
     let character: Character
     let modifiers: EventModifiers
 
-    init(_ character: Character, modifiers: EventModifiers) {
-        self.character = character
-        self.modifiers = modifiers
+    init(_ shortcut: BreathShortcut) {
+        character = shortcut.character
+        var eventModifiers: EventModifiers = []
+        if shortcut.modifiers.contains(.command) { eventModifiers.insert(.command) }
+        if shortcut.modifiers.contains(.option) { eventModifiers.insert(.option) }
+        if shortcut.modifiers.contains(.control) { eventModifiers.insert(.control) }
+        if shortcut.modifiers.contains(.shift) { eventModifiers.insert(.shift) }
+        modifiers = eventModifiers
     }
 
     var keyboardShortcut: KeyboardShortcut {
@@ -47,38 +52,28 @@ struct WorkSessionTabShortcut: Identifiable {
 }
 
 enum BreathShortcutCatalog {
-    static let newWorkSession = BreathShortcutDefinition("t", modifiers: [.command])
-    static let workSessionTabs = (1...9).map { number in
-        WorkSessionTabShortcut(
-            selectionIndex: number - 1,
-            displayNumber: number,
-            shortcut: BreathShortcutDefinition(
-                Character(String(number)),
-                modifiers: [.command]
+    static let newWorkSession = BreathShortcutDefinition(.newWorkSession)
+    static let workSessionTabs = BreathShortcut.workSessionTabs
+        .enumerated()
+        .map { offset, shortcut in
+            WorkSessionTabShortcut(
+                selectionIndex: offset,
+                displayNumber: offset + 1,
+                shortcut: BreathShortcutDefinition(shortcut)
             )
-        )
-    }
-    static let previousPane = BreathShortcutDefinition("[", modifiers: [.command])
-    static let nextPane = BreathShortcutDefinition("]", modifiers: [.command])
-    static let openSettings = BreathShortcutDefinition(",", modifiers: [.command])
-    static let splitHorizontally = BreathShortcutDefinition("d", modifiers: [.command])
-    static let splitVertically = BreathShortcutDefinition(
-        "d",
-        modifiers: [.command, .shift]
+        }
+    static let previousPane = BreathShortcutDefinition(.previousPane)
+    static let nextPane = BreathShortcutDefinition(.nextPane)
+    static let openSettings = BreathShortcutDefinition(.openSettings)
+    static let splitHorizontally = BreathShortcutDefinition(.splitHorizontally)
+    static let splitVertically = BreathShortcutDefinition(.splitVertically)
+    static let closePane = BreathShortcutDefinition(.closePane)
+    private static let terminalFirst = BreathShortcut.terminalFirst.map(
+        BreathShortcutDefinition.init
     )
-    static let closePane = BreathShortcutDefinition("w", modifiers: [.command])
 
     static func matchesTerminalFirstShortcut(_ event: NSEvent) -> Bool {
-        let definitions = [
-            newWorkSession,
-            previousPane,
-            nextPane,
-            openSettings,
-            splitHorizontally,
-            splitVertically,
-            closePane,
-        ] + workSessionTabs.map(\.shortcut)
-        return definitions.contains { $0.matches(event) }
+        terminalFirst.contains { $0.matches(event) }
     }
 }
 
