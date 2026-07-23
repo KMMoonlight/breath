@@ -276,6 +276,7 @@
 "克隆到新目录" = "Clone into New Directory";
 "跨重启保存 Git Console" = "Persist Git Console Across Restarts";
 "快捷键冲突" = "Shortcut Conflict";
+"关闭当前分屏或工作会话" = "Close Current Pane or Work Session";
 "终端中的快捷键" = "Shortcuts in Terminal";
 "快捷键优先级" = "Shortcut Priority";
 "Breath 优先" = "Breath First";

@@ -66,6 +66,23 @@ private struct BreathDesktopApp: App {
                     priority: model.shortcutPriority
                 )
                 .disabled(!model.canPerformCommands || model.currentWorkspaceID == nil)
+
+                Divider()
+
+                Button(localizer.string("关闭当前分屏或工作会话")) {
+                    NotificationCenter.default.post(
+                        name: .breathCloseTerminalTarget,
+                        object: nil
+                    )
+                }
+                .breathKeyboardShortcut(
+                    BreathShortcutCatalog.closePane,
+                    priority: model.shortcutPriority
+                )
+                .disabled(
+                    !model.canPerformCommands
+                        || model.snapshot.selectedWorkSessionID == nil
+                )
             }
             CommandMenu(localizer.string("导航")) {
                 ForEach(BreathShortcutCatalog.workSessionTabs) { tab in

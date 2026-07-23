@@ -185,6 +185,50 @@ struct TerminalKeyboardShortcutTests {
         )
     }
 
+    @Test("close shortcut closes the work-session tab when no split exists")
+    func closeShortcutTargetsSinglePaneSession() {
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let paneID = TerminalPaneID(rawValue: UUID())
+        let session = WorkSession(
+            id: sessionID,
+            workspaceID: WorkspaceID(rawValue: UUID()),
+            title: "Single pane",
+            pane: TerminalPane(id: paneID)
+        )
+
+        #expect(
+            TerminalCloseShortcutResolver.target(
+                for: session,
+                preferredPaneID: paneID
+            ) == .workSession(sessionID)
+        )
+    }
+
+    @Test("close shortcut closes the focused pane when the session is split")
+    func closeShortcutTargetsFocusedSplitPane() {
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let firstPaneID = TerminalPaneID(rawValue: UUID())
+        let secondPaneID = TerminalPaneID(rawValue: UUID())
+        let session = WorkSession(
+            id: sessionID,
+            workspaceID: WorkspaceID(rawValue: UUID()),
+            title: "Split",
+            layout: .split(
+                orientation: .horizontal,
+                fraction: 0.5,
+                first: .pane(TerminalPane(id: firstPaneID)),
+                second: .pane(TerminalPane(id: secondPaneID))
+            )
+        )
+
+        #expect(
+            TerminalCloseShortcutResolver.target(
+                for: session,
+                preferredPaneID: secondPaneID
+            ) == .pane(secondPaneID)
+        )
+    }
+
     @MainActor
     @Test("terminal focus moves input to the requested pane")
     func terminalFocusMovesInputToRequestedPane() {

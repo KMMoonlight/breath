@@ -91,6 +91,9 @@ struct WorkbenchView: View {
         .onReceive(NotificationCenter.default.publisher(for: .breathSelectNextPane)) { _ in
             focusAdjacentPane(previous: false)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .breathCloseTerminalTarget)) { _ in
+            closeTerminalTarget()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .breathGitCommit)) { _ in
             guard GitWorkbenchReleaseGate.isEnabled else { return }
             guard let workspaceID = model.currentWorkspaceID,
@@ -582,6 +585,32 @@ struct WorkbenchView: View {
             }
             ?? session.layout.paneIDs.first
         selectWorkSession(sessionID)
+    }
+
+    private func closeTerminalTarget() {
+        guard detailMode == .workspace,
+              let selectedSessionID = model.snapshot.selectedWorkSessionID,
+              let session = model.snapshot.activeWorkSessions.first(where: {
+                  $0.id == selectedSessionID
+              })
+        else {
+            return
+        }
+        let preferredPaneID = [
+            model.shortcutPriority.focusedTerminalPaneID,
+            model.shortcutPriority.lastFocusedTerminalPaneID(in: session.id),
+        ]
+        .compactMap { $0 }
+        .first(where: { session.layout.paneIDs.contains($0) })
+        switch TerminalCloseShortcutResolver.target(
+            for: session,
+            preferredPaneID: preferredPaneID
+        ) {
+        case .pane(let paneID):
+            model.closePane(paneID)
+        case .workSession:
+            pendingArchive = session
+        }
     }
 
     private func focusAdjacentPane(previous: Bool) {
@@ -1260,6 +1289,9 @@ extension Notification.Name {
     )
     static let breathSelectPreviousPane = Notification.Name("Breath.SelectPreviousPane")
     static let breathSelectNextPane = Notification.Name("Breath.SelectNextPane")
+    static let breathCloseTerminalTarget = Notification.Name(
+        "Breath.CloseTerminalTarget"
+    )
     static let breathGitCommit = Notification.Name("Breath.GitCommit")
     static let breathGitPush = Notification.Name("Breath.GitPush")
     static let breathGitPreviousDifference = Notification.Name(
@@ -2218,11 +2250,6 @@ private struct TerminalPaneView: View {
                             .foregroundStyle(.primary)
                     }
                     .disabled(isClosing)
-                    .breathKeyboardShortcut(
-                        BreathShortcutCatalog.closePane,
-                        priority: model.shortcutPriority,
-                        targeting: pane.id
-                    )
                     .help(localizer.string("关闭窗格（⌘W）"))
                 }
             }

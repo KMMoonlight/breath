@@ -68,7 +68,7 @@ struct BreathSettingsView: View {
         ShortcutReference(action: "下一个分屏", keys: "⌘]"),
         ShortcutReference(action: "横向分屏", keys: "⌘D"),
         ShortcutReference(action: "纵向分屏", keys: "⌘⇧D"),
-        ShortcutReference(action: "关闭当前分屏终端", keys: "⌘W"),
+        ShortcutReference(action: "关闭当前分屏或工作会话", keys: "⌘W"),
     ]
 
     @Environment(\.colorScheme) private var colorScheme

@@ -101,6 +101,27 @@ enum BreathShortcutCatalog {
     }
 }
 
+enum TerminalCloseShortcutTarget: Equatable {
+    case pane(TerminalPaneID)
+    case workSession(WorkSessionID)
+}
+
+enum TerminalCloseShortcutResolver {
+    static func target(
+        for session: WorkSession,
+        preferredPaneID: TerminalPaneID?
+    ) -> TerminalCloseShortcutTarget {
+        let paneIDs = session.layout.paneIDs
+        guard paneIDs.count > 1 else {
+            return .workSession(session.id)
+        }
+        let paneID = preferredPaneID.flatMap { preferredPaneID in
+            paneIDs.contains(preferredPaneID) ? preferredPaneID : nil
+        } ?? paneIDs[0]
+        return .pane(paneID)
+    }
+}
+
 struct BreathShortcutPriority: Equatable {
     private(set) var focusedTerminalPaneID: TerminalPaneID?
     private(set) var lastFocusedTerminalPaneID: TerminalPaneID?
