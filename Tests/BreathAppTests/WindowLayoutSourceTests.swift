@@ -1272,6 +1272,40 @@ struct WindowLayoutSourceTests {
         #expect(!settingsSource.contains(".formStyle(.grouped)"))
     }
 
+    @Test("workspace removal preserves the repository inventory index first")
+    func workspaceRemovalPreservesInventoryIndex() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/BreathApplicationModel.swift"
+            ),
+            encoding: .utf8
+        )
+        let removalStart = try #require(
+            source.range(of: "func removeWorkspace(_ id: WorkspaceID)")
+        )
+        let settingsStart = try #require(
+            source.range(
+                of: "func saveApplicationSettings(",
+                range: removalStart.upperBound..<source.endIndex
+            )
+        )
+        let removalSource = source[
+            removalStart.lowerBound..<settingsStart.lowerBound
+        ]
+
+        #expect(
+            removalSource.contains(
+                ".preserveInventoryRepository("
+            )
+        )
+        #expect(removalSource.contains("knownWorktrees: knownWorktrees"))
+        #expect(removalSource.contains("workbench.removeWorkspace(id)"))
+    }
+
     @Test("workspace disclosure keeps balanced icon spacing")
     func workspaceDisclosureKeepsBalancedIconSpacing() throws {
         let root = URL(

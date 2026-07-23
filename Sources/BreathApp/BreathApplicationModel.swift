@@ -394,7 +394,20 @@ final class BreathApplicationModel: ObservableObject {
     }
 
     func removeWorkspace(_ id: WorkspaceID) {
-        perform { try await self.workbench.removeWorkspace(id) }
+        let workspace = snapshot.workspaces.first { $0.id == id }
+        let knownWorktrees = snapshot.workSessions
+            .filter { $0.workspaceID == id }
+            .compactMap(\.managedWorktree)
+        perform {
+            if let workspace {
+                _ = try await self.managedWorktreeService
+                    .preserveInventoryRepository(
+                        for: workspace,
+                        knownWorktrees: knownWorktrees
+                    )
+            }
+            try await self.workbench.removeWorkspace(id)
+        }
     }
 
     func saveApplicationSettings(_ application: ApplicationSettings) {

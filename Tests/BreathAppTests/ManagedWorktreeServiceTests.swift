@@ -166,6 +166,136 @@ struct ManagedWorktreeServiceTests {
         )
     }
 
+    @Test("inventory reports a missing known checkout once as unavailable")
+    func inventoryReportsMissingKnownCheckoutOnce() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = ManagedWorktree.sessionBranchName(for: sessionID)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: branchName
+        )
+        try await service.remove(worktree)
+
+        let inventory = await service.inventory(
+            workspaces: [],
+            knownWorktrees: [worktree]
+        )
+        let sessionItems = inventory.items.filter {
+            $0.branchName == branchName
+        }
+
+        #expect(sessionItems.count == 1)
+        #expect(sessionItems.first?.directoryPath == nil)
+        #expect(sessionItems.first?.state == .unavailable)
+    }
+
+    @Test("inventory keeps a switched known checkout as one tracked session")
+    func inventoryKeepsSwitchedKnownCheckoutTracked() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = ManagedWorktree.sessionBranchName(for: sessionID)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: branchName
+        )
+        _ = try fixture.git([
+            "-C", worktree.rootPath,
+            "switch", "-c", "feature/switched",
+        ])
+
+        let inventory = await service.inventory(
+            workspaces: [workspace],
+            knownWorktrees: [worktree]
+        )
+        let checkoutItems = inventory.items.filter {
+            $0.directoryPath == worktree.rootPath
+        }
+
+        #expect(checkoutItems.count == 1)
+        #expect(checkoutItems.first?.branchName == branchName)
+        #expect(checkoutItems.first?.state == .tracked)
+    }
+
+    @Test("inventory separates a stale session path from the actual checkout")
+    func inventorySeparatesStalePathFromActualCheckout() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = ManagedWorktree.sessionBranchName(for: sessionID)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: branchName
+        )
+        let staleWorktree = ManagedWorktree(
+            workspaceID: worktree.workspaceID,
+            workSessionID: worktree.workSessionID,
+            rootPath: fixture.managedRootURL
+                .appendingPathComponent("stale", isDirectory: true).path,
+            gitCommonDirectory: worktree.gitCommonDirectory,
+            baselineCommit: worktree.baselineCommit,
+            workspaceRelativePath: worktree.workspaceRelativePath,
+            branchName: worktree.branchName,
+            createdBranch: worktree.createdBranch
+        )
+
+        let inventory = await service.inventory(
+            workspaces: [workspace],
+            knownWorktrees: [staleWorktree]
+        )
+
+        #expect(
+            inventory.items.contains {
+                $0.branchName == branchName
+                    && $0.directoryPath.map {
+                        URL(fileURLWithPath: $0)
+                            .resolvingSymlinksInPath()
+                            .standardizedFileURL.path
+                            == URL(fileURLWithPath: worktree.rootPath)
+                                .resolvingSymlinksInPath()
+                                .standardizedFileURL.path
+                    } == true
+                    && $0.state == .orphanedCheckout
+            }
+        )
+        #expect(
+            inventory.items.contains {
+                $0.branchName == branchName
+                    && $0.directoryPath == nil
+                    && $0.state == .unavailable
+            }
+        )
+    }
+
     @Test("inventory uses a known checkout when its workspace is unavailable")
     func inventoryUsesKnownCheckoutWhenWorkspaceUnavailable() async throws {
         let fixture = try GitWorktreeFixture()
@@ -228,6 +358,92 @@ struct ManagedWorktreeServiceTests {
         )
     }
 
+    @Test("inventory revalidates a known checkout before marking it tracked")
+    func inventoryRevalidatesKnownCheckout() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = ManagedWorktree.sessionBranchName(for: sessionID)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: branchName
+        )
+        try FileManager.default.removeItem(
+            at: URL(
+                fileURLWithPath: worktree.workingDirectory,
+                isDirectory: true
+            )
+        )
+
+        let inventory = await service.inventory(
+            workspaces: [workspace],
+            knownWorktrees: [worktree]
+        )
+
+        #expect(
+            inventory.items.contains {
+                $0.branchName == branchName
+                    && $0.directoryPath == worktree.rootPath
+                    && $0.state == .unavailable
+            }
+        )
+        #expect(!inventory.warnings.isEmpty)
+    }
+
+    @Test("inventory requires managed path ownership before marking tracked")
+    func inventoryRequiresManagedPathOwnership() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = ManagedWorktree.sessionBranchName(for: sessionID)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: branchName
+        )
+        let mismatchedOwner = ManagedWorktree(
+            workspaceID: WorkspaceID(rawValue: UUID()),
+            workSessionID: worktree.workSessionID,
+            rootPath: worktree.rootPath,
+            gitCommonDirectory: worktree.gitCommonDirectory,
+            baselineCommit: worktree.baselineCommit,
+            workspaceRelativePath: worktree.workspaceRelativePath,
+            branchName: worktree.branchName,
+            createdBranch: worktree.createdBranch
+        )
+
+        let inventory = await service.inventory(
+            workspaces: [workspace],
+            knownWorktrees: [mismatchedOwner]
+        )
+
+        #expect(
+            inventory.items.contains {
+                $0.branchName == branchName
+                    && $0.directoryPath == worktree.rootPath
+                    && $0.state == .unavailable
+            }
+        )
+        #expect(!inventory.warnings.isEmpty)
+    }
+
     @Test("inventory exposes an unregistered managed directory")
     func inventoryExposesUnregisteredManagedDirectory() async throws {
         let fixture = try GitWorktreeFixture()
@@ -271,6 +487,261 @@ struct ManagedWorktreeServiceTests {
             }
         )
         #expect(!inventory.warnings.isEmpty)
+        #expect(
+            inventory.warnings.allSatisfy {
+                !$0.localizedCaseInsensitiveContains("fatal:")
+                    && !$0.localizedCaseInsensitiveContains(
+                        "not a git repository"
+                    )
+            }
+        )
+    }
+
+    @Test("inventory scan does not create a repository index")
+    func inventoryScanIsReadOnly() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let repositoryIndexURL = fixture.managedRootURL
+            .appendingPathComponent(".repositories.json")
+
+        _ = await service.inventory(
+            workspaces: [
+                Workspace(
+                    id: WorkspaceID(rawValue: UUID()),
+                    path: fixture.workspaceURL.path,
+                    displayName: "client"
+                ),
+            ],
+            knownWorktrees: []
+        )
+
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: repositoryIndexURL.path
+            )
+        )
+    }
+
+    @Test("workspace removal preparation preserves pre-index Breath branches")
+    func workspaceRemovalPreparationPreservesExistingBranches() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let branchName = ManagedWorktree.sessionBranchName(
+            for: WorkSessionID(rawValue: UUID())
+        )
+        _ = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "branch", branchName,
+        ])
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+
+        let didPreserve = try await service
+            .preserveInventoryRepository(
+                for: workspace,
+                knownWorktrees: []
+            )
+        let inventory = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+
+        #expect(didPreserve)
+        #expect(
+            inventory.items.contains {
+                $0.branchName == branchName
+                    && $0.state == .branchOnly
+            }
+        )
+    }
+
+    @Test("removal preparation can preserve from an existing managed checkout")
+    func removalPreparationUsesManagedCheckoutWhenWorkspaceMissing()
+        async throws
+    {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = ManagedWorktree.sessionBranchName(for: sessionID)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: branchName
+        )
+        try FileManager.default.removeItem(
+            at: fixture.managedRootURL.appendingPathComponent(
+                ".repositories.json"
+            )
+        )
+        let unavailableWorkspace = Workspace(
+            id: workspace.id,
+            path: fixture.rootURL.appendingPathComponent("missing").path,
+            displayName: workspace.displayName
+        )
+
+        let didPreserve = try await service.preserveInventoryRepository(
+            for: unavailableWorkspace,
+            knownWorktrees: [worktree]
+        )
+        try await service.remove(worktree)
+        let inventory = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+
+        #expect(didPreserve)
+        #expect(
+            inventory.items.contains {
+                $0.branchName == branchName
+                    && $0.directoryPath == nil
+                    && $0.state == .branchOnly
+            }
+        )
+    }
+
+    @Test("repository index refuses a managed root replaced by a symlink")
+    func repositoryIndexRejectsSymlinkedManagedRoot() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let externalURL = fixture.rootURL.appendingPathComponent(
+            "external-index-target",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: externalURL,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: fixture.managedRootURL,
+            withDestinationURL: externalURL
+        )
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+
+        await #expect(
+            throws: ManagedWorktreeServiceError.unsafeManagedPath(
+                fixture.managedRootURL.path
+            )
+        ) {
+            try await service.preserveInventoryRepository(
+                for: workspace,
+                knownWorktrees: []
+            )
+        }
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: externalURL
+                    .appendingPathComponent(".repositories.json").path
+            )
+        )
+    }
+
+    @Test("repository index rejects a managed root symlink present at startup")
+    func repositoryIndexRejectsStartupSymlinkedManagedRoot() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let externalURL = fixture.rootURL.appendingPathComponent(
+            "startup-index-target",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: externalURL,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: fixture.managedRootURL,
+            withDestinationURL: externalURL
+        )
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+
+        await #expect(
+            throws: ManagedWorktreeServiceError.unsafeManagedPath(
+                fixture.managedRootURL.path
+            )
+        ) {
+            try await service.preserveInventoryRepository(
+                for: workspace,
+                knownWorktrees: []
+            )
+        }
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: externalURL
+                    .appendingPathComponent(".repositories.json").path
+            )
+        )
+    }
+
+    @Test("removal preparation rejects an unpreservable known repository")
+    func removalPreparationRejectsUnpreservableKnownRepository() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let workspace = Workspace(
+            id: workspaceID,
+            path: fixture.rootURL.appendingPathComponent("missing").path,
+            displayName: "client"
+        )
+        let knownWorktree = ManagedWorktree(
+            workspaceID: workspaceID,
+            workSessionID: sessionID,
+            rootPath: fixture.managedRootURL
+                .appendingPathComponent(
+                    workspaceID.rawValue.uuidString,
+                    isDirectory: true
+                )
+                .appendingPathComponent(
+                    sessionID.rawValue.uuidString,
+                    isDirectory: true
+                ).path,
+            gitCommonDirectory: fixture.rootURL
+                .appendingPathComponent("missing-git-common").path,
+            baselineCommit: String(repeating: "0", count: 40),
+            workspaceRelativePath: "",
+            branchName: ManagedWorktree.sessionBranchName(for: sessionID),
+            createdBranch: true
+        )
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+
+        await #expect(throws: ManagedWorktreeServiceError.self) {
+            try await service.preserveInventoryRepository(
+                for: workspace,
+                knownWorktrees: [knownWorktree]
+            )
+        }
     }
 
     @Test("rejects detached HEAD instead of selecting an unrelated branch")
