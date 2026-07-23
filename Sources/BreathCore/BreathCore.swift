@@ -1041,13 +1041,8 @@ public actor Workbench {
     }
 
     public func selectWorkSession(_ workSessionID: WorkSessionID) async throws {
-        await managedWorktreeLifecycleGate.acquire()
-        do {
+        try await withManagedWorktreeLifecycleGate {
             try await selectWorkSessionWithoutAcquiringGate(workSessionID)
-            await managedWorktreeLifecycleGate.release()
-        } catch {
-            await managedWorktreeLifecycleGate.release()
-            throw error
         }
     }
 
@@ -1143,8 +1138,7 @@ public actor Workbench {
     }
 
     public func materializeSelectedWorkSession() async throws {
-        await managedWorktreeLifecycleGate.acquire()
-        do {
+        try await withManagedWorktreeLifecycleGate {
             if let selectedID = currentSnapshot.selectedWorkSessionID,
                !materializedWorkSessionIDs.contains(selectedID)
             {
@@ -1152,10 +1146,6 @@ public actor Workbench {
                     selectedID
                 )
             }
-            await managedWorktreeLifecycleGate.release()
-        } catch {
-            await managedWorktreeLifecycleGate.release()
-            throw error
         }
     }
 
@@ -1196,17 +1186,11 @@ public actor Workbench {
         _ paneID: TerminalPaneID,
         orientation: SplitOrientation
     ) async throws -> TerminalPaneID {
-        await managedWorktreeLifecycleGate.acquire()
-        do {
-            let newPaneID = try await splitPaneWithoutAcquiringGate(
+        try await withManagedWorktreeLifecycleGate {
+            try await splitPaneWithoutAcquiringGate(
                 paneID,
                 orientation: orientation
             )
-            await managedWorktreeLifecycleGate.release()
-            return newPaneID
-        } catch {
-            await managedWorktreeLifecycleGate.release()
-            throw error
         }
     }
 
@@ -1263,6 +1247,13 @@ public actor Workbench {
         )
 
         await ensureInputSubmissionMonitoring()
+        guard ownsTerminalPane(
+            paneID,
+            workSessionID: workSession.id,
+            workspaceID: workspace.id
+        ) else {
+            throw WorkbenchError.workSessionNotFound(workSession.id)
+        }
         try await terminalRuntime.launch(launch)
         guard let sessionIndex = currentSnapshot.workSessions.firstIndex(
             where: {
@@ -1763,53 +1754,35 @@ public actor Workbench {
                     )
                     recoveryFallbacks[pane.id] = fallback
                     do {
-                        try await terminalRuntime.launch(
+                        try await launchTerminalVerifyingOwnership(
                             TerminalLaunch(
                                 paneID: pane.id,
                                 workingDirectory: sessionWorkingDirectory,
                                 executable: command.executable,
                                 arguments: command.arguments,
                                 environment: environment
-                            )
-                        )
-                        guard ownsTerminalPane(
-                            pane.id,
+                            ),
                             workSessionID: workSessionID,
                             workspaceID: workspace.id
-                        ) else {
-                            removeRecoveryFallback(
-                                pane.id,
-                                token: fallback.token
-                            )
-                            await terminalRuntime.stop(paneID: pane.id)
-                            throw WorkbenchError.workSessionNotFound(
-                                workSessionID
-                            )
-                        }
+                        )
                         launchedPaneIDs.append(pane.id)
                     } catch {
                         removeRecoveryFallback(pane.id, token: fallback.token)
+                        guard ownsTerminalPane(
+                            pane.id,
+                            workSessionID: workSessionID,
+                            workspaceID: workspace.id
+                        ) else {
+                            throw WorkbenchError.workSessionNotFound(
+                                workSessionID
+                            )
+                        }
                         await terminalRuntime.stop(paneID: pane.id)
-                        guard ownsTerminalPane(
-                            pane.id,
+                        try await launchTerminalVerifyingOwnership(
+                            shellLaunch,
                             workSessionID: workSessionID,
                             workspaceID: workspace.id
-                        ) else {
-                            throw WorkbenchError.workSessionNotFound(
-                                workSessionID
-                            )
-                        }
-                        try await terminalRuntime.launch(shellLaunch)
-                        guard ownsTerminalPane(
-                            pane.id,
-                            workSessionID: workSessionID,
-                            workspaceID: workspace.id
-                        ) else {
-                            await terminalRuntime.stop(paneID: pane.id)
-                            throw WorkbenchError.workSessionNotFound(
-                                workSessionID
-                            )
-                        }
+                        )
                         launchedPaneIDs.append(pane.id)
                         snapshotChanged = markPaneIdle(
                             pane.id,
@@ -1818,17 +1791,11 @@ public actor Workbench {
                         latestOwnedSnapshot = currentSnapshot
                     }
                 } else {
-                    try await terminalRuntime.launch(shellLaunch)
-                    guard ownsTerminalPane(
-                        pane.id,
+                    try await launchTerminalVerifyingOwnership(
+                        shellLaunch,
                         workSessionID: workSessionID,
                         workspaceID: workspace.id
-                    ) else {
-                        await terminalRuntime.stop(paneID: pane.id)
-                        throw WorkbenchError.workSessionNotFound(
-                            workSessionID
-                        )
-                    }
+                    )
                     launchedPaneIDs.append(pane.id)
                     if pane.agentBinding != nil || pane.state != .idle {
                         snapshotChanged = markPaneIdle(
@@ -1868,6 +1835,22 @@ public actor Workbench {
         }
     }
 
+    private func launchTerminalVerifyingOwnership(
+        _ launch: TerminalLaunch,
+        workSessionID: WorkSessionID,
+        workspaceID: WorkspaceID
+    ) async throws {
+        try await terminalRuntime.launch(launch)
+        guard ownsTerminalPane(
+            launch.paneID,
+            workSessionID: workSessionID,
+            workspaceID: workspaceID
+        ) else {
+            await terminalRuntime.stop(paneID: launch.paneID)
+            throw WorkbenchError.workSessionNotFound(workSessionID)
+        }
+    }
+
     private func ownsTerminalPane(
         _ paneID: TerminalPaneID,
         workSessionID: WorkSessionID,
@@ -1881,6 +1864,20 @@ public actor Workbench {
                 && $0.archivedAt == nil
                 && $0.layout.paneIDs.contains(paneID)
         })
+    }
+
+    private func withManagedWorktreeLifecycleGate<Result>(
+        _ operation: () async throws -> Result
+    ) async rethrows -> Result {
+        await managedWorktreeLifecycleGate.acquire()
+        do {
+            let result = try await operation()
+            await managedWorktreeLifecycleGate.release()
+            return result
+        } catch {
+            await managedWorktreeLifecycleGate.release()
+            throw error
+        }
     }
 
     private func persistSnapshot(

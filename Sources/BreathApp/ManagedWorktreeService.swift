@@ -31,7 +31,7 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
     case unsupportedRepository(String)
     case managedPathAlreadyExists(String)
     case unsafeManagedPath(String)
-    case unsafeWorkspacePath(String)
+    case unsafeSessionWorkingDirectory(String)
     case repositoryIdentityMismatch(expected: String, actual: String)
     case checkoutCommitMismatch(expected: String, actual: String)
     case gitFailed(exitCode: Int32, output: String)
@@ -59,8 +59,8 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
             return "Worktree 托管目录已经存在：\(path)"
         case .unsafeManagedPath(let path):
             return "拒绝操作不属于 Breath 的 Worktree 路径：\(path)"
-        case .unsafeWorkspacePath(let path):
-            return "Worktree 工作区路径包含符号链接或逃出了检出根目录：\(path)"
+        case .unsafeSessionWorkingDirectory(let path):
+            return "会话工作目录包含符号链接或逃出了托管工作树根目录：\(path)"
         case .repositoryIdentityMismatch(let expected, let actual):
             return """
             Worktree 所属 Git 仓库与记录不一致。
@@ -371,7 +371,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                     actual: checkoutCommit
                 )
             }
-            try validateWorkspaceDirectory(worktree)
+            try validateSessionWorkingDirectory(worktree)
         } catch let creationError {
             try await throwAfterRollingBackCreation(
                 worktree,
@@ -406,7 +406,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             return false
         }
         do {
-            try validateWorkspaceDirectory(worktree)
+            try validateSessionWorkingDirectory(worktree)
             try await validateRepositoryIdentity(
                 worktree,
                 rootURL: rootURL
@@ -480,7 +480,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             return
         }
         try await validateRepositoryIdentity(worktree, rootURL: rootURL)
-        try validateWorkspaceDirectory(worktree)
+        try validateSessionWorkingDirectory(worktree)
         if case .locked(let reason) = try await worktreeLock(
             worktree,
             rootURL: rootURL
@@ -719,15 +719,11 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             throw ManagedWorktreeServiceError.unsafeManagedPath(rootURL.path)
         }
         let rootExists = FileManager.default.fileExists(atPath: rootURL.path)
-        guard rootExists || FileManager.default.fileExists(
-            atPath: worktree.gitCommonDirectory
-        ) else {
+        guard rootExists else {
             try removeEmptyManagedAncestors(startingAt: rootURL)
             return
         }
-        if rootExists {
-            try await validateRepositoryIdentity(worktree, rootURL: rootURL)
-        }
+        try await validateRepositoryIdentity(worktree, rootURL: rootURL)
         let result = try await runner.run(arguments: [
             "--git-dir=\(worktree.gitCommonDirectory)",
             "worktree", "remove", rootURL.path,
@@ -934,7 +930,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         }
     }
 
-    private func validateWorkspaceDirectory(
+    private func validateSessionWorkingDirectory(
         _ worktree: ManagedWorktree
     ) throws {
         let rootURL = URL(
@@ -942,7 +938,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             isDirectory: true
         ).standardizedFileURL
         guard !worktree.workspaceRelativePath.hasPrefix("/") else {
-            throw ManagedWorktreeServiceError.unsafeWorkspacePath(
+            throw ManagedWorktreeServiceError.unsafeSessionWorkingDirectory(
                 worktree.workingDirectory
             )
         }
@@ -953,13 +949,13 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         )
         for component in components {
             guard component != ".", component != ".." else {
-                throw ManagedWorktreeServiceError.unsafeWorkspacePath(
+                throw ManagedWorktreeServiceError.unsafeSessionWorkingDirectory(
                     worktree.workingDirectory
                 )
             }
             workspaceURL.appendPathComponent(String(component))
             if isSymbolicLink(workspaceURL) {
-                throw ManagedWorktreeServiceError.unsafeWorkspacePath(
+                throw ManagedWorktreeServiceError.unsafeSessionWorkingDirectory(
                     workspaceURL.path
                 )
             }
@@ -984,7 +980,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         guard resolvedWorkspace == resolvedRoot
                 || resolvedWorkspace.hasPrefix(rootPrefix)
         else {
-            throw ManagedWorktreeServiceError.unsafeWorkspacePath(
+            throw ManagedWorktreeServiceError.unsafeSessionWorkingDirectory(
                 workspaceURL.path
             )
         }

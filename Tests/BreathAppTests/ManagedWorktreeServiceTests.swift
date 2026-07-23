@@ -700,14 +700,14 @@ struct ManagedWorktreeServiceTests {
         )
     }
 
-    @Test("removing an externally deleted checkout also clears git metadata")
-    func missingCheckoutRemovalClearsGitMetadata() async throws {
+    @Test("a missing checkout is forgotten without trusting stored git metadata")
+    func missingCheckoutRemovalDoesNotUseStoredRepository() async throws {
         let fixture = try GitWorktreeFixture()
         defer { fixture.remove() }
-        let service = ManagedWorktreeService(
+        let creationService = ManagedWorktreeService(
             managedRootURL: fixture.managedRootURL
         )
-        let worktree = try await service.create(
+        let worktree = try await creationService.create(
             workspace: Workspace(
                 id: WorkspaceID(rawValue: UUID()),
                 path: fixture.workspaceURL.path,
@@ -719,11 +719,15 @@ struct ManagedWorktreeServiceTests {
         try FileManager.default.removeItem(
             at: URL(fileURLWithPath: worktree.rootPath, isDirectory: true)
         )
+        let removalService = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL,
+            gitExecutableURL: try fixture.gitWrapperRejectingAllCommands()
+        )
 
-        try await service.remove(worktree)
+        try await removalService.remove(worktree)
 
         #expect(
-            try !fixture.git([
+            try fixture.git([
                 "-C", fixture.repositoryURL.path,
                 "worktree", "list", "--porcelain",
             ]).contains(worktree.rootPath)
@@ -919,6 +923,18 @@ private struct GitWorktreeFixture {
         exit "$exit_code"
         """
         try Data(script.utf8).write(to: wrapperURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: wrapperURL.path
+        )
+        return wrapperURL
+    }
+
+    func gitWrapperRejectingAllCommands() throws -> URL {
+        let wrapperURL = rootURL.appendingPathComponent(
+            "git-wrapper-rejecting-all-commands"
+        )
+        try Data("#!/bin/sh\nexit 99\n".utf8).write(to: wrapperURL)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o700],
             ofItemAtPath: wrapperURL.path
