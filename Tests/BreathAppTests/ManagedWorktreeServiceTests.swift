@@ -256,6 +256,73 @@ struct ManagedWorktreeServiceTests {
             )
         )
     }
+
+    @Test("a failed git add is rolled back without leaving a managed checkout")
+    func failedGitAddRollsBackManagedCheckout() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL,
+            gitExecutableURL: try fixture.gitWrapperFailingAfterWorktreeAdd()
+        )
+        let expectedRoot = fixture.managedRootURL
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(workspaceID.rawValue.uuidString)
+            .appendingPathComponent(sessionID.rawValue.uuidString)
+            .path
+
+        await #expect(throws: ManagedWorktreeServiceError.self) {
+            try await service.create(
+                workspace: Workspace(
+                    id: workspaceID,
+                    path: fixture.workspaceURL.path,
+                    displayName: "client"
+                ),
+                workSessionID: sessionID,
+                branchName: "task/reported-failure"
+            )
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: expectedRoot))
+        #expect(
+            try !fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "worktree", "list", "--porcelain",
+            ]).contains(expectedRoot)
+        )
+    }
+
+    @Test("removing an externally deleted checkout also clears git metadata")
+    func missingCheckoutRemovalClearsGitMetadata() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: fixture.workspaceURL.path,
+                displayName: "client"
+            ),
+            workSessionID: WorkSessionID(rawValue: UUID()),
+            branchName: "task/missing-checkout"
+        )
+        try FileManager.default.removeItem(
+            at: URL(fileURLWithPath: worktree.rootPath, isDirectory: true)
+        )
+
+        try await service.remove(worktree)
+
+        #expect(
+            try !fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "worktree", "list", "--porcelain",
+            ]).contains(worktree.rootPath)
+        )
+    }
 }
 
 private struct GitWorktreeFixture {
@@ -293,6 +360,27 @@ private struct GitWorktreeFixture {
 
     func remove() {
         try? FileManager.default.removeItem(at: rootURL)
+    }
+
+    func gitWrapperFailingAfterWorktreeAdd() throws -> URL {
+        let wrapperURL = rootURL.appendingPathComponent("git-wrapper")
+        let script = """
+        #!/bin/sh
+        /usr/bin/git "$@"
+        exit_code=$?
+        if [ "$exit_code" -eq 0 ]; then
+          case " $* " in
+            *" worktree add "*) exit 72 ;;
+          esac
+        fi
+        exit "$exit_code"
+        """
+        try Data(script.utf8).write(to: wrapperURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: wrapperURL.path
+        )
+        return wrapperURL
     }
 
     @discardableResult

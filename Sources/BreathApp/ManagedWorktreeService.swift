@@ -34,6 +34,11 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
     case worktreeContainsChanges
     case worktreeContainsUnprotectedCommits
     case worktreeLocked(String?)
+    case creationRollbackFailed(
+        path: String,
+        creationError: String,
+        cleanupError: String
+    )
 
     var errorDescription: String? {
         switch self {
@@ -59,6 +64,16 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
                 return "Worktree 已锁定：\(reason)"
             }
             return "Worktree 已锁定，无法删除。"
+        case .creationRollbackFailed(
+            let path,
+            let creationError,
+            let cleanupError
+        ):
+            return """
+            Worktree 创建失败，且自动清理未完成：\(path)
+            创建错误：\(creationError)
+            清理错误：\(cleanupError)
+            """
         }
     }
 }
@@ -145,13 +160,14 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             workSessionID.rawValue.uuidString,
             isDirectory: true
         )
+        defer {
+            try? FileManager.default.removeItem(at: checkoutHooksURL)
+            try? removeEmptyManagedAncestors(startingAt: rootURL)
+        }
         try prepareManagedDirectories(
             for: rootURL,
             checkoutHooksURL: checkoutHooksURL
         )
-        defer {
-            try? FileManager.default.removeItem(at: checkoutHooksURL)
-        }
         let branchReference = "refs/heads/\(normalizedBranchName)"
         let branchExists = await commandSucceeds([
             "-C", context.repositoryRoot.path,
@@ -187,16 +203,6 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
 
         var environment = ProcessInfo.processInfo.environment
         environment["GIT_LFS_SKIP_SMUDGE"] = "1"
-        do {
-            _ = try await checkedResult(
-                arguments,
-                environment: environment
-            )
-        } catch {
-            try? removeEmptyManagedAncestors(startingAt: rootURL)
-            throw error
-        }
-
         let worktree = ManagedWorktree(
             workspaceID: workspace.id,
             workSessionID: workSessionID,
@@ -206,15 +212,42 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             workspaceRelativePath: context.workspaceRelativePath,
             branchName: normalizedBranchName
         )
+        do {
+            _ = try await checkedResult(
+                arguments,
+                environment: environment
+            )
+        } catch let creationError {
+            do {
+                try await rollbackIncompleteCreation(worktree)
+            } catch let cleanupError {
+                throw ManagedWorktreeServiceError.creationRollbackFailed(
+                    path: rootURL.path,
+                    creationError: creationError.localizedDescription,
+                    cleanupError: cleanupError.localizedDescription
+                )
+            }
+            throw creationError
+        }
+
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(
             atPath: worktree.workingDirectory,
             isDirectory: &isDirectory
         ), isDirectory.boolValue else {
-            try? await removeCreatedWorktree(worktree)
-            throw ManagedWorktreeServiceError.incompleteCheckout(
+            let creationError = ManagedWorktreeServiceError.incompleteCheckout(
                 worktree.workingDirectory
             )
+            do {
+                try await rollbackIncompleteCreation(worktree)
+            } catch let cleanupError {
+                throw ManagedWorktreeServiceError.creationRollbackFailed(
+                    path: rootURL.path,
+                    creationError: creationError.localizedDescription,
+                    cleanupError: cleanupError.localizedDescription
+                )
+            }
+            throw creationError
         }
         return worktree
     }
@@ -474,14 +507,84 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         ) else {
             throw ManagedWorktreeServiceError.unsafeManagedPath(rootURL.path)
         }
-        guard FileManager.default.fileExists(atPath: rootURL.path) else {
-            return
-        }
-        _ = try await checkedResult([
+        let rootExists = FileManager.default.fileExists(atPath: rootURL.path)
+        let result = try await runner.run(arguments: [
             "--git-dir=\(worktree.gitCommonDirectory)",
             "worktree", "remove", rootURL.path,
         ])
+        if result.exitCode != 0 {
+            let isRegistered = try await isWorktreeRegistered(
+                worktree,
+                rootURL: rootURL
+            )
+            guard !rootExists, !isRegistered else {
+                throw gitFailure(result)
+            }
+        }
         try removeEmptyManagedAncestors(startingAt: rootURL)
+    }
+
+    private func rollbackIncompleteCreation(
+        _ worktree: ManagedWorktree
+    ) async throws {
+        let rootURL = URL(
+            fileURLWithPath: worktree.rootPath,
+            isDirectory: true
+        ).standardizedFileURL
+        guard isManagedPath(
+            rootURL,
+            workspaceID: worktree.workspaceID,
+            workSessionID: worktree.workSessionID
+        ) else {
+            throw ManagedWorktreeServiceError.unsafeManagedPath(rootURL.path)
+        }
+
+        let result = try await runner.run(arguments: [
+            "--git-dir=\(worktree.gitCommonDirectory)",
+            "worktree", "remove", "--force", rootURL.path,
+        ])
+        if result.exitCode != 0,
+           try await isWorktreeRegistered(worktree, rootURL: rootURL)
+        {
+            throw gitFailure(result)
+        }
+        if FileManager.default.fileExists(atPath: rootURL.path) {
+            guard isManagedPath(
+                rootURL,
+                workspaceID: worktree.workspaceID,
+                workSessionID: worktree.workSessionID
+            ) else {
+                throw ManagedWorktreeServiceError.unsafeManagedPath(
+                    rootURL.path
+                )
+            }
+            try FileManager.default.removeItem(at: rootURL)
+        }
+        try removeEmptyManagedAncestors(startingAt: rootURL)
+    }
+
+    private func isWorktreeRegistered(
+        _ worktree: ManagedWorktree,
+        rootURL: URL
+    ) async throws -> Bool {
+        let output = try await checkedOutput([
+            "--git-dir=\(worktree.gitCommonDirectory)",
+            "worktree", "list", "--porcelain",
+        ])
+        let expectedPath = rootURL.resolvingSymlinksInPath()
+            .standardizedFileURL.path
+        return output
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .contains { line in
+                let prefix = "worktree "
+                guard line.hasPrefix(prefix) else { return false }
+                return URL(
+                    fileURLWithPath: String(line.dropFirst(prefix.count)),
+                    isDirectory: true
+                )
+                .resolvingSymlinksInPath()
+                .standardizedFileURL.path == expectedPath
+            }
     }
 
     private func worktreeLock(

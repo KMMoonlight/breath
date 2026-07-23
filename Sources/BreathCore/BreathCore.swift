@@ -584,6 +584,11 @@ public enum WorkbenchError: Error, Equatable {
     case managedWorktreesUnavailable
     case managedWorktreeUnavailable(WorkSessionID)
     case managedWorktreeOwnershipMismatch(WorkSessionID)
+    case managedWorktreeCreationRollbackFailed(
+        worktreePath: String,
+        creationError: String,
+        cleanupError: String
+    )
     case preparingForCleanExit
 }
 
@@ -612,6 +617,16 @@ extension WorkbenchError: LocalizedError {
             return "该工作会话的 Worktree 已不可用。"
         case .managedWorktreeOwnershipMismatch:
             return "Worktree 所属信息与工作会话不一致，已拒绝操作。"
+        case .managedWorktreeCreationRollbackFailed(
+            let worktreePath,
+            let creationError,
+            let cleanupError
+        ):
+            return """
+            Worktree 会话创建失败，且自动清理未完成：\(worktreePath)
+            创建错误：\(creationError)
+            清理错误：\(cleanupError)
+            """
         case .preparingForCleanExit:
             return "Breath 正在退出，无法开始新的 Worktree 操作。"
         }
@@ -807,10 +822,16 @@ public actor Workbench {
         guard managedWorktree.workspaceID == workspaceID,
               managedWorktree.workSessionID == workSessionID
         else {
-            try? await managedWorktreeManager.remove(managedWorktree)
-            throw WorkbenchError.managedWorktreeOwnershipMismatch(
+            let ownershipError =
+                WorkbenchError.managedWorktreeOwnershipMismatch(
                 workSessionID
             )
+            try await rollbackManagedWorktreeCreation(
+                managedWorktree,
+                after: ownershipError,
+                using: managedWorktreeManager
+            )
+            throw ownershipError
         }
         let workSession = WorkSession(
             id: workSessionID,
@@ -831,34 +852,50 @@ public actor Workbench {
             )
         )
 
+        do {
+            try await terminalRuntime.launch(launch)
+        } catch let creationError {
+            await terminalRuntime.stop(paneID: paneID)
+            try await rollbackManagedWorktreeCreation(
+                managedWorktree,
+                after: creationError,
+                using: managedWorktreeManager
+            )
+            throw creationError
+        }
+
         let previousSnapshot = currentSnapshot
         currentSnapshot.workSessions.append(workSession)
         currentSnapshot.selectedWorkSessionID = workSessionID
         do {
             try await persistSnapshot(rollingBackTo: previousSnapshot)
-        } catch {
-            try? await managedWorktreeManager.remove(managedWorktree)
-            throw error
-        }
-
-        do {
-            try await terminalRuntime.launch(launch)
-        } catch {
-            let persistedSnapshot = currentSnapshot
-            currentSnapshot = previousSnapshot
-            do {
-                try await repository.save(previousSnapshot)
-                await snapshotChangeHandler?()
-            } catch {
-                currentSnapshot = persistedSnapshot
-                await snapshotChangeHandler?()
-                throw error
-            }
-            try? await managedWorktreeManager.remove(managedWorktree)
-            throw error
+        } catch let creationError {
+            await terminalRuntime.stop(paneID: paneID)
+            try await rollbackManagedWorktreeCreation(
+                managedWorktree,
+                after: creationError,
+                using: managedWorktreeManager
+            )
+            throw creationError
         }
         materializedWorkSessionIDs.insert(workSessionID)
         return workSessionID
+    }
+
+    private func rollbackManagedWorktreeCreation(
+        _ managedWorktree: ManagedWorktree,
+        after creationError: any Error,
+        using manager: any ManagedWorktreeManaging
+    ) async throws {
+        do {
+            try await manager.remove(managedWorktree)
+        } catch let cleanupError {
+            throw WorkbenchError.managedWorktreeCreationRollbackFailed(
+                worktreePath: managedWorktree.rootPath,
+                creationError: creationError.localizedDescription,
+                cleanupError: cleanupError.localizedDescription
+            )
+        }
     }
 
     public func snapshot() -> WorkbenchSnapshot {

@@ -43,8 +43,8 @@ struct WorkbenchTests {
         #expect(await worktreeManager.createdBranchNames == ["task/123"])
     }
 
-    @Test("a worktree session is persisted before its terminal launches")
-    func worktreeSessionPersistsBeforeLaunching() async throws {
+    @Test("a worktree session launches before its completed state is persisted")
+    func worktreeSessionLaunchesBeforePersistence() async throws {
         let effects = EffectLog()
         let workbench = Workbench(
             repository: InMemoryWorkbenchRepository(effects: effects),
@@ -64,17 +64,48 @@ struct WorkbenchTests {
 
         let recordedEffects = await effects.values
         #expect(recordedEffects.count == 2)
-        #expect(recordedEffects.first == .saved)
         guard recordedEffects.count == 2,
-              case .launched = recordedEffects[1]
+              case .launched = recordedEffects[0]
         else {
-            Issue.record("expected terminal launch after persistence")
+            Issue.record("expected terminal launch before persistence")
             return
         }
+        #expect(recordedEffects[1] == .saved)
     }
 
-    @Test("a failed worktree session save never launches a terminal")
-    func failedWorktreeSaveDoesNotLaunch() async throws {
+    @Test("a worktree session stays hidden until its first terminal is ready")
+    func worktreeSessionIsHiddenDuringTerminalLaunch() async throws {
+        let runtime = SuspendedLaunchTerminalRuntime()
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(),
+            terminalRuntime: runtime,
+            managedWorktreeManager: RecordingManagedWorktreeManager(),
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+        let creation = Task {
+            try await workbench.createManagedWorktreeSession(
+                in: workspaceID,
+                branchName: "task/hidden-until-ready"
+            )
+        }
+        while await runtime.launchCallCount == 0 {
+            await Task.yield()
+        }
+
+        #expect(await workbench.snapshot().workSessions.isEmpty)
+
+        await runtime.allowLaunches()
+        let sessionID = try await creation.value
+        #expect(
+            await workbench.snapshot().workSessions.map(\.id) == [sessionID]
+        )
+    }
+
+    @Test("a failed worktree session save stops its terminal and removes its checkout")
+    func failedWorktreeSaveCompensatesLaunch() async throws {
         let worktreeManager = RecordingManagedWorktreeManager()
         let runtime = RecordingTerminalRuntime()
         let workbench = Workbench(
@@ -94,12 +125,82 @@ struct WorkbenchTests {
             )
         }
 
-        #expect(await runtime.launches.isEmpty)
+        let launchedPaneID = try #require(await runtime.launches.first?.paneID)
+        #expect(await runtime.stoppedPaneIDs == [launchedPaneID])
         #expect(await workbench.snapshot().workSessions.isEmpty)
         #expect(
             await worktreeManager.removedBranchNames
                 == ["task/persistence-failure"]
         )
+    }
+
+    @Test("a failed first terminal is stopped before its checkout is removed")
+    func failedWorktreeLaunchIsCompensated() async throws {
+        let worktreeManager = RecordingManagedWorktreeManager()
+        let runtime = FailingNthLaunchRuntime(failingLaunch: 1)
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(),
+            terminalRuntime: runtime,
+            managedWorktreeManager: worktreeManager,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+
+        await #expect(throws: FailingNthLaunchRuntime.Failure.launchFailed) {
+            try await workbench.createManagedWorktreeSession(
+                in: workspaceID,
+                branchName: "task/launch-failure"
+            )
+        }
+
+        #expect(await runtime.stoppedPaneIDs.count == 1)
+        #expect(await workbench.snapshot().workSessions.isEmpty)
+        #expect(
+            await worktreeManager.removedBranchNames == ["task/launch-failure"]
+        )
+    }
+
+    @Test("a failed creation reports when its checkout cannot be rolled back")
+    func failedWorktreeRollbackIsReported() async throws {
+        let worktreeManager = RecordingManagedWorktreeManager(
+            removalError: TestManagedWorktreeError.cleanupFailed
+        )
+        let runtime = FailingNthLaunchRuntime(failingLaunch: 1)
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(),
+            terminalRuntime: runtime,
+            managedWorktreeManager: worktreeManager,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+
+        do {
+            _ = try await workbench.createManagedWorktreeSession(
+                in: workspaceID,
+                branchName: "task/cleanup-failure"
+            )
+            Issue.record("expected rollback failure")
+        } catch let error as WorkbenchError {
+            guard case .managedWorktreeCreationRollbackFailed(
+                let worktreePath,
+                _,
+                _
+            ) = error else {
+                Issue.record("unexpected Workbench error: \(error)")
+                return
+            }
+            #expect(
+                worktreePath == "/tmp/breath-worktrees/workspace/session"
+            )
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        #expect(await workbench.snapshot().workSessions.isEmpty)
     }
 
     @Test("a valid managed worktree restores when the original checkout is unavailable")
@@ -1490,6 +1591,10 @@ private enum TestPersistenceError: Error {
     case saveFailed
 }
 
+private enum TestManagedWorktreeError: Error {
+    case cleanupFailed
+}
+
 private actor FailingSaveRepository: WorkbenchRepository {
     private let failingSaveNumbers: Set<Int>
     private var saveCount = 0
@@ -1538,12 +1643,17 @@ private actor RecordingTerminalRuntime: TerminalRuntime {
 
 private actor RecordingManagedWorktreeManager: ManagedWorktreeManaging {
     private var available: Bool
+    private let removalError: TestManagedWorktreeError?
     private(set) var createdBranchNames: [String] = []
     private(set) var validatedBranchNames: [String] = []
     private(set) var removedBranchNames: [String] = []
 
-    init(isAvailable: Bool = true) {
+    init(
+        isAvailable: Bool = true,
+        removalError: TestManagedWorktreeError? = nil
+    ) {
         available = isAvailable
+        self.removalError = removalError
     }
 
     func setAvailable(_ isAvailable: Bool) {
@@ -1577,6 +1687,9 @@ private actor RecordingManagedWorktreeManager: ManagedWorktreeManaging {
 
     func remove(_ worktree: ManagedWorktree) async throws {
         removedBranchNames.append(worktree.branchName)
+        if let removalError {
+            throw removalError
+        }
     }
 }
 
