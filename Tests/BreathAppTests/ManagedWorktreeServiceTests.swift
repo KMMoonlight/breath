@@ -69,6 +69,89 @@ struct ManagedWorktreeServiceTests {
         #expect(!startBranches.contains { $0.name == "origin/HEAD" })
     }
 
+    @Test("inventory distinguishes a session checkout from a retained branch")
+    func inventoryDistinguishesCheckoutFromRetainedBranch() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let activeWorktree = try await service.create(
+            workspace: workspace,
+            workSessionID: WorkSessionID(rawValue: UUID()),
+            branchName: "breath/active"
+        )
+        let removedWorktree = try await service.create(
+            workspace: workspace,
+            workSessionID: WorkSessionID(rawValue: UUID()),
+            branchName: "breath/retained"
+        )
+        try await service.remove(removedWorktree)
+
+        let inventory = try await service.inventory(
+            workspaces: [workspace],
+            knownWorktrees: [activeWorktree]
+        )
+
+        #expect(
+            inventory.contains {
+                $0.branchName == "breath/active"
+                    && $0.directoryPath == activeWorktree.rootPath
+                    && $0.state == .tracked
+            }
+        )
+        #expect(
+            inventory.contains {
+                $0.branchName == "breath/retained"
+                    && $0.directoryPath == nil
+                    && $0.state == .branchOnly
+            }
+        )
+    }
+
+    @Test("inventory exposes an unregistered managed directory")
+    func inventoryExposesUnregisteredManagedDirectory() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let orphanedDirectory = fixture.managedRootURL
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: orphanedDirectory,
+            withIntermediateDirectories: true
+        )
+        try Data("keep".utf8).write(
+            to: orphanedDirectory.appendingPathComponent("untracked.txt")
+        )
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+
+        let inventory = try await service.inventory(
+            workspaces: [
+                Workspace(
+                    id: WorkspaceID(rawValue: UUID()),
+                    path: fixture.workspaceURL.path,
+                    displayName: "client"
+                ),
+            ],
+            knownWorktrees: []
+        )
+
+        #expect(
+            inventory.contains {
+                $0.branchName == nil
+                    && $0.directoryPath == orphanedDirectory.path
+                    && $0.state == .directoryOnly
+            }
+        )
+    }
+
     @Test("rejects detached HEAD instead of selecting an unrelated branch")
     func rejectsDetachedHead() async throws {
         let fixture = try GitWorktreeFixture()

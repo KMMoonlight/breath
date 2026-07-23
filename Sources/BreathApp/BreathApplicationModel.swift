@@ -15,6 +15,10 @@ final class BreathApplicationModel: ObservableObject {
     @Published private(set) var agentCLIStatuses: [AgentKind: AgentCLIInstallationStatus] = [:]
     @Published private(set) var updatingAgents: Set<AgentKind> = []
     @Published private(set) var creatingWorktreeWorkspaceIDs: Set<WorkspaceID> = []
+    @Published private(set) var managedWorktreeInventory:
+        [ManagedWorktreeInventoryItem] = []
+    @Published private(set) var isRefreshingManagedWorktreeInventory = false
+    @Published private(set) var managedWorktreeInventoryError: String?
     @Published private(set) var isReady = false
     @Published private(set) var isRestoringSelectedSession = false
     @Published private(set) var isPreparingForTermination = false
@@ -28,6 +32,7 @@ final class BreathApplicationModel: ObservableObject {
     private let repository: SQLiteWorkbenchRepository
     private let runtime: TerminalEngineRuntime
     private let workbench: Workbench
+    private let managedWorktreeService: ManagedWorktreeService
     private let eventServer: UnixAgentEventServer
     private let eventSink: AgentEventSink
     private let userHookInstaller = UserHookIntegrationInstaller()
@@ -105,7 +110,7 @@ final class BreathApplicationModel: ObservableObject {
             )
         }
         runtime = TerminalEngineRuntime(engine: terminalEngine)
-        let managedWorktreeService = ManagedWorktreeService(
+        managedWorktreeService = ManagedWorktreeService(
             managedRootURL: supportDirectory.appendingPathComponent(
                 "worktrees",
                 isDirectory: true
@@ -287,6 +292,28 @@ final class BreathApplicationModel: ObservableObject {
         try await workbench.managedWorktreeMergeTargets(
             for: workSessionID
         )
+    }
+
+    func refreshManagedWorktreeInventory() {
+        guard !isRefreshingManagedWorktreeInventory else { return }
+        isRefreshingManagedWorktreeInventory = true
+        managedWorktreeInventoryError = nil
+        let workspaces = snapshot.workspaces
+        let knownWorktrees = snapshot.workSessions.compactMap(
+            \.managedWorktree
+        )
+        Task {
+            defer { isRefreshingManagedWorktreeInventory = false }
+            do {
+                managedWorktreeInventory = try await managedWorktreeService
+                    .inventory(
+                        workspaces: workspaces,
+                        knownWorktrees: knownWorktrees
+                    )
+            } catch {
+                managedWorktreeInventoryError = error.localizedDescription
+            }
+        }
     }
 
     func mergeManagedWorktreeSession(

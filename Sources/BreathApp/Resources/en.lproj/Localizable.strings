@@ -662,3 +662,14 @@
 "合并完成" = "Merge Complete";
 "已将 %@ 合并到 %@。" = "Merged %@ into %@.";
 "合并 Worktree 失败。" = "Could not merge the Worktree.";
+"Worktree" = "Worktree";
+"Worktree 库存" = "Worktree Inventory";
+"正在扫描 Worktree…" = "Scanning Worktrees…";
+"没有 Worktree 分支或目录" = "No Worktree branches or directories";
+"列出 Breath 会话分支与托管目录。仅剩分支、目录残留和未关联会话的检出目录会继续占用本地资源。" = "Lists Breath session branches and managed directories. Branch-only entries, leftover directories, and checkouts without an associated session continue to use local resources.";
+"无法识别分支" = "Unknown Branch";
+"会话使用中" = "In Use";
+"仅剩分支" = "Branch Only";
+"目录残留" = "Leftover Directory";
+"未关联会话" = "No Session";
+"复制分支名称" = "Copy Branch Name";

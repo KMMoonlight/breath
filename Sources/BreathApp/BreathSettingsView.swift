@@ -8,6 +8,7 @@ enum BreathSettingsTab: Hashable, CaseIterable {
     case application
     case terminal
     case git
+    case worktrees
     case agentIntegrations
     case shortcuts
     case archives
@@ -19,6 +20,7 @@ private extension BreathSettingsTab {
         case .application: "应用配置"
         case .terminal: "终端配置"
         case .git: "Git"
+        case .worktrees: "Worktree"
         case .agentIntegrations: "Agent 集成"
         case .shortcuts: "快捷键"
         case .archives: "已归档"
@@ -30,6 +32,7 @@ private extension BreathSettingsTab {
         case .application: "paintbrush"
         case .terminal: "terminal"
         case .git: "point.topleft.down.to.point.bottomright.curvepath"
+        case .worktrees: "arrow.triangle.branch"
         case .agentIntegrations: "point.3.connected.trianglepath.dotted"
         case .shortcuts: "keyboard"
         case .archives: "archivebox"
@@ -195,6 +198,8 @@ struct BreathSettingsView: View {
             terminalSettings
         case .git:
             gitSettings
+        case .worktrees:
+            worktreesSettings
         case .agentIntegrations:
             agentIntegrationsSettings
         case .shortcuts:
@@ -692,6 +697,170 @@ struct BreathSettingsView: View {
                 }
             }
         }
+    }
+
+    private var worktreesSettings: some View {
+        settingsList {
+            Section {
+                if model.managedWorktreeInventory.isEmpty {
+                    if model.isRefreshingManagedWorktreeInventory {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(localizer.string("正在扫描 Worktree…"))
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if let error = model.managedWorktreeInventoryError {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(error)
+                                .foregroundStyle(.red)
+                                .textSelection(.enabled)
+                            Button(localizer.string("重新加载")) {
+                                model.refreshManagedWorktreeInventory()
+                            }
+                        }
+                    } else {
+                        Text(localizer.string("没有 Worktree 分支或目录"))
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    ForEach(model.managedWorktreeInventory) { item in
+                        worktreeInventoryRow(item)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text(localizer.string("Worktree 库存"))
+                    Spacer()
+                    if model.isRefreshingManagedWorktreeInventory {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Button {
+                            model.refreshManagedWorktreeInventory()
+                        } label: {
+                            Label(
+                                localizer.string("刷新"),
+                                systemImage: "arrow.clockwise"
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            } footer: {
+                Text(
+                    localizer.string(
+                        "列出 Breath 会话分支与托管目录。仅剩分支、目录残留和未关联会话的检出目录会继续占用本地资源。"
+                    )
+                )
+            }
+        }
+        .task {
+            model.refreshManagedWorktreeInventory()
+        }
+    }
+
+    private func worktreeInventoryRow(
+        _ item: ManagedWorktreeInventoryItem
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: worktreeInventoryStateIcon(item.state))
+                .foregroundStyle(
+                    item.state == .tracked ? Color.secondary : Color.orange
+                )
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(
+                    item.branchName
+                        ?? localizer.string("无法识别分支")
+                )
+                .font(applicationFont(weight: .medium))
+                .lineLimit(1)
+                if !item.repositoryName.isEmpty {
+                    Text(
+                        item.repositoryPath.isEmpty
+                            ? item.repositoryName
+                            : "\(item.repositoryName) · \(item.repositoryPath)"
+                    )
+                    .font(applicationFont(offset: -2))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                }
+                if let directoryPath = item.directoryPath {
+                    Text(directoryPath)
+                        .font(applicationFont(offset: -2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+            }
+
+            Spacer(minLength: 12)
+
+            statusChip(
+                localizer.string(worktreeInventoryStateTitle(item.state)),
+                foreground: item.state == .tracked ? .secondary : .orange
+            )
+
+            if let directoryPath = item.directoryPath {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([
+                        URL(
+                            fileURLWithPath: directoryPath,
+                            isDirectory: true
+                        ),
+                    ])
+                } label: {
+                    Image(systemName: "folder")
+                }
+                .buttonStyle(.plain)
+                .help(localizer.string("在 Finder 中显示"))
+                .accessibilityLabel(localizer.string("在 Finder 中显示"))
+            }
+        }
+        .padding(.vertical, SettingsLayout.rowVerticalPadding)
+        .contextMenu {
+            if let branchName = item.branchName {
+                Button(localizer.string("复制分支名称")) {
+                    copyToPasteboard(branchName)
+                }
+            }
+            if let directoryPath = item.directoryPath {
+                Button(localizer.string("复制路径")) {
+                    copyToPasteboard(directoryPath)
+                }
+            }
+        }
+    }
+
+    private func worktreeInventoryStateTitle(
+        _ state: ManagedWorktreeInventoryState
+    ) -> String {
+        switch state {
+        case .tracked: "会话使用中"
+        case .branchOnly: "仅剩分支"
+        case .directoryOnly: "目录残留"
+        case .orphanedCheckout: "未关联会话"
+        }
+    }
+
+    private func worktreeInventoryStateIcon(
+        _ state: ManagedWorktreeInventoryState
+    ) -> String {
+        switch state {
+        case .tracked: "checkmark.circle"
+        case .branchOnly: "arrow.triangle.branch"
+        case .directoryOnly: "folder.badge.questionmark"
+        case .orphanedCheckout: "exclamationmark.triangle"
+        }
+    }
+
+    private func copyToPasteboard(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 
     private var applicationLanguage: Binding<ApplicationLanguage> {

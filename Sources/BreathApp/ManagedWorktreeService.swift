@@ -24,6 +24,29 @@ private actor ManagedWorktreeOperationGate {
     }
 }
 
+enum ManagedWorktreeInventoryState: Equatable, Sendable {
+    case tracked
+    case branchOnly
+    case directoryOnly
+    case orphanedCheckout
+}
+
+struct ManagedWorktreeInventoryItem: Equatable, Identifiable, Sendable {
+    let repositoryName: String
+    let repositoryPath: String
+    let branchName: String?
+    let directoryPath: String?
+    let state: ManagedWorktreeInventoryState
+
+    var id: String {
+        [
+            repositoryPath,
+            branchName ?? "",
+            directoryPath ?? "",
+        ].joined(separator: "\0")
+    }
+}
+
 enum ManagedWorktreeServiceError: LocalizedError, Equatable {
     case invalidBranchName(String)
     case invalidStartBranch(String)
@@ -223,6 +246,162 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                 return left.name.localizedStandardCompare(right.name)
                     == .orderedAscending
             }
+    }
+
+    func inventory(
+        workspaces: [Workspace],
+        knownWorktrees: [ManagedWorktree]
+    ) async throws -> [ManagedWorktreeInventoryItem] {
+        var items: [ManagedWorktreeInventoryItem] = []
+        var representedDirectoryPaths: Set<String> = []
+        var visitedGitDirectories: Set<String> = []
+
+        for workspace in workspaces {
+            let context: RepositoryContext
+            do {
+                context = try await repositoryContext(for: workspace)
+            } catch {
+                continue
+            }
+            let gitDirectoryPath = context.gitCommonDirectory
+                .resolvingSymlinksInPath()
+                .standardizedFileURL.path
+            guard visitedGitDirectories.insert(gitDirectoryPath).inserted else {
+                continue
+            }
+
+            let branches: [String]
+            let worktreeEntries: [GitWorktreeListEntry]
+            do {
+                branches = try await checkedOutput([
+                    "--git-dir=\(gitDirectoryPath)",
+                    "for-each-ref",
+                    "--sort=refname",
+                    "--format=%(refname:short)",
+                    "refs/heads/breath/",
+                ])
+                .split(separator: "\n", omittingEmptySubsequences: true)
+                .map(String.init)
+                worktreeEntries = parseWorktreeList(
+                    try await checkedOutput([
+                        "--git-dir=\(gitDirectoryPath)",
+                        "worktree", "list", "--porcelain",
+                    ])
+                )
+            } catch {
+                continue
+            }
+
+            for branchName in branches {
+                let branchReference = "refs/heads/\(branchName)"
+                let entry = worktreeEntries.first {
+                    $0.branchReference == branchReference
+                        && isInsideManagedRoot(
+                            URL(
+                                fileURLWithPath: $0.path,
+                                isDirectory: true
+                            )
+                        )
+                }
+                let existingDirectoryPath = entry.flatMap { entry in
+                    FileManager.default.fileExists(atPath: entry.path)
+                        ? entry.path
+                        : nil
+                }
+                if let existingDirectoryPath {
+                    representedDirectoryPaths.insert(
+                        standardizedPath(existingDirectoryPath)
+                    )
+                }
+                let knownWorktree = existingDirectoryPath.flatMap { path in
+                    knownWorktrees.first {
+                        standardizedPath($0.rootPath) == standardizedPath(path)
+                    }
+                }
+                let state: ManagedWorktreeInventoryState
+                if existingDirectoryPath == nil {
+                    state = .branchOnly
+                } else if knownWorktree != nil {
+                    state = .tracked
+                } else {
+                    state = .orphanedCheckout
+                }
+                items.append(
+                    ManagedWorktreeInventoryItem(
+                        repositoryName: workspace.displayName,
+                        repositoryPath: context.repositoryRoot.path,
+                        branchName: branchName,
+                        directoryPath: knownWorktree?.rootPath
+                            ?? existingDirectoryPath,
+                        state: state
+                    )
+                )
+            }
+
+            let representedBranchNames = Set(
+                items.lazy
+                    .filter { $0.repositoryPath == context.repositoryRoot.path }
+                    .compactMap(\.branchName)
+            )
+            for entry in worktreeEntries {
+                let directoryURL = URL(
+                    fileURLWithPath: entry.path,
+                    isDirectory: true
+                )
+                guard isInsideManagedRoot(directoryURL),
+                      FileManager.default.fileExists(atPath: entry.path)
+                else {
+                    continue
+                }
+                let branchName = entry.branchReference.flatMap {
+                    reference -> String? in
+                    let prefix = "refs/heads/"
+                    guard reference.hasPrefix(prefix) else { return nil }
+                    return String(reference.dropFirst(prefix.count))
+                }
+                guard branchName.map({
+                    !representedBranchNames.contains($0)
+                }) ?? true else {
+                    continue
+                }
+                let path = standardizedPath(entry.path)
+                representedDirectoryPaths.insert(path)
+                let isTracked = knownWorktrees.contains {
+                    standardizedPath($0.rootPath) == path
+                }
+                items.append(
+                    ManagedWorktreeInventoryItem(
+                        repositoryName: workspace.displayName,
+                        repositoryPath: context.repositoryRoot.path,
+                        branchName: branchName,
+                        directoryPath: entry.path,
+                        state: isTracked ? .tracked : .orphanedCheckout
+                    )
+                )
+            }
+        }
+
+        for directoryURL in try managedCheckoutDirectories() {
+            let path = standardizedPath(directoryURL.path)
+            guard representedDirectoryPaths.insert(path).inserted else {
+                continue
+            }
+            let workspace = workspaceOwningManagedDirectory(
+                directoryURL,
+                workspaces: workspaces
+            )
+            items.append(
+                ManagedWorktreeInventoryItem(
+                    repositoryName: workspace?.displayName ?? "",
+                    repositoryPath: workspace?.path ?? "",
+                    branchName: nil,
+                    directoryPath: directoryURL.path,
+                    state: .directoryOnly
+                )
+            )
+        }
+
+        return items.sorted(by: inventorySort)
     }
 
     func create(
@@ -1247,6 +1426,90 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                 .resolvingSymlinksInPath()
                 .standardizedFileURL.path == expectedPath
         }
+    }
+
+    private func isInsideManagedRoot(_ url: URL) -> Bool {
+        let rootPath = managedRootURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL.path
+        let candidatePath = url
+            .resolvingSymlinksInPath()
+            .standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        return candidatePath.hasPrefix(prefix)
+    }
+
+    private func standardizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path, isDirectory: true)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL.path
+    }
+
+    private func managedCheckoutDirectories() throws -> [URL] {
+        guard FileManager.default.fileExists(atPath: managedRootURL.path) else {
+            return []
+        }
+        let workspaceDirectories = try FileManager.default
+            .contentsOfDirectory(
+                at: managedRootURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+        var checkoutDirectories: [URL] = []
+        for workspaceDirectory in workspaceDirectories {
+            let values = try workspaceDirectory.resourceValues(
+                forKeys: [.isDirectoryKey]
+            )
+            guard values.isDirectory == true else { continue }
+            let children = try FileManager.default.contentsOfDirectory(
+                at: workspaceDirectory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+            for child in children {
+                let childValues = try child.resourceValues(
+                    forKeys: [.isDirectoryKey]
+                )
+                if childValues.isDirectory == true {
+                    checkoutDirectories.append(child.standardizedFileURL)
+                }
+            }
+        }
+        return checkoutDirectories
+    }
+
+    private func workspaceOwningManagedDirectory(
+        _ directoryURL: URL,
+        workspaces: [Workspace]
+    ) -> Workspace? {
+        let workspaceDirectoryName = directoryURL
+            .deletingLastPathComponent()
+            .lastPathComponent
+        return workspaces.first {
+            $0.id.rawValue.uuidString.caseInsensitiveCompare(
+                workspaceDirectoryName
+            ) == .orderedSame
+        }
+    }
+
+    private func inventorySort(
+        _ left: ManagedWorktreeInventoryItem,
+        _ right: ManagedWorktreeInventoryItem
+    ) -> Bool {
+        if left.repositoryName != right.repositoryName {
+            return left.repositoryName.localizedStandardCompare(
+                right.repositoryName
+            ) == .orderedAscending
+        }
+        let leftBranch = left.branchName ?? ""
+        let rightBranch = right.branchName ?? ""
+        if leftBranch != rightBranch {
+            return leftBranch.localizedStandardCompare(rightBranch)
+                == .orderedAscending
+        }
+        return (left.directoryPath ?? "").localizedStandardCompare(
+            right.directoryPath ?? ""
+        ) == .orderedAscending
     }
 
     private func validateSessionWorkingDirectory(
