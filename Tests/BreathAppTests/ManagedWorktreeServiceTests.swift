@@ -352,6 +352,37 @@ struct ManagedWorktreeServiceTests {
         }
     }
 
+    @Test("a competing branch creation is never mistaken for owned state")
+    func competingBranchCreationIsPreserved() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL,
+            gitExecutableURL:
+                try fixture.gitWrapperCreatingCompetingBranchBeforeUpdate()
+        )
+
+        await #expect(throws: ManagedWorktreeServiceError.self) {
+            try await service.create(
+                workspace: Workspace(
+                    id: WorkspaceID(rawValue: UUID()),
+                    path: fixture.workspaceURL.path,
+                    displayName: "client"
+                ),
+                workSessionID: WorkSessionID(rawValue: UUID()),
+                branchName: "task/competing"
+            )
+        }
+
+        #expect(
+            try fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "show-ref", "--verify", "--quiet",
+                "refs/heads/task/competing",
+            ]).isEmpty
+        )
+    }
+
     @Test("removing an externally deleted checkout also clears git metadata")
     func missingCheckoutRemovalClearsGitMetadata() async throws {
         let fixture = try GitWorktreeFixture()
@@ -493,6 +524,25 @@ private struct GitWorktreeFixture {
           esac
         fi
         exit "$exit_code"
+        """
+        try Data(script.utf8).write(to: wrapperURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: wrapperURL.path
+        )
+        return wrapperURL
+    }
+
+    func gitWrapperCreatingCompetingBranchBeforeUpdate() throws -> URL {
+        let wrapperURL = rootURL.appendingPathComponent(
+            "git-wrapper-competing-branch"
+        )
+        let script = """
+        #!/bin/sh
+        if [ "$3" = "update-ref" ] && [ "$4" = "refs/heads/task/competing" ]; then
+          /usr/bin/git -C "$2" update-ref "$4" "$5" "$6"
+        fi
+        exec /usr/bin/git "$@"
         """
         try Data(script.utf8).write(to: wrapperURL)
         try FileManager.default.setAttributes(

@@ -135,6 +135,98 @@ struct WorkbenchTests {
         )
     }
 
+    @Test("a conflicted persistence failure restores the last published snapshot")
+    func conflictedPersistenceFailureIsCompensated() async throws {
+        let repository = SuspendedSaveRepository(
+            suspendedSave: 2,
+            failingSaves: [4]
+        )
+        let runtime = RecordingTerminalRuntime()
+        let worktreeManager = RecordingManagedWorktreeManager()
+        let workbench = Workbench(
+            repository: repository,
+            terminalRuntime: runtime,
+            managedWorktreeManager: worktreeManager,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+        let managedCreation = Task {
+            try await workbench.createManagedWorktreeSession(
+                in: workspaceID,
+                branchName: "task/conflicted-save"
+            )
+        }
+        while await repository.saveCallCount < 2 {
+            await Task.yield()
+        }
+        let localSessionID = try await workbench.createWorkSession(
+            in: workspaceID
+        )
+
+        await repository.allowSaves()
+        await #expect(throws: TestPersistenceError.saveFailed) {
+            try await managedCreation.value
+        }
+
+        #expect(
+            await repository.latestSnapshot.workSessions.map(\.id)
+                == [localSessionID]
+        )
+        #expect(
+            await workbench.snapshot().workSessions.map(\.id)
+                == [localSessionID]
+        )
+        #expect(
+            await worktreeManager.removedBranchNames
+                == ["task/conflicted-save"]
+        )
+    }
+
+    @Test("a failed persistence compensation preserves the managed checkout")
+    func failedPersistenceCompensationPreservesCheckout() async throws {
+        let repository = SuspendedSaveRepository(
+            suspendedSave: 2,
+            failingSaves: [4, 5]
+        )
+        let worktreeManager = RecordingManagedWorktreeManager()
+        let workbench = Workbench(
+            repository: repository,
+            terminalRuntime: RecordingTerminalRuntime(),
+            managedWorktreeManager: worktreeManager,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+        let managedCreation = Task {
+            try await workbench.createManagedWorktreeSession(
+                in: workspaceID,
+                branchName: "task/failed-compensation"
+            )
+        }
+        while await repository.saveCallCount < 2 {
+            await Task.yield()
+        }
+        _ = try await workbench.createWorkSession(in: workspaceID)
+
+        await repository.allowSaves()
+        do {
+            _ = try await managedCreation.value
+            Issue.record("expected persistence rollback failure")
+        } catch let error as WorkbenchError {
+            guard case .managedWorktreePersistenceRollbackFailed = error else {
+                Issue.record("unexpected Workbench error: \(error)")
+                return
+            }
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        #expect(await worktreeManager.removedBranchNames.isEmpty)
+    }
+
     @Test("a failed worktree session save stops its terminal and removes its checkout")
     func failedWorktreeSaveCompensatesLaunch() async throws {
         let worktreeManager = RecordingManagedWorktreeManager()
@@ -1654,24 +1746,33 @@ private actor FailingSaveRepository: WorkbenchRepository {
 
 private actor SuspendedSaveRepository: WorkbenchRepository {
     private let suspendedSave: Int
+    private let failingSaves: Set<Int>
     private var savesAllowed = false
-    private var snapshot = WorkbenchSnapshot.empty
+    private(set) var latestSnapshot = WorkbenchSnapshot.empty
     private(set) var saveCallCount = 0
 
-    init(suspendedSave: Int) {
+    init(
+        suspendedSave: Int,
+        failingSaves: Set<Int> = []
+    ) {
         self.suspendedSave = suspendedSave
+        self.failingSaves = failingSaves
     }
 
     func load() async throws -> WorkbenchSnapshot {
-        snapshot
+        latestSnapshot
     }
 
     func save(_ snapshot: WorkbenchSnapshot) async throws {
         saveCallCount += 1
-        if saveCallCount == suspendedSave {
+        let saveNumber = saveCallCount
+        if saveNumber == suspendedSave {
             while !savesAllowed { await Task.yield() }
         }
-        self.snapshot = snapshot
+        guard !failingSaves.contains(saveNumber) else {
+            throw TestPersistenceError.saveFailed
+        }
+        latestSnapshot = snapshot
     }
 
     func allowSaves() {

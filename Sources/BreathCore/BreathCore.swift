@@ -589,6 +589,11 @@ public enum WorkbenchError: Error, Equatable {
         creationError: String,
         cleanupError: String
     )
+    case managedWorktreePersistenceRollbackFailed(
+        worktreePath: String,
+        persistenceError: String,
+        rollbackError: String
+    )
     case preparingForCleanExit
 }
 
@@ -626,6 +631,16 @@ extension WorkbenchError: LocalizedError {
             Worktree 会话创建失败，且自动清理未完成：\(worktreePath)
             创建错误：\(creationError)
             清理错误：\(cleanupError)
+            """
+        case .managedWorktreePersistenceRollbackFailed(
+            let worktreePath,
+            let persistenceError,
+            let rollbackError
+        ):
+            return """
+            Worktree 会话持久化失败，且无法恢复之前的快照：\(worktreePath)
+            持久化错误：\(persistenceError)
+            恢复错误：\(rollbackError)
             """
         case .preparingForCleanExit:
             return "Breath 正在退出，无法开始新的 Worktree 操作。"
@@ -868,6 +883,12 @@ public actor Workbench {
             try await persistAndPublishCreatedWorkSession(workSession)
         } catch let creationError {
             await terminalRuntime.stop(paneID: paneID)
+            if let workbenchError = creationError as? WorkbenchError,
+               case .managedWorktreePersistenceRollbackFailed =
+                   workbenchError
+            {
+                throw creationError
+            }
             try await rollbackManagedWorktreeCreation(
                 managedWorktree,
                 after: creationError,
@@ -881,19 +902,51 @@ public actor Workbench {
     private func persistAndPublishCreatedWorkSession(
         _ workSession: WorkSession
     ) async throws {
-        while true {
-            let baseSnapshot = currentSnapshot
-            var completedSnapshot = baseSnapshot
-            completedSnapshot.workSessions.append(workSession)
-            completedSnapshot.selectedWorkSessionID = workSession.id
+        var persistedUnpublishedSession = false
+        do {
+            while true {
+                let baseSnapshot = currentSnapshot
+                var completedSnapshot = baseSnapshot
+                completedSnapshot.workSessions.append(workSession)
+                completedSnapshot.selectedWorkSessionID = workSession.id
 
-            try await repository.save(completedSnapshot)
-            guard currentSnapshot == baseSnapshot else {
+                try await repository.save(completedSnapshot)
+                persistedUnpublishedSession = true
+                guard currentSnapshot == baseSnapshot else {
+                    continue
+                }
+                materializedWorkSessionIDs.insert(workSession.id)
+                currentSnapshot = completedSnapshot
+                await snapshotChangeHandler?()
+                return
+            }
+        } catch let persistenceError {
+            guard persistedUnpublishedSession else {
+                throw persistenceError
+            }
+            do {
+                try await restorePersistedPublishedSnapshot()
+            } catch let rollbackError {
+                throw WorkbenchError
+                    .managedWorktreePersistenceRollbackFailed(
+                        worktreePath:
+                            workSession.managedWorktree?.rootPath ?? "",
+                        persistenceError:
+                            persistenceError.localizedDescription,
+                        rollbackError: rollbackError.localizedDescription
+                    )
+            }
+            throw persistenceError
+        }
+    }
+
+    private func restorePersistedPublishedSnapshot() async throws {
+        while true {
+            let publishedSnapshot = currentSnapshot
+            try await repository.save(publishedSnapshot)
+            guard currentSnapshot == publishedSnapshot else {
                 continue
             }
-            materializedWorkSessionIDs.insert(workSession.id)
-            currentSnapshot = completedSnapshot
-            await snapshotChangeHandler?()
             return
         }
     }
