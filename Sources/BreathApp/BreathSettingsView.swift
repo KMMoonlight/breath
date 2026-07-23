@@ -121,7 +121,7 @@ struct BreathSettingsView: View {
             if let managedWorktree = session.managedWorktree {
                 Text(
                     localizer.format(
-                        "将删除托管 Worktree 目录，但保留任务分支 %@。存在未提交修改或未受分支保护的提交时会拒绝删除。",
+                        "将删除托管 Worktree 目录，但保留绑定分支 %@。存在未提交修改或未受分支保护的提交时会拒绝删除。",
                         managedWorktree.branchName
                     )
                 )

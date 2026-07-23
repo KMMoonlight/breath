@@ -26,6 +26,8 @@ private actor ManagedWorktreeOperationGate {
 
 enum ManagedWorktreeServiceError: LocalizedError, Equatable {
     case invalidBranchName(String)
+    case invalidStartBranch(String)
+    case sessionBranchAlreadyExists(String)
     case unsupportedRepository(String)
     case managedPathAlreadyExists(String)
     case unsafeManagedPath(String)
@@ -44,6 +46,10 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
         switch self {
         case .invalidBranchName(let branchName):
             return "“\(branchName)”不是有效的 Git 分支名称。"
+        case .invalidStartBranch(let reference):
+            return "“\(reference)”不是可用的 Worktree 起始分支。"
+        case .sessionBranchAlreadyExists(let branchName):
+            return "Worktree 会话分支已经存在：\(branchName)"
         case .unsupportedRepository(let reason):
             return reason
         case .managedPathAlreadyExists(let path):
@@ -111,17 +117,76 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         operationGate = ManagedWorktreeOperationGate()
     }
 
+    func startBranches(
+        for workspace: Workspace
+    ) async throws -> [ManagedWorktreeStartBranch] {
+        let context = try await repositoryContext(for: workspace)
+        let output = try await checkedOutput([
+            "-C", context.repositoryRoot.path,
+            "for-each-ref",
+            "--sort=refname",
+            "--format=%(refname)%00%(refname:short)%00%(HEAD)%00%(symref)",
+            "refs/heads",
+            "refs/remotes",
+        ])
+        return output
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { line -> ManagedWorktreeStartBranch? in
+                let fields = line.split(
+                    separator: "\0",
+                    omittingEmptySubsequences: false
+                ).map(String.init)
+                guard fields.count >= 4 else {
+                    return nil
+                }
+                let symbolicTarget = fields[3]
+                guard symbolicTarget.isEmpty else {
+                    return nil
+                }
+                let fullReference = fields[0]
+                let shortName = fields[1]
+                let headMarker = fields[2]
+                let kind: ManagedWorktreeStartBranchKind
+                if fullReference.hasPrefix("refs/heads/") {
+                    kind = .localBranch
+                } else if fullReference.hasPrefix("refs/remotes/") {
+                    kind = .remoteBranch
+                } else {
+                    return nil
+                }
+                return ManagedWorktreeStartBranch(
+                    reference: fullReference,
+                    name: shortName,
+                    kind: kind,
+                    isCurrent: headMarker
+                        .trimmingCharacters(in: .whitespaces) == "*"
+                )
+            }
+            .sorted { left, right in
+                if left.isCurrent != right.isCurrent {
+                    return left.isCurrent
+                }
+                if left.kind != right.kind {
+                    return left.kind == .localBranch
+                }
+                return left.name.localizedStandardCompare(right.name)
+                    == .orderedAscending
+            }
+    }
+
     func create(
         workspace: Workspace,
         workSessionID: WorkSessionID,
-        branchName: String
+        branchName: String,
+        startBranch: ManagedWorktreeStartBranch?
     ) async throws -> ManagedWorktree {
         await operationGate.acquire()
         do {
             let worktree = try await createWithoutAcquiringGate(
                 workspace: workspace,
                 workSessionID: workSessionID,
-                branchName: branchName
+                branchName: branchName,
+                startBranch: startBranch
             )
             await operationGate.release()
             return worktree
@@ -134,13 +199,20 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
     private func createWithoutAcquiringGate(
         workspace: Workspace,
         workSessionID: WorkSessionID,
-        branchName: String
+        branchName: String,
+        startBranch: ManagedWorktreeStartBranch? = nil
     ) async throws -> ManagedWorktree {
         let normalizedBranchName = branchName.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
         try await validateBranchName(normalizedBranchName)
         let context = try await repositoryContext(for: workspace)
+        if let startBranch {
+            try await validateStartBranchReference(
+                startBranch.reference,
+                repositoryRoot: context.repositoryRoot
+            )
+        }
         let rootURL = managedRootURL
             .appendingPathComponent(workspace.id.rawValue.uuidString, isDirectory: true)
             .appendingPathComponent(workSessionID.rawValue.uuidString, isDirectory: true)
@@ -165,9 +237,14 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             branchReference,
             repositoryRoot: context.repositoryRoot
         )
-        let baselineReference = branchExists
-            ? "\(branchReference)^{commit}"
-            : "HEAD^{commit}"
+        if startBranch != nil, branchExists {
+            throw ManagedWorktreeServiceError.sessionBranchAlreadyExists(
+                normalizedBranchName
+            )
+        }
+        let baselineReference = startBranch.map {
+            "\($0.reference)^{commit}"
+        } ?? (branchExists ? "\(branchReference)^{commit}" : "HEAD^{commit}")
         let baselineCommit = try await checkedOutput([
             "-C", context.repositoryRoot.path,
             "rev-parse", "--verify", baselineReference,
@@ -197,7 +274,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             baselineCommit: baselineCommit,
             workspaceRelativePath: context.workspaceRelativePath,
             branchName: normalizedBranchName,
-            createdTaskBranch: false
+            createdBranch: false
         )
         do {
             try prepareManagedDirectories(
@@ -217,7 +294,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             throw preparationError
         }
 
-        var createdTaskBranch = false
+        var createdBranch = false
         if !branchExists {
             do {
                 _ = try await checkedResult([
@@ -227,7 +304,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                     baselineCommit,
                     String(repeating: "0", count: baselineCommit.count),
                 ])
-                createdTaskBranch = true
+                createdBranch = true
             } catch let creationError {
                 try await throwAfterRollingBackCreation(
                     provisionalWorktree,
@@ -244,7 +321,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             baselineCommit: provisionalWorktree.baselineCommit,
             workspaceRelativePath: provisionalWorktree.workspaceRelativePath,
             branchName: provisionalWorktree.branchName,
-            createdTaskBranch: createdTaskBranch
+            createdBranch: createdBranch
         )
 
         do {
@@ -339,7 +416,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         do {
             try await validateRemovalWithoutAcquiringGate(worktree)
             try await removeCreatedWorktree(worktree)
-            try await removeCreatedTaskBranch(worktree)
+            try await removeCreatedBranch(worktree)
             await operationGate.release()
         } catch {
             await operationGate.release()
@@ -501,6 +578,32 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         }
     }
 
+    private func validateStartBranchReference(
+        _ reference: String,
+        repositoryRoot: URL
+    ) async throws {
+        guard reference.hasPrefix("refs/heads/")
+                || reference.hasPrefix("refs/remotes/"),
+              await commandSucceeds([
+                  "check-ref-format", reference,
+              ])
+        else {
+            throw ManagedWorktreeServiceError.invalidStartBranch(reference)
+        }
+        let result = try await runner.run(arguments: [
+            "-C", repositoryRoot.path,
+            "show-ref", "--verify", "--quiet", reference,
+        ])
+        switch result.exitCode {
+        case 0:
+            return
+        case 1:
+            throw ManagedWorktreeServiceError.invalidStartBranch(reference)
+        default:
+            throw gitFailure(result)
+        }
+    }
+
     private func localBranchExists(
         _ branchReference: String,
         repositoryRoot: URL
@@ -632,13 +735,13 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             try FileManager.default.removeItem(at: rootURL)
         }
         try removeEmptyManagedAncestors(startingAt: rootURL)
-        try await removeCreatedTaskBranch(worktree)
+        try await removeCreatedBranch(worktree)
     }
 
-    private func removeCreatedTaskBranch(
+    private func removeCreatedBranch(
         _ worktree: ManagedWorktree
     ) async throws {
-        guard worktree.createdTaskBranch == true,
+        guard worktree.createdBranch == true,
               FileManager.default.fileExists(
                   atPath: worktree.gitCommonDirectory
               )

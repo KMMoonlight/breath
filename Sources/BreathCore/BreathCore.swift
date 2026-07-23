@@ -789,6 +789,52 @@ public actor Workbench {
         in workspaceID: WorkspaceID,
         branchName: String
     ) async throws -> WorkSessionID {
+        try await createManagedWorktreeSession(
+            in: workspaceID,
+            branchName: branchName,
+            startBranch: nil
+        )
+    }
+
+    public func managedWorktreeStartBranches(
+        in workspaceID: WorkspaceID
+    ) async throws -> [ManagedWorktreeStartBranch] {
+        guard let workspace = currentSnapshot.workspaces.first(where: {
+            $0.id == workspaceID
+        }) else {
+            throw WorkbenchError.workspaceNotFound(workspaceID)
+        }
+        guard workspaceAvailable(workspace.path) else {
+            throw WorkbenchError.workspaceUnavailable(workspaceID)
+        }
+        guard let managedWorktreeManager else {
+            throw WorkbenchError.managedWorktreesUnavailable
+        }
+        return try await managedWorktreeManager.startBranches(for: workspace)
+    }
+
+    @discardableResult
+    public func createManagedWorktreeSession(
+        in workspaceID: WorkspaceID,
+        startBranch: ManagedWorktreeStartBranch
+    ) async throws -> WorkSessionID {
+        let workSessionID = WorkSessionID(rawValue: UUID())
+        return try await createManagedWorktreeSession(
+            in: workspaceID,
+            branchName: ManagedWorktree.sessionBranchName(
+                for: workSessionID
+            ),
+            startBranch: startBranch,
+            workSessionID: workSessionID
+        )
+    }
+
+    private func createManagedWorktreeSession(
+        in workspaceID: WorkspaceID,
+        branchName: String,
+        startBranch: ManagedWorktreeStartBranch?,
+        workSessionID: WorkSessionID? = nil
+    ) async throws -> WorkSessionID {
         guard !isPreparingForCleanExit else {
             throw WorkbenchError.preparingForCleanExit
         }
@@ -801,7 +847,9 @@ public actor Workbench {
             let workSessionID =
                 try await createManagedWorktreeSessionWithoutAcquiringGate(
                     in: workspaceID,
-                    branchName: branchName
+                    branchName: branchName,
+                    startBranch: startBranch,
+                    workSessionID: workSessionID
                 )
             await managedWorktreeLifecycleGate.release()
             return workSessionID
@@ -813,7 +861,9 @@ public actor Workbench {
 
     private func createManagedWorktreeSessionWithoutAcquiringGate(
         in workspaceID: WorkspaceID,
-        branchName: String
+        branchName: String,
+        startBranch: ManagedWorktreeStartBranch?,
+        workSessionID requestedWorkSessionID: WorkSessionID? = nil
     ) async throws -> WorkSessionID {
         guard let workspace = currentSnapshot.workspaces.first(where: {
             $0.id == workspaceID
@@ -827,12 +877,14 @@ public actor Workbench {
             throw WorkbenchError.managedWorktreesUnavailable
         }
 
-        let workSessionID = WorkSessionID(rawValue: UUID())
+        let workSessionID =
+            requestedWorkSessionID ?? WorkSessionID(rawValue: UUID())
         let paneID = TerminalPaneID(rawValue: UUID())
         let managedWorktree = try await managedWorktreeManager.create(
             workspace: workspace,
             workSessionID: workSessionID,
-            branchName: branchName
+            branchName: branchName,
+            startBranch: startBranch
         )
         guard managedWorktree.workspaceID == workspaceID,
               managedWorktree.workSessionID == workSessionID

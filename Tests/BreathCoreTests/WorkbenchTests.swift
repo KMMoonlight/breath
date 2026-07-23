@@ -4,6 +4,37 @@ import Testing
 
 @Suite("Workbench application use cases")
 struct WorkbenchTests {
+    @Test("a selected start branch creates a dedicated session branch")
+    func selectedStartBranchCreatesDedicatedSessionBranch() async throws {
+        let worktreeManager = RecordingManagedWorktreeManager()
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(),
+            terminalRuntime: RecordingTerminalRuntime(),
+            managedWorktreeManager: worktreeManager,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+
+        let startBranches = try await workbench.managedWorktreeStartBranches(
+            in: workspaceID
+        )
+        let startBranch = try #require(startBranches.first)
+        let sessionID = try await workbench.createManagedWorktreeSession(
+            in: workspaceID,
+            startBranch: startBranch
+        )
+
+        #expect(startBranch.isCurrent)
+        #expect(await worktreeManager.createdStartBranchReferences == [
+            "refs/heads/main",
+        ])
+        #expect(await worktreeManager.createdBranchNames == [
+            ManagedWorktree.sessionBranchName(for: sessionID),
+        ])
+    }
+
     @Test("a branch-backed worktree session launches and splits in its own checkout")
     func branchBackedWorktreeSessionUsesItsOwnCheckout() async throws {
         let runtime = RecordingTerminalRuntime()
@@ -1804,6 +1835,7 @@ private actor RecordingManagedWorktreeManager: ManagedWorktreeManaging {
     private var available: Bool
     private let removalError: TestManagedWorktreeError?
     private(set) var createdBranchNames: [String] = []
+    private(set) var createdStartBranchReferences: [String] = []
     private(set) var validatedBranchNames: [String] = []
     private(set) var removedBranchNames: [String] = []
 
@@ -1819,12 +1851,29 @@ private actor RecordingManagedWorktreeManager: ManagedWorktreeManaging {
         available = isAvailable
     }
 
+    func startBranches(
+        for workspace: Workspace
+    ) async throws -> [ManagedWorktreeStartBranch] {
+        [
+            ManagedWorktreeStartBranch(
+                reference: "refs/heads/main",
+                name: "main",
+                kind: .localBranch,
+                isCurrent: true
+            ),
+        ]
+    }
+
     func create(
         workspace: Workspace,
         workSessionID: WorkSessionID,
-        branchName: String
+        branchName: String,
+        startBranch: ManagedWorktreeStartBranch?
     ) async throws -> ManagedWorktree {
         createdBranchNames.append(branchName)
+        if let startBranch {
+            createdStartBranchReferences.append(startBranch.reference)
+        }
         return ManagedWorktree(
             workspaceID: workspace.id,
             workSessionID: workSessionID,

@@ -5,6 +5,167 @@ import Testing
 
 @Suite("Managed worktree service")
 struct ManagedWorktreeServiceTests {
+    @Test("lists the current branch and other worktree start branches")
+    func listsWorktreeStartBranches() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let currentBranch = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "branch", "--show-current",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "branch", "feature/other",
+        ])
+        let headCommit = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "rev-parse", "HEAD",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "update-ref", "refs/remotes/origin/release", headCommit,
+        ])
+        _ = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/release",
+        ])
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+
+        let startBranches = try await service.startBranches(
+            for: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: fixture.workspaceURL.path,
+                displayName: "client"
+            )
+        )
+
+        #expect(
+            startBranches.contains {
+                $0.name == currentBranch
+                    && $0.reference == "refs/heads/\(currentBranch)"
+                    && $0.kind == .localBranch
+                    && $0.isCurrent
+            }
+        )
+        #expect(
+            startBranches.contains {
+                $0.name == "feature/other"
+                    && $0.reference == "refs/heads/feature/other"
+                    && $0.kind == .localBranch
+                    && !$0.isCurrent
+            }
+        )
+        #expect(
+            startBranches.contains {
+                $0.name == "origin/release"
+                    && $0.reference == "refs/remotes/origin/release"
+                    && $0.kind == .remoteBranch
+            }
+        )
+        #expect(!startBranches.contains { $0.name == "origin/HEAD" })
+    }
+
+    @Test("creates a dedicated session branch from a checked-out start branch")
+    func createsDedicatedSessionBranch() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let currentBranch = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "branch", "--show-current",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let expectedBaseline = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "rev-parse", "HEAD",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let expectedSessionBranch = ManagedWorktree.sessionBranchName(
+            for: sessionID
+        )
+        let startBranch = ManagedWorktreeStartBranch(
+            reference: "refs/heads/\(currentBranch)",
+            name: currentBranch,
+            kind: .localBranch,
+            isCurrent: true
+        )
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+
+        let worktree = try await service.create(
+            workspace: Workspace(
+                id: workspaceID,
+                path: fixture.workspaceURL.path,
+                displayName: "client"
+            ),
+            workSessionID: sessionID,
+            branchName: expectedSessionBranch,
+            startBranch: startBranch
+        )
+
+        #expect(worktree.baselineCommit == expectedBaseline)
+        #expect(worktree.branchName == expectedSessionBranch)
+        #expect(worktree.createdBranch == true)
+        #expect(
+            try fixture.git([
+                "-C", worktree.rootPath,
+                "branch", "--show-current",
+            ]).trimmingCharacters(in: .whitespacesAndNewlines)
+                == expectedSessionBranch
+        )
+        #expect(
+            try fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "branch", "--show-current",
+            ]).trimmingCharacters(in: .whitespacesAndNewlines)
+                == currentBranch
+        )
+    }
+
+    @Test("rejects revision expressions masquerading as start branches")
+    func rejectsRevisionExpressionStartBranch() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let currentBranch = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "branch", "--show-current",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let invalidReference = "refs/heads/\(currentBranch)~1"
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+
+        await #expect(
+            throws: ManagedWorktreeServiceError.invalidStartBranch(
+                invalidReference
+            )
+        ) {
+            try await service.create(
+                workspace: Workspace(
+                    id: workspaceID,
+                    path: fixture.workspaceURL.path,
+                    displayName: "client"
+                ),
+                workSessionID: sessionID,
+                branchName: ManagedWorktree.sessionBranchName(
+                    for: sessionID
+                ),
+                startBranch: ManagedWorktreeStartBranch(
+                    reference: invalidReference,
+                    name: "\(currentBranch)~1",
+                    kind: .localBranch,
+                    isCurrent: false
+                )
+            )
+        }
+    }
+
     @Test("creates a linked checkout bound to the requested task branch")
     func createsBranchBackedWorktree() async throws {
         let fixture = try GitWorktreeFixture()
@@ -33,7 +194,7 @@ struct ManagedWorktreeServiceTests {
         #expect(worktree.rootPath == expectedRoot)
         #expect(worktree.workspaceRelativePath == "apps/client")
         #expect(worktree.branchName == "task/123")
-        #expect(worktree.createdTaskBranch == true)
+        #expect(worktree.createdBranch == true)
         #expect(
             try fixture.git([
                 "-C", worktree.rootPath,
@@ -78,7 +239,7 @@ struct ManagedWorktreeServiceTests {
         )
 
         #expect(worktree.baselineCommit == expectedCommit)
-        #expect(worktree.createdTaskBranch == false)
+        #expect(worktree.createdBranch == false)
         #expect(
             try fixture.git([
                 "-C", worktree.rootPath,

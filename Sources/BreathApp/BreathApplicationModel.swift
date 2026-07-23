@@ -253,7 +253,7 @@ final class BreathApplicationModel: ObservableObject {
 
     func createManagedWorktreeSession(
         in workspaceID: WorkspaceID,
-        branchName: String,
+        startBranch: ManagedWorktreeStartBranch,
         completion: @escaping @MainActor @Sendable (Bool) -> Void = { _ in }
     ) {
         guard !creatingWorktreeWorkspaceIDs.contains(workspaceID) else {
@@ -267,9 +267,15 @@ final class BreathApplicationModel: ObservableObject {
         }) {
             _ = try await self.workbench.createManagedWorktreeSession(
                 in: workspaceID,
-                branchName: branchName
+                startBranch: startBranch
             )
         }
+    }
+
+    func managedWorktreeStartBranches(
+        in workspaceID: WorkspaceID
+    ) async throws -> [ManagedWorktreeStartBranch] {
+        try await workbench.managedWorktreeStartBranches(in: workspaceID)
     }
 
     func selectWorkSession(_ id: WorkSessionID?) {

@@ -29,7 +29,6 @@ struct WorkbenchView: View {
     @State private var pendingArchive: WorkSession?
     @State private var pendingWorkspaceRemoval: Workspace?
     @State private var pendingWorktreeWorkspace: Workspace?
-    @State private var worktreeBranchName = ""
     @State private var worktreeCreationError: String?
     @State private var dismissedUnavailableWorkspaces: Set<WorkspaceID> = []
     @State private var expandedWorkspaceIDs: Set<WorkspaceID> = []
@@ -165,21 +164,25 @@ struct WorkbenchView: View {
         .sheet(item: $pendingWorktreeWorkspace) { workspace in
             ManagedWorktreeCreationSheet(
                 workspace: workspace,
-                branchName: $worktreeBranchName,
                 isCreating: model.creatingWorktreeWorkspaceIDs.contains(
                     workspace.id
                 ),
                 errorMessage: worktreeCreationError,
+                loadStartBranches: {
+                    try await model.managedWorktreeStartBranches(
+                        in: workspace.id
+                    )
+                },
                 onCancel: {
                     worktreeCreationError = nil
                     pendingWorktreeWorkspace = nil
                 },
-                onCreate: {
+                onCreate: { startBranch in
                     worktreeCreationError = nil
                     model.lastError = nil
                     createManagedWorktreeSession(
                         in: workspace,
-                        branchName: worktreeBranchName
+                        startBranch: startBranch
                     ) { succeeded in
                         if succeeded {
                             pendingWorktreeWorkspace = nil
@@ -462,7 +465,6 @@ struct WorkbenchView: View {
             createWorkSession(in: workspace.id)
         }
         Button(localizer.string("新建 Worktree 会话…")) {
-            worktreeBranchName = ""
             worktreeCreationError = nil
             pendingWorktreeWorkspace = workspace
         }
@@ -729,13 +731,13 @@ struct WorkbenchView: View {
 
     private func createManagedWorktreeSession(
         in workspace: Workspace,
-        branchName: String,
+        startBranch: ManagedWorktreeStartBranch,
         completion: @escaping @MainActor @Sendable (Bool) -> Void
     ) {
         expandedWorkspaceIDs.insert(workspace.id)
         model.createManagedWorktreeSession(
             in: workspace.id,
-            branchName: branchName,
+            startBranch: startBranch,
             completion: completion
         )
     }
@@ -930,14 +932,17 @@ struct WorkbenchView: View {
 
 private struct ManagedWorktreeCreationSheet: View {
     let workspace: Workspace
-    @Binding var branchName: String
     let isCreating: Bool
     let errorMessage: String?
+    let loadStartBranches: () async throws -> [ManagedWorktreeStartBranch]
     let onCancel: () -> Void
-    let onCreate: () -> Void
+    let onCreate: (ManagedWorktreeStartBranch) -> Void
 
     @Environment(\.applicationLanguage) private var applicationLanguage
-    @FocusState private var focusesBranchName: Bool
+    @State private var startBranches: [ManagedWorktreeStartBranch] = []
+    @State private var selectedStartBranch: ManagedWorktreeStartBranch?
+    @State private var isLoadingStartBranches = true
+    @State private var startBranchError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -949,22 +954,36 @@ private struct ManagedWorktreeCreationSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(localizer.string("任务分支"))
+                Text(localizer.string("起始分支"))
                     .font(.subheadline.weight(.medium))
-                TextField(
-                    localizer.string("例如 task/123"),
-                    text: $branchName
-                )
-                .textFieldStyle(.roundedBorder)
-                .focused($focusesBranchName)
-                .onSubmit {
-                    if canCreate && !isCreating {
-                        onCreate()
+                if isLoadingStartBranches {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(localizer.string("正在加载分支…"))
+                            .foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                } else if let startBranchError {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(startBranchError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .textSelection(.enabled)
+                        Button(localizer.string("重新加载")) {
+                            Task { await reloadStartBranches() }
+                        }
+                    }
+                } else {
+                    ManagedWorktreeStartBranchPicker(
+                        startBranches: startBranches,
+                        selectedStartBranch: $selectedStartBranch
+                    )
+                    .disabled(isCreating)
                 }
                 Text(
                     localizer.string(
-                        "已有本地分支会直接检出；不存在的分支会从当前 HEAD 创建。原检出的未提交修改不会复制。删除 Worktree 时会保留该分支。"
+                        "Breath 会从所选分支的当前提交创建独立会话分支。原检出的未提交修改不会复制；删除 Worktree 时会保留会话分支。"
                     )
                 )
                 .font(.caption)
@@ -984,7 +1003,11 @@ private struct ManagedWorktreeCreationSheet: View {
                 Button(localizer.string("取消"), action: onCancel)
                     .keyboardShortcut(.cancelAction)
                     .disabled(isCreating)
-                Button(action: onCreate) {
+                Button {
+                    if let selectedStartBranch {
+                        onCreate(selectedStartBranch)
+                    }
+                } label: {
                     if isCreating {
                         ProgressView()
                             .controlSize(.small)
@@ -997,15 +1020,194 @@ private struct ManagedWorktreeCreationSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 430)
+        .frame(width: 460)
         .interactiveDismissDisabled(isCreating)
-        .onAppear {
-            focusesBranchName = true
+        .task(id: workspace.id) {
+            await reloadStartBranches()
         }
     }
 
     private var canCreate: Bool {
-        !branchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        selectedStartBranch != nil && startBranchError == nil
+    }
+
+    @MainActor
+    private func reloadStartBranches() async {
+        isLoadingStartBranches = true
+        startBranchError = nil
+        do {
+            let loadedStartBranches = try await loadStartBranches()
+            startBranches = loadedStartBranches
+            let refreshedSelection = selectedStartBranch.flatMap {
+                selectedBranch in
+                loadedStartBranches.first {
+                    $0.reference == selectedBranch.reference
+                }
+            }
+            selectedStartBranch =
+                refreshedSelection
+                ?? loadedStartBranches.first(where: \.isCurrent)
+                ?? loadedStartBranches.first
+            if loadedStartBranches.isEmpty {
+                startBranchError = localizer.string("没有可用分支")
+            }
+        } catch {
+            startBranches = []
+            selectedStartBranch = nil
+            startBranchError = localizer.format(
+                "加载分支失败：%@",
+                error.localizedDescription
+            )
+        }
+        isLoadingStartBranches = false
+    }
+
+    private var localizer: ApplicationLocalizer {
+        ApplicationLocalizer(language: applicationLanguage)
+    }
+}
+
+private struct ManagedWorktreeStartBranchPicker: View {
+    let startBranches: [ManagedWorktreeStartBranch]
+    @Binding var selectedStartBranch: ManagedWorktreeStartBranch?
+
+    @Environment(\.applicationLanguage) private var applicationLanguage
+    @State private var isPresented = false
+    @State private var query = ""
+    @FocusState private var focusesSearch: Bool
+
+    var body: some View {
+        Button {
+            isPresented = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.branch")
+                    .foregroundStyle(.secondary)
+                Text(selectedStartBranch?.name ?? localizer.string("选择分支"))
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if selectedStartBranch?.isCurrent == true {
+                    Text(localizer.string("当前"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.bordered)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                TextField(
+                    localizer.string("搜索分支"),
+                    text: $query
+                )
+                .textFieldStyle(.roundedBorder)
+                .focused($focusesSearch)
+                .onSubmit {
+                    if let firstStartBranch = filteredStartBranches.first {
+                        selectedStartBranch = firstStartBranch
+                        isPresented = false
+                    }
+                }
+
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        startBranchSection(
+                            title: localizer.string("本地分支"),
+                            startBranches: filteredStartBranches.filter {
+                                $0.kind == .localBranch
+                            }
+                        )
+                        startBranchSection(
+                            title: localizer.string("远程分支"),
+                            startBranches: filteredStartBranches.filter {
+                                $0.kind == .remoteBranch
+                            }
+                        )
+                        if filteredStartBranches.isEmpty {
+                            Text(localizer.string("没有匹配的分支"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(
+                                    maxWidth: .infinity,
+                                    minHeight: 80,
+                                    alignment: .center
+                                )
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(height: 260)
+            }
+            .padding(12)
+            .frame(width: 360)
+            .onAppear {
+                query = ""
+                focusesSearch = true
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func startBranchSection(
+        title: String,
+        startBranches: [ManagedWorktreeStartBranch]
+    ) -> some View {
+        if !startBranches.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                ForEach(startBranches) { startBranch in
+                    let isSelected =
+                        selectedStartBranch?.reference == startBranch.reference
+                    Button {
+                        selectedStartBranch = startBranch
+                        isPresented = false
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(
+                                systemName:
+                                    isSelected
+                                        ? "checkmark"
+                                        : "arrow.triangle.branch"
+                            )
+                            .frame(width: 14)
+                            Text(startBranch.name)
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
+                            if startBranch.isCurrent {
+                                Text(localizer.string("当前"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 5)
+                }
+            }
+        }
+    }
+
+    private var filteredStartBranches: [ManagedWorktreeStartBranch] {
+        let normalizedQuery = query.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !normalizedQuery.isEmpty else { return startBranches }
+        return startBranches.filter {
+            $0.name.localizedCaseInsensitiveContains(normalizedQuery)
+                || $0.reference.localizedCaseInsensitiveContains(
+                    normalizedQuery
+                )
+        }
     }
 
     private var localizer: ApplicationLocalizer {
