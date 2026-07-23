@@ -14,6 +14,16 @@ private final class TestSplitTrackingAncestor:
 
 @Suite("Main window layout source guard")
 struct WindowLayoutSourceTests {
+    @Test("page toolbar reserves traffic-light space only in windowed mode")
+    func pageToolbarLeadingInsetAdaptsToFullScreen() {
+        #expect(
+            WorkbenchLayout.pageToolbarLeadingInset(isFullScreen: false) == 44
+        )
+        #expect(
+            WorkbenchLayout.pageToolbarLeadingInset(isFullScreen: true) == 12
+        )
+    }
+
     @Test("Work Session Tabs use vertical separators instead of line-through dividers")
     func workSessionTabsUseVerticalSeparators() throws {
         let root = URL(
@@ -337,7 +347,7 @@ struct WindowLayoutSourceTests {
         #expect(!headerSource.contains(".font(.title2"))
         #expect(!headerSource.contains("WorkbenchLayout.windowControlsHeight"))
         #expect(headerSource.contains("WorkbenchLayout.pageToolbarHeight"))
-        #expect(headerSource.contains("WorkbenchLayout.pageToolbarLeadingInset"))
+        #expect(headerSource.contains(".pageToolbarLeadingPadding()"))
         #expect(headerSource.contains("WorkbenchLayout.pageToolbarTrailingInset"))
         #expect(!headerSource.contains("WorkbenchLayout.sidebarHeaderVerticalPadding"))
         #expect(!headerSource.contains("VStack(alignment: .leading"))
@@ -429,7 +439,7 @@ struct WindowLayoutSourceTests {
         #expect(!source.contains("sidebarHeaderRowHeight"))
         #expect(!sidebarSource.contains("Color.clear"))
         #expect(sidebarSource.contains("WorkbenchLayout.pageToolbarHeight"))
-        #expect(sidebarSource.contains("WorkbenchLayout.pageToolbarLeadingInset"))
+        #expect(sidebarSource.contains(".pageToolbarLeadingPadding()"))
         #expect(sidebarSource.contains("WorkbenchLayout.pageToolbarTrailingInset"))
         #expect(source.contains(".overlay(alignment: .trailing)"))
         #expect(source.contains(".padding(.top, WorkbenchLayout.windowControlsHeight)"))
@@ -1013,7 +1023,7 @@ struct WindowLayoutSourceTests {
         #expect(gitSource.contains(".accessibilityLabel(localizer.string(\"Git 目录\"))"))
         #expect(
             gitSource.components(
-                separatedBy: ".padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)"
+                separatedBy: ".pageToolbarLeadingPadding()"
             ).count == 3
         )
         #expect(
@@ -1201,7 +1211,7 @@ struct WindowLayoutSourceTests {
             ".frame(height: WorkbenchLayout.pageToolbarHeight)"
         ))
         #expect(settingsSource.contains(
-            ".padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)"
+            ".pageToolbarLeadingPadding()"
         ))
         #expect(settingsSource.contains(
             ".padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)"

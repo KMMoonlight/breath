@@ -154,7 +154,7 @@ struct BreathSettingsView: View {
                 }
             }
         }
-        .padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)
+        .pageToolbarLeadingPadding()
         .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
         .frame(height: WorkbenchLayout.pageToolbarHeight)
         .background(Color(nsColor: .windowBackgroundColor))

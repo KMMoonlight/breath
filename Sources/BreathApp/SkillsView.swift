@@ -116,7 +116,7 @@ struct SkillsView: View {
             .controlSize(.small)
             .accessibilityLabel(localizer.string("安装 Skill"))
         }
-        .padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)
+        .pageToolbarLeadingPadding()
         .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
         .frame(height: WorkbenchLayout.pageToolbarHeight)
     }

@@ -36,168 +36,178 @@ struct WorkbenchView: View {
     @State private var hoveredSessionID: WorkSessionID?
     @State private var pendingTerminalFocusID: TerminalPaneID?
     @State private var detailMode = WorkbenchDetailMode.workspace
+    @State private var isWindowFullScreen = false
     @StateObject private var gitCoordinator = GitWorkbenchCoordinator()
 
     var body: some View {
+        workbenchRoot
+            .ignoresSafeArea(.container, edges: .top)
+            .frame(minWidth: 900, minHeight: 600)
+            .disabled(!model.isReady)
+            .allowsHitTesting(model.canPerformCommands)
+            .overlay {
+                if !model.isReady {
+                    ProgressView(localizer.string("正在恢复上次工作区…"))
+                        .padding(18)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                }
+            }
+            .onAppear {
+                model.synchronizeTerminalAppearance(resolvedAppearance)
+                model.start()
+                offerRemovalForUnavailableWorkspace()
+            }
+            .onChange(of: colorScheme) { _, _ in
+                model.synchronizeTerminalAppearance(resolvedAppearance)
+            }
+            .onChange(of: model.snapshot) { previousSnapshot, snapshot in
+                updateWorkspaceExpansion(from: previousSnapshot, to: snapshot)
+                offerRemovalForUnavailableWorkspace()
+                focusPendingTerminalAfterViewUpdate()
+                if previousSnapshot.selectedWorkSessionID != snapshot.selectedWorkSessionID {
+                    if case .gitWorkbench = detailMode {
+                        detailMode = .gitWorkbench(model.currentWorkspaceID)
+                    }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .breathOpenGitWorkbench)) { _ in
+                guard GitWorkbenchReleaseGate.isEnabled else { return }
+                detailMode = .gitWorkbench(model.currentWorkspaceID)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .breathOpenSettings)) { _ in
+                detailMode = .settings
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: .breathSelectWorkSessionTab)
+            ) { notification in
+                guard let tab = notification.object as? WorkSessionTabShortcut else { return }
+                selectWorkSessionTab(at: tab.selectionIndex)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .breathSelectPreviousPane)) { _ in
+                focusAdjacentPane(previous: true)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .breathSelectNextPane)) { _ in
+                focusAdjacentPane(previous: false)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .breathCloseTerminalTarget)) { _ in
+                closeTerminalTarget()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .breathGitCommit)) { _ in
+                guard GitWorkbenchReleaseGate.isEnabled else { return }
+                guard let workspaceID = model.currentWorkspaceID,
+                      let workspace = model.gitWorkspace(for: workspaceID)
+                else {
+                    return
+                }
+                detailMode = .gitWorkbench(workspaceID)
+                gitCoordinator.model(for: workspace).shouldFocusCommitMessage = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .breathGitPush)) { _ in
+                guard GitWorkbenchReleaseGate.isEnabled else { return }
+                guard let workspaceID = model.currentWorkspaceID,
+                      let workspace = model.gitWorkspace(for: workspaceID)
+                else {
+                    return
+                }
+                detailMode = .gitWorkbench(workspaceID)
+                gitCoordinator.model(for: workspace).shouldPresentPushReview = true
+            }
+            .alert(
+                localizer.string("归档工作会话？"),
+                isPresented: archiveAlertPresented,
+                presenting: pendingArchive
+            ) { session in
+                Button(localizer.string("取消"), role: .cancel) { pendingArchive = nil }
+                Button(localizer.string("停止并归档"), role: .destructive) {
+                    model.archive(
+                        session.id,
+                        selecting: model.snapshot.archiveFallbackWorkSessionID(
+                            for: session.id
+                        )
+                    )
+                    pendingArchive = nil
+                }
+            } message: { _ in
+                Text(localizer.string("该会话中的所有终端进程都会停止。会话之后可在设置的“已归档”中恢复。"))
+            }
+            .alert(
+                localizer.string("移除工作区？"),
+                isPresented: workspaceAlertPresented,
+                presenting: pendingWorkspaceRemoval
+            ) { workspace in
+                Button(localizer.string("取消"), role: .cancel) {
+                    dismissedUnavailableWorkspaces.insert(workspace.id)
+                    pendingWorkspaceRemoval = nil
+                }
+                Button(localizer.string("停止并移除"), role: .destructive) {
+                    model.removeWorkspace(workspace.id)
+                    pendingWorkspaceRemoval = nil
+                }
+            } message: { workspace in
+                if model.snapshot.workSessions.contains(where: {
+                    $0.workspaceID == workspace.id && $0.managedWorktree != nil
+                }) {
+                    Text(
+                        localizer.format(
+                            "移除含 Worktree 的工作区说明 %@",
+                            workspace.path
+                        )
+                    )
+                } else {
+                    Text(localizer.format("移除工作区说明 %@", workspace.path))
+                }
+            }
+            .alert("Breath", isPresented: errorAlertPresented) {
+                Button(localizer.string("好")) { model.lastError = nil }
+            } message: {
+                Text(model.lastError ?? localizer.string("未知错误"))
+            }
+            .sheet(item: $pendingWorktreeWorkspace) { workspace in
+                ManagedWorktreeCreationSheet(
+                    workspace: workspace,
+                    isCreating: model.creatingWorktreeWorkspaceIDs.contains(
+                        workspace.id
+                    ),
+                    errorMessage: worktreeCreationError,
+                    loadStartBranches: {
+                        try await model.managedWorktreeStartBranches(
+                            in: workspace.id
+                        )
+                    },
+                    onCancel: {
+                        worktreeCreationError = nil
+                        pendingWorktreeWorkspace = nil
+                    },
+                    onCreate: { startBranch in
+                        worktreeCreationError = nil
+                        model.lastError = nil
+                        createManagedWorktreeSession(
+                            in: workspace,
+                            startBranch: startBranch
+                        ) { succeeded in
+                            if succeeded {
+                                pendingWorktreeWorkspace = nil
+                            } else {
+                                worktreeCreationError = model.lastError
+                                    ?? localizer.string("创建 Worktree 失败。")
+                                model.lastError = nil
+                            }
+                        }
+                    }
+                )
+            }
+    }
+
+    private var workbenchRoot: some View {
         HStack(spacing: 0) {
             activityBar
             workbenchContent
         }
-        .ignoresSafeArea(.container, edges: .top)
-        .frame(minWidth: 900, minHeight: 600)
-        .disabled(!model.isReady)
-        .allowsHitTesting(model.canPerformCommands)
-        .overlay {
-            if !model.isReady {
-                ProgressView(localizer.string("正在恢复上次工作区…"))
-                    .padding(18)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-            }
+        .background {
+            WindowFullScreenObserver(isFullScreen: $isWindowFullScreen)
+                .frame(width: 0, height: 0)
         }
-        .onAppear {
-            model.synchronizeTerminalAppearance(resolvedAppearance)
-            model.start()
-            offerRemovalForUnavailableWorkspace()
-        }
-        .onChange(of: colorScheme) { _, _ in
-            model.synchronizeTerminalAppearance(resolvedAppearance)
-        }
-        .onChange(of: model.snapshot) { previousSnapshot, snapshot in
-            updateWorkspaceExpansion(from: previousSnapshot, to: snapshot)
-            offerRemovalForUnavailableWorkspace()
-            focusPendingTerminalAfterViewUpdate()
-            if previousSnapshot.selectedWorkSessionID != snapshot.selectedWorkSessionID {
-                if case .gitWorkbench = detailMode {
-                    detailMode = .gitWorkbench(model.currentWorkspaceID)
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .breathOpenGitWorkbench)) { _ in
-            guard GitWorkbenchReleaseGate.isEnabled else { return }
-            detailMode = .gitWorkbench(model.currentWorkspaceID)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .breathOpenSettings)) { _ in
-            detailMode = .settings
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: .breathSelectWorkSessionTab)
-        ) { notification in
-            guard let tab = notification.object as? WorkSessionTabShortcut else { return }
-            selectWorkSessionTab(at: tab.selectionIndex)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .breathSelectPreviousPane)) { _ in
-            focusAdjacentPane(previous: true)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .breathSelectNextPane)) { _ in
-            focusAdjacentPane(previous: false)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .breathCloseTerminalTarget)) { _ in
-            closeTerminalTarget()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .breathGitCommit)) { _ in
-            guard GitWorkbenchReleaseGate.isEnabled else { return }
-            guard let workspaceID = model.currentWorkspaceID,
-                  let workspace = model.gitWorkspace(for: workspaceID)
-            else {
-                return
-            }
-            detailMode = .gitWorkbench(workspaceID)
-            gitCoordinator.model(for: workspace).shouldFocusCommitMessage = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .breathGitPush)) { _ in
-            guard GitWorkbenchReleaseGate.isEnabled else { return }
-            guard let workspaceID = model.currentWorkspaceID,
-                  let workspace = model.gitWorkspace(for: workspaceID)
-            else {
-                return
-            }
-            detailMode = .gitWorkbench(workspaceID)
-            gitCoordinator.model(for: workspace).shouldPresentPushReview = true
-        }
-        .alert(
-            localizer.string("归档工作会话？"),
-            isPresented: archiveAlertPresented,
-            presenting: pendingArchive
-        ) { session in
-            Button(localizer.string("取消"), role: .cancel) { pendingArchive = nil }
-            Button(localizer.string("停止并归档"), role: .destructive) {
-                model.archive(
-                    session.id,
-                    selecting: model.snapshot.archiveFallbackWorkSessionID(
-                        for: session.id
-                    )
-                )
-                pendingArchive = nil
-            }
-        } message: { _ in
-            Text(localizer.string("该会话中的所有终端进程都会停止。会话之后可在设置的“已归档”中恢复。"))
-        }
-        .alert(
-            localizer.string("移除工作区？"),
-            isPresented: workspaceAlertPresented,
-            presenting: pendingWorkspaceRemoval
-        ) { workspace in
-            Button(localizer.string("取消"), role: .cancel) {
-                dismissedUnavailableWorkspaces.insert(workspace.id)
-                pendingWorkspaceRemoval = nil
-            }
-            Button(localizer.string("停止并移除"), role: .destructive) {
-                model.removeWorkspace(workspace.id)
-                pendingWorkspaceRemoval = nil
-            }
-        } message: { workspace in
-            if model.snapshot.workSessions.contains(where: {
-                $0.workspaceID == workspace.id && $0.managedWorktree != nil
-            }) {
-                Text(
-                    localizer.format(
-                        "移除含 Worktree 的工作区说明 %@",
-                        workspace.path
-                    )
-                )
-            } else {
-                Text(localizer.format("移除工作区说明 %@", workspace.path))
-            }
-        }
-        .alert("Breath", isPresented: errorAlertPresented) {
-            Button(localizer.string("好")) { model.lastError = nil }
-        } message: {
-            Text(model.lastError ?? localizer.string("未知错误"))
-        }
-        .sheet(item: $pendingWorktreeWorkspace) { workspace in
-            ManagedWorktreeCreationSheet(
-                workspace: workspace,
-                isCreating: model.creatingWorktreeWorkspaceIDs.contains(
-                    workspace.id
-                ),
-                errorMessage: worktreeCreationError,
-                loadStartBranches: {
-                    try await model.managedWorktreeStartBranches(
-                        in: workspace.id
-                    )
-                },
-                onCancel: {
-                    worktreeCreationError = nil
-                    pendingWorktreeWorkspace = nil
-                },
-                onCreate: { startBranch in
-                    worktreeCreationError = nil
-                    model.lastError = nil
-                    createManagedWorktreeSession(
-                        in: workspace,
-                        startBranch: startBranch
-                    ) { succeeded in
-                        if succeeded {
-                            pendingWorktreeWorkspace = nil
-                        } else {
-                            worktreeCreationError = model.lastError
-                                ?? localizer.string("创建 Worktree 失败。")
-                            model.lastError = nil
-                        }
-                    }
-                }
-            )
-        }
+        .environment(\.breathWindowIsFullScreen, isWindowFullScreen)
     }
 
     private var localizer: ApplicationLocalizer {
@@ -360,7 +370,7 @@ struct WorkbenchView: View {
                 .accessibilityLabel(localizer.string(WorkbenchAccessibility.addWorkspace))
                 .help(localizer.string(WorkbenchAccessibility.addWorkspace))
             }
-            .padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)
+            .pageToolbarLeadingPadding()
             .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
             .frame(height: WorkbenchLayout.pageToolbarHeight)
 
@@ -2492,6 +2502,7 @@ enum WorkbenchLayout {
     static let activityBarIconSize: CGFloat = 16
     static let pageToolbarHeight: CGFloat = 32
     static let pageToolbarLeadingInset: CGFloat = 44
+    static let fullScreenPageToolbarLeadingInset: CGFloat = 12
     static let pageToolbarTrailingInset: CGFloat = 12
     static let sidebarDefaultWidth: CGFloat = 220
     static let sidebarMinimumWidth: CGFloat = 140
@@ -2515,6 +2526,12 @@ enum WorkbenchLayout {
     static let agentIconFrameSize: CGFloat = 16
     static let agentIconGlyphSize: CGFloat = 14
     static let splitDividerThickness: CGFloat = 1
+
+    static func pageToolbarLeadingInset(isFullScreen: Bool) -> CGFloat {
+        isFullScreen
+            ? fullScreenPageToolbarLeadingInset
+            : pageToolbarLeadingInset
+    }
 }
 
 @MainActor

@@ -121,7 +121,7 @@ struct GitWorkbenchUnselectedView: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)
+            .pageToolbarLeadingPadding()
             .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
             .frame(height: WorkbenchLayout.pageToolbarHeight)
 
@@ -469,7 +469,7 @@ struct GitWorkbenchView: View {
             .fixedSize()
             .accessibilityLabel(localizer.string("更多 Git 操作"))
         }
-        .padding(.leading, WorkbenchLayout.pageToolbarLeadingInset)
+        .pageToolbarLeadingPadding()
         .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
         .frame(height: WorkbenchLayout.pageToolbarHeight)
     }
