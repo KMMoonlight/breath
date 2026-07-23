@@ -66,9 +66,6 @@
 "打开任务视图" = "Open Task View";
 "任务视图面板" = "Task View Panel";
 "正在恢复上次工作区…" = "Restoring the previous workspace…";
-"归档工作会话？" = "Archive Work Session?";
-"停止并归档" = "Stop and Archive";
-"该会话中的所有终端进程都会停止。会话之后可在设置的“已归档”中恢复。" = "All terminal processes in this session will stop. You can restore the session later from Archived in Settings.";
 "移除工作区？" = "Remove Workspace?";
 "停止并移除" = "Stop and Remove";
 "移除工作区说明 %@" = "Breath will stop related terminals and delete its metadata. No files in %@ will be modified.";
@@ -82,6 +79,7 @@
 "移除工作区…" = "Remove Workspace…";
 "终端 %d" = "Terminal %d";
 "归档" = "Archive";
+"归档并停止该会话的所有终端进程" = "Archive and Stop All Terminal Processes in This Session";
 "展开终端窗格" = "Expand Terminal Panes";
 "收起终端窗格" = "Collapse Terminal Panes";
 "请先添加工作区" = "Add a workspace first";

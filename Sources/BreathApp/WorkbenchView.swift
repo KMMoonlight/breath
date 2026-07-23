@@ -26,7 +26,6 @@ struct WorkbenchView: View {
     @ObservedObject var model: BreathApplicationModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.controlActiveState) private var controlActiveState
-    @State private var pendingArchive: WorkSession?
     @State private var pendingWorkspaceRemoval: Workspace?
     @State private var pendingWorktreeWorkspace: Workspace?
     @State private var worktreeCreationError: String?
@@ -111,24 +110,6 @@ struct WorkbenchView: View {
                 }
                 detailMode = .gitWorkbench(workspaceID)
                 gitCoordinator.model(for: workspace).shouldPresentPushReview = true
-            }
-            .alert(
-                localizer.string("归档工作会话？"),
-                isPresented: archiveAlertPresented,
-                presenting: pendingArchive
-            ) { session in
-                Button(localizer.string("取消"), role: .cancel) { pendingArchive = nil }
-                Button(localizer.string("停止并归档"), role: .destructive) {
-                    model.archive(
-                        session.id,
-                        selecting: model.snapshot.archiveFallbackWorkSessionID(
-                            for: session.id
-                        )
-                    )
-                    pendingArchive = nil
-                }
-            } message: { _ in
-                Text(localizer.string("该会话中的所有终端进程都会停止。会话之后可在设置的“已归档”中恢复。"))
             }
             .alert(
                 localizer.string("移除工作区？"),
@@ -619,7 +600,7 @@ struct WorkbenchView: View {
         case .pane(let paneID):
             model.closePane(paneID)
         case .workSession:
-            pendingArchive = session
+            archive(session)
         }
     }
 
@@ -705,12 +686,15 @@ struct WorkbenchView: View {
             }
             .buttonStyle(.plain)
             Button {
-                pendingArchive = session
+                archive(session)
             } label: {
                 Image(systemName: "archivebox")
             }
             .buttonStyle(.plain)
-            .help(localizer.string("归档"))
+            .accessibilityLabel(
+                localizer.string("归档并停止该会话的所有终端进程")
+            )
+            .help(localizer.string("归档并停止该会话的所有终端进程"))
             .opacity(showsArchiveButton ? 1 : 0)
             .allowsHitTesting(showsArchiveButton)
         }
@@ -757,10 +741,22 @@ struct WorkbenchView: View {
                 }
                 Divider()
             }
-            Button(localizer.string("归档"), role: .destructive) {
-                pendingArchive = session
+            Button(
+                localizer.string("归档并停止该会话的所有终端进程"),
+                role: .destructive
+            ) {
+                archive(session)
             }
         }
+    }
+
+    private func archive(_ session: WorkSession) {
+        model.archive(
+            session.id,
+            selecting: model.snapshot.archiveFallbackWorkSessionID(
+                for: session.id
+            )
+        )
     }
 
     private func createWorkSession(in workspaceID: WorkspaceID) {
@@ -874,7 +870,7 @@ struct WorkbenchView: View {
                     model: model,
                     onSelect: selectWorkSession,
                     onCreate: { createWorkSession(in: session.workspaceID) },
-                    onArchive: { pendingArchive = $0 }
+                    onArchive: archive
                 )
                 WorkSessionTerminalLayoutView(
                     session: session,
@@ -945,13 +941,6 @@ struct WorkbenchView: View {
             return
         }
         pendingWorkspaceRemoval = workspace
-    }
-
-    private var archiveAlertPresented: Binding<Bool> {
-        Binding(
-            get: { pendingArchive != nil },
-            set: { if !$0 { pendingArchive = nil } }
-        )
     }
 
     private var workspaceAlertPresented: Binding<Bool> {
@@ -1511,8 +1500,10 @@ private struct WorkSessionTabBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(localizer.string("归档"))
-            .help(localizer.string("归档"))
+            .accessibilityLabel(
+                localizer.string("归档并停止该会话的所有终端进程")
+            )
+            .help(localizer.string("归档并停止该会话的所有终端进程"))
             .opacity(showsArchive ? 1 : 0)
             .allowsHitTesting(showsArchive)
         }
@@ -1565,7 +1556,10 @@ private struct WorkSessionTabBar: View {
             }
         }
         .contextMenu {
-            Button(localizer.string("归档"), role: .destructive) {
+            Button(
+                localizer.string("归档并停止该会话的所有终端进程"),
+                role: .destructive
+            ) {
                 onArchive(session)
             }
         }
