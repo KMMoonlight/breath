@@ -83,6 +83,61 @@ public enum TerminalColorTheme: String, CaseIterable, Equatable, Codable, Sendab
     case atomOneDark
     case atomOneLight
 
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let storedValue = try container.decode(String.self)
+        if let theme = Self(rawValue: storedValue) {
+            self = theme
+            return
+        }
+
+        // Newer Breath builds persist the complete Ghostty catalog as
+        // "ghostty:<theme name>". Older builds must still be able to open the
+        // shared settings database after a worktree build has written one of
+        // those values.
+        let normalizedName = storedValue
+            .replacingOccurrences(of: "ghostty:", with: "")
+            .lowercased()
+        switch normalizedName {
+        case let name where name.contains("solarized") && name.contains("light"):
+            self = .solarizedLight
+        case let name where name.contains("solarized"):
+            self = .solarizedDark
+        case let name where name.contains("dracula"):
+            self = .dracula
+        case let name where name.contains("nord"):
+            self = .nord
+        case let name where name.contains("gruvbox") && name.contains("light"):
+            self = .gruvboxLight
+        case let name where name.contains("gruvbox"):
+            self = .gruvboxDark
+        case let name where name.contains("catppuccin") && name.contains("latte"):
+            self = .catppuccinLatte
+        case let name where name.contains("catppuccin"):
+            self = .catppuccinMocha
+        case let name where name.contains("tokyonight") && name.contains("day"):
+            self = .tokyoNightDay
+        case let name where name.contains("tokyonight"):
+            self = .tokyoNight
+        case let name where name.contains("atom one") && name.contains("light"):
+            self = .atomOneLight
+        case let name where name.contains("atom one"):
+            self = .atomOneDark
+        case let name
+            where name.contains("light")
+                || name.contains("day")
+                || name.contains("latte"):
+            self = .light
+        default:
+            self = .dark
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
     public static func compatible(
         with appearance: ResolvedApplicationAppearance
     ) -> [TerminalColorTheme] {
