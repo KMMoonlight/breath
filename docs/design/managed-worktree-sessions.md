@@ -158,7 +158,7 @@ Worktree 创建和清理跨越 Git 引用、Git Worktree 元数据、文件系�
 - 当前 `HEAD` 不被任何本地分支或标签保护时拒绝删除。
 - Worktree 被 `git worktree lock` 锁定时拒绝删除并显示锁定原因。
 - 所属 ID、托管路径、Git common directory 或 Git 状态无法验证时拒绝删除。
-- 目录已不存在时只允许清理 Breath 会话记录；因为无法从 Worktree 自身验证仓库身份，不再使用持久化的 Git common directory 清理 Git 元数据。
+- 目录已不存在时只允许清理 Breath 工作会话记录；因为无法从 Worktree 自身验证仓库身份，不再使用持久化的 Git common directory 清理 Git 元数据。
 
 通过检查后由 Git 执行普通 `worktree remove`。提交仍保留在会话分支上；Breath 不使用 `--force`，也不自动解锁。
 
