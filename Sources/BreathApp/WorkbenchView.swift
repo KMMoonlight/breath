@@ -28,6 +28,9 @@ struct WorkbenchView: View {
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var pendingArchive: WorkSession?
     @State private var pendingWorkspaceRemoval: Workspace?
+    @State private var pendingWorktreeWorkspace: Workspace?
+    @State private var worktreeBranchName = ""
+    @State private var worktreeCreationError: String?
     @State private var dismissedUnavailableWorkspaces: Set<WorkspaceID> = []
     @State private var expandedWorkspaceIDs: Set<WorkspaceID> = []
     @State private var expandedSessionIDs: Set<WorkSessionID> = []
@@ -92,9 +95,7 @@ struct WorkbenchView: View {
         .onReceive(NotificationCenter.default.publisher(for: .breathGitCommit)) { _ in
             guard GitWorkbenchReleaseGate.isEnabled else { return }
             guard let workspaceID = model.currentWorkspaceID,
-                  let workspace = model.snapshot.workspaces.first(where: {
-                      $0.id == workspaceID
-                  })
+                  let workspace = model.gitWorkspace(for: workspaceID)
             else {
                 return
             }
@@ -104,9 +105,7 @@ struct WorkbenchView: View {
         .onReceive(NotificationCenter.default.publisher(for: .breathGitPush)) { _ in
             guard GitWorkbenchReleaseGate.isEnabled else { return }
             guard let workspaceID = model.currentWorkspaceID,
-                  let workspace = model.snapshot.workspaces.first(where: {
-                      $0.id == workspaceID
-                  })
+                  let workspace = model.gitWorkspace(for: workspaceID)
             else {
                 return
             }
@@ -145,12 +144,53 @@ struct WorkbenchView: View {
                 pendingWorkspaceRemoval = nil
             }
         } message: { workspace in
-            Text(localizer.format("移除工作区说明 %@", workspace.path))
+            if model.snapshot.workSessions.contains(where: {
+                $0.workspaceID == workspace.id && $0.managedWorktree != nil
+            }) {
+                Text(
+                    localizer.format(
+                        "移除含 Worktree 的工作区说明 %@",
+                        workspace.path
+                    )
+                )
+            } else {
+                Text(localizer.format("移除工作区说明 %@", workspace.path))
+            }
         }
         .alert("Breath", isPresented: errorAlertPresented) {
             Button(localizer.string("好")) { model.lastError = nil }
         } message: {
             Text(model.lastError ?? localizer.string("未知错误"))
+        }
+        .sheet(item: $pendingWorktreeWorkspace) { workspace in
+            ManagedWorktreeCreationSheet(
+                workspace: workspace,
+                branchName: $worktreeBranchName,
+                isCreating: model.creatingWorktreeWorkspaceIDs.contains(
+                    workspace.id
+                ),
+                errorMessage: worktreeCreationError,
+                onCancel: {
+                    worktreeCreationError = nil
+                    pendingWorktreeWorkspace = nil
+                },
+                onCreate: {
+                    worktreeCreationError = nil
+                    model.lastError = nil
+                    createManagedWorktreeSession(
+                        in: workspace,
+                        branchName: worktreeBranchName
+                    ) { succeeded in
+                        if succeeded {
+                            pendingWorktreeWorkspace = nil
+                        } else {
+                            worktreeCreationError = model.lastError
+                                ?? localizer.string("创建 Worktree 失败。")
+                            model.lastError = nil
+                        }
+                    }
+                }
+            )
         }
     }
 
@@ -354,6 +394,15 @@ struct WorkbenchView: View {
             ForEach(sessions) { session in
                 sessionTree(session)
             }
+            if model.creatingWorktreeWorkspaceIDs.contains(workspace.id) {
+                HStack(spacing: WorkbenchLayout.sidebarItemSpacing) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(localizer.string("正在创建 Worktree…"))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.leading, WorkbenchLayout.sidebarPaneLeadingInset)
+            }
         } label: {
             HStack(spacing: WorkbenchLayout.sidebarItemSpacing) {
                 Image(systemName: model.isWorkspaceAvailable(workspace) ? "folder" : "folder.badge.questionmark")
@@ -412,6 +461,12 @@ struct WorkbenchView: View {
         Button(localizer.string("新建工作会话")) {
             createWorkSession(in: workspace.id)
         }
+        Button(localizer.string("新建 Worktree 会话…")) {
+            worktreeBranchName = ""
+            worktreeCreationError = nil
+            pendingWorktreeWorkspace = workspace
+        }
+        .disabled(model.creatingWorktreeWorkspaceIDs.contains(workspace.id))
         Divider()
         Button(localizer.string("移除工作区…"), role: .destructive) {
             pendingWorkspaceRemoval = workspace
@@ -585,6 +640,13 @@ struct WorkbenchView: View {
     ) -> some View {
         let showsArchiveButton = hoveredSessionID == session.id
         return HStack(spacing: WorkbenchLayout.sidebarItemSpacing) {
+            if let managedWorktree = session.managedWorktree {
+                ManagedWorktreeMarker(
+                    worktree: managedWorktree,
+                    workingDirectory: model.workingDirectory(for: session),
+                    localizer: localizer
+                )
+            }
             if let pane { StateDot(state: pane.state) }
             if let agent = pane?.agentBinding?.agent {
                 AgentTypeLabel(agent: agent)
@@ -633,11 +695,49 @@ struct WorkbenchView: View {
                     .padding(.trailing, -5)
             }
         }
+        .contextMenu {
+            if session.managedWorktree != nil {
+                let workingDirectory = model.workingDirectory(for: session)
+                Button(localizer.string("在 Finder 中显示")) {
+                    NSWorkspace.shared.activateFileViewerSelecting([
+                        URL(
+                            fileURLWithPath: workingDirectory,
+                            isDirectory: true
+                        ),
+                    ])
+                }
+                Button(localizer.string("复制路径")) {
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.setString(
+                        workingDirectory,
+                        forType: .string
+                    )
+                }
+                Divider()
+            }
+            Button(localizer.string("归档"), role: .destructive) {
+                pendingArchive = session
+            }
+        }
     }
 
     private func createWorkSession(in workspaceID: WorkspaceID) {
         expandedWorkspaceIDs.insert(workspaceID)
         model.createWorkSession(in: workspaceID)
+    }
+
+    private func createManagedWorktreeSession(
+        in workspace: Workspace,
+        branchName: String,
+        completion: @escaping @MainActor @Sendable (Bool) -> Void
+    ) {
+        expandedWorkspaceIDs.insert(workspace.id)
+        model.createManagedWorktreeSession(
+            in: workspace.id,
+            branchName: branchName,
+            completion: completion
+        )
     }
 
     private var isGitWorkbenchSelected: Bool {
@@ -696,9 +796,7 @@ struct WorkbenchView: View {
                   case .gitWorkbench(let workspaceID) = detailMode
         {
             if let workspaceID,
-               let workspace = model.snapshot.workspaces.first(where: {
-                   $0.id == workspaceID
-               })
+               let workspace = model.gitWorkspace(for: workspaceID)
             {
                 GitWorkbenchView(
                     workspace: workspace,
@@ -725,9 +823,6 @@ struct WorkbenchView: View {
                $0.id == selectedID
            })
         {
-            let workspace = model.snapshot.workspaces.first(where: {
-                $0.id == session.workspaceID
-            })
             let sessions = model.snapshot.activeWorkSessions.filter {
                 $0.workspaceID == session.workspaceID
             }
@@ -742,7 +837,7 @@ struct WorkbenchView: View {
                 )
                 WorkSessionTerminalLayoutView(
                     session: session,
-                    workspacePath: workspace?.path ?? "",
+                    workspacePath: model.workingDirectory(for: session),
                     model: model
                 )
                 .id(session.id)
@@ -797,9 +892,13 @@ struct WorkbenchView: View {
 
     private func offerRemovalForUnavailableWorkspace() {
         guard pendingWorkspaceRemoval == nil,
-              let workspace = model.snapshot.workspaces.first(where: {
-                  !model.isWorkspaceAvailable($0)
-                      && !dismissedUnavailableWorkspaces.contains($0.id)
+              let workspace = model.snapshot.workspaces.first(where: { workspace in
+                  !model.isWorkspaceAvailable(workspace)
+                      && !dismissedUnavailableWorkspaces.contains(workspace.id)
+                      && !model.snapshot.workSessions.contains(where: { session in
+                          session.workspaceID == workspace.id
+                              && session.managedWorktree?.state == .available
+                      })
               })
         else {
             return
@@ -825,6 +924,123 @@ struct WorkbenchView: View {
         Binding(
             get: { model.lastError != nil },
             set: { if !$0 { model.lastError = nil } }
+        )
+    }
+}
+
+private struct ManagedWorktreeCreationSheet: View {
+    let workspace: Workspace
+    @Binding var branchName: String
+    let isCreating: Bool
+    let errorMessage: String?
+    let onCancel: () -> Void
+    let onCreate: () -> Void
+
+    @Environment(\.applicationLanguage) private var applicationLanguage
+    @FocusState private var focusesBranchName: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(localizer.string("新建 Worktree 会话"))
+                    .font(.headline)
+                Text(workspace.displayName)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(localizer.string("任务分支"))
+                    .font(.subheadline.weight(.medium))
+                TextField(
+                    localizer.string("例如 task/123"),
+                    text: $branchName
+                )
+                .textFieldStyle(.roundedBorder)
+                .focused($focusesBranchName)
+                .onSubmit {
+                    if canCreate && !isCreating {
+                        onCreate()
+                    }
+                }
+                Text(
+                    localizer.string(
+                        "已有本地分支会直接检出；不存在的分支会从当前 HEAD 创建。原检出的未提交修改不会复制。删除 Worktree 时会保留该分支。"
+                    )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button(localizer.string("取消"), action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isCreating)
+                Button(action: onCreate) {
+                    if isCreating {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text(localizer.string("创建"))
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canCreate || isCreating)
+            }
+        }
+        .padding(20)
+        .frame(width: 430)
+        .interactiveDismissDisabled(isCreating)
+        .onAppear {
+            focusesBranchName = true
+        }
+    }
+
+    private var canCreate: Bool {
+        !branchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var localizer: ApplicationLocalizer {
+        ApplicationLocalizer(language: applicationLanguage)
+    }
+}
+
+private struct ManagedWorktreeMarker: View {
+    let worktree: ManagedWorktree
+    let workingDirectory: String
+    let localizer: ApplicationLocalizer
+
+    var body: some View {
+        Image(
+            systemName: worktree.state == .available
+                ? "arrow.triangle.branch"
+                : "exclamationmark.triangle.fill"
+        )
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(
+            worktree.state == .available ? Color.secondary : Color.orange
+        )
+        .frame(
+            width: WorkbenchLayout.agentIconFrameSize,
+            height: WorkbenchLayout.agentIconFrameSize
+        )
+        .help(
+            [
+                localizer.format("Worktree 分支：%@", worktree.branchName),
+                workingDirectory,
+                localizer.format(
+                    "创建基线：%@",
+                    String(worktree.baselineCommit.prefix(8))
+                ),
+            ].joined(separator: "\n")
         )
     }
 }
@@ -1108,7 +1324,13 @@ private struct WorkSessionTabBar: View {
 
     @ViewBuilder
     private func sessionMarker(_ session: WorkSession) -> some View {
-        if session.layout.panes.count == 1 {
+        if let managedWorktree = session.managedWorktree {
+            ManagedWorktreeMarker(
+                worktree: managedWorktree,
+                workingDirectory: model.workingDirectory(for: session),
+                localizer: localizer
+            )
+        } else if session.layout.panes.count == 1 {
             if let agent = session.layout.panes.first?.agentBinding?.agent {
                 AgentTypeLabel(agent: agent)
             } else {

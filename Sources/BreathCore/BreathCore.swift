@@ -391,6 +391,7 @@ public struct WorkSession: Equatable, Codable, Sendable, Identifiable {
     public var layout: PaneLayout
     public var archivedAt: Date?
     public var titleSource: WorkSessionTitleSource?
+    public var managedWorktree: ManagedWorktree?
 
     public var pane: TerminalPane {
         switch layout {
@@ -412,7 +413,8 @@ public struct WorkSession: Equatable, Codable, Sendable, Identifiable {
         title: String,
         pane: TerminalPane,
         archivedAt: Date? = nil,
-        titleSource: WorkSessionTitleSource? = nil
+        titleSource: WorkSessionTitleSource? = nil,
+        managedWorktree: ManagedWorktree? = nil
     ) {
         self.id = id
         self.workspaceID = workspaceID
@@ -420,6 +422,7 @@ public struct WorkSession: Equatable, Codable, Sendable, Identifiable {
         self.layout = .pane(pane)
         self.archivedAt = archivedAt
         self.titleSource = titleSource
+        self.managedWorktree = managedWorktree
     }
 
     public init(
@@ -428,7 +431,8 @@ public struct WorkSession: Equatable, Codable, Sendable, Identifiable {
         title: String,
         layout: PaneLayout,
         archivedAt: Date? = nil,
-        titleSource: WorkSessionTitleSource? = nil
+        titleSource: WorkSessionTitleSource? = nil,
+        managedWorktree: ManagedWorktree? = nil
     ) {
         self.id = id
         self.workspaceID = workspaceID
@@ -436,6 +440,17 @@ public struct WorkSession: Equatable, Codable, Sendable, Identifiable {
         self.layout = layout
         self.archivedAt = archivedAt
         self.titleSource = titleSource
+        self.managedWorktree = managedWorktree
+    }
+
+    public func workingDirectory(workspacePath: String) -> String {
+        guard let managedWorktree,
+              managedWorktree.workspaceID == workspaceID,
+              managedWorktree.workSessionID == id
+        else {
+            return workspacePath
+        }
+        return managedWorktree.workingDirectory
     }
 }
 
@@ -566,6 +581,64 @@ public enum WorkbenchError: Error, Equatable {
     case invalidSplitPath
     case cannotCloseLastPane
     case agentEventTargetMismatch
+    case managedWorktreesUnavailable
+    case managedWorktreeUnavailable(WorkSessionID)
+    case managedWorktreeOwnershipMismatch(WorkSessionID)
+    case preparingForCleanExit
+}
+
+extension WorkbenchError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .workspaceNotFound:
+            return "找不到工作区。"
+        case .workspaceAlreadyExists(let path):
+            return "该工作区已经存在：\(path)"
+        case .workspaceUnavailable:
+            return "工作区目录当前不可用。"
+        case .workSessionNotFound:
+            return "找不到工作会话。"
+        case .terminalPaneNotFound:
+            return "找不到终端窗格。"
+        case .invalidSplitPath:
+            return "分屏布局已经发生变化，请重试。"
+        case .cannotCloseLastPane:
+            return "不能单独关闭工作会话中的最后一个终端。"
+        case .agentEventTargetMismatch:
+            return "Agent 事件不属于当前 Breath 会话。"
+        case .managedWorktreesUnavailable:
+            return "Worktree 服务当前不可用。"
+        case .managedWorktreeUnavailable:
+            return "该工作会话的 Worktree 已不可用。"
+        case .managedWorktreeOwnershipMismatch:
+            return "Worktree 所属信息与工作会话不一致，已拒绝操作。"
+        case .preparingForCleanExit:
+            return "Breath 正在退出，无法开始新的 Worktree 操作。"
+        }
+    }
+}
+
+private actor ManagedWorktreeLifecycleGate {
+    private var isHeld = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !isHeld {
+            isHeld = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            isHeld = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
 }
 
 public actor Workbench {
@@ -577,6 +650,8 @@ public actor Workbench {
 
     private let repository: any WorkbenchRepository
     private let terminalRuntime: any TerminalRuntime
+    private let managedWorktreeManager: (any ManagedWorktreeManaging)?
+    private let managedWorktreeLifecycleGate = ManagedWorktreeLifecycleGate()
     private let applicationInstanceID: ApplicationInstanceID
     private let agentResumeCommands: (any AgentResumeCommandProviding)?
     private let defaultShell: @Sendable () -> String
@@ -587,11 +662,13 @@ public actor Workbench {
     private var materializedWorkSessionIDs: Set<WorkSessionID>
     private var recoveryFallbacks: [TerminalPaneID: RecoveryFallback]
     private var monitorsProcessExits = false
+    private var isPreparingForCleanExit = false
     private var snapshotChangeHandler: (@Sendable () async -> Void)?
 
     public init(
         repository: any WorkbenchRepository,
         terminalRuntime: any TerminalRuntime,
+        managedWorktreeManager: (any ManagedWorktreeManaging)? = nil,
         agentResumeCommands: (any AgentResumeCommandProviding)? = nil,
         applicationInstanceID: ApplicationInstanceID = ApplicationInstanceID(rawValue: UUID()),
         defaultShell: @escaping @Sendable () -> String,
@@ -601,6 +678,7 @@ public actor Workbench {
     ) {
         self.repository = repository
         self.terminalRuntime = terminalRuntime
+        self.managedWorktreeManager = managedWorktreeManager
         self.agentResumeCommands = agentResumeCommands
         self.applicationInstanceID = applicationInstanceID
         self.defaultShell = defaultShell
@@ -676,6 +754,113 @@ public actor Workbench {
         return workSessionID
     }
 
+    @discardableResult
+    public func createManagedWorktreeSession(
+        in workspaceID: WorkspaceID,
+        branchName: String
+    ) async throws -> WorkSessionID {
+        guard !isPreparingForCleanExit else {
+            throw WorkbenchError.preparingForCleanExit
+        }
+        await managedWorktreeLifecycleGate.acquire()
+        guard !isPreparingForCleanExit else {
+            await managedWorktreeLifecycleGate.release()
+            throw WorkbenchError.preparingForCleanExit
+        }
+        do {
+            let workSessionID =
+                try await createManagedWorktreeSessionWithoutAcquiringGate(
+                    in: workspaceID,
+                    branchName: branchName
+                )
+            await managedWorktreeLifecycleGate.release()
+            return workSessionID
+        } catch {
+            await managedWorktreeLifecycleGate.release()
+            throw error
+        }
+    }
+
+    private func createManagedWorktreeSessionWithoutAcquiringGate(
+        in workspaceID: WorkspaceID,
+        branchName: String
+    ) async throws -> WorkSessionID {
+        guard let workspace = currentSnapshot.workspaces.first(where: {
+            $0.id == workspaceID
+        }) else {
+            throw WorkbenchError.workspaceNotFound(workspaceID)
+        }
+        guard workspaceAvailable(workspace.path) else {
+            throw WorkbenchError.workspaceUnavailable(workspaceID)
+        }
+        guard let managedWorktreeManager else {
+            throw WorkbenchError.managedWorktreesUnavailable
+        }
+
+        let workSessionID = WorkSessionID(rawValue: UUID())
+        let paneID = TerminalPaneID(rawValue: UUID())
+        let managedWorktree = try await managedWorktreeManager.create(
+            workspace: workspace,
+            workSessionID: workSessionID,
+            branchName: branchName
+        )
+        guard managedWorktree.workspaceID == workspaceID,
+              managedWorktree.workSessionID == workSessionID
+        else {
+            try? await managedWorktreeManager.remove(managedWorktree)
+            throw WorkbenchError.managedWorktreeOwnershipMismatch(
+                workSessionID
+            )
+        }
+        let workSession = WorkSession(
+            id: workSessionID,
+            workspaceID: workspaceID,
+            title: placeholderTitle(at: now()),
+            pane: TerminalPane(id: paneID),
+            managedWorktree: managedWorktree
+        )
+        let launch = TerminalLaunch(
+            paneID: paneID,
+            workingDirectory: managedWorktree.workingDirectory,
+            executable: defaultShell(),
+            arguments: ["-l"],
+            environment: terminalEnvironment(
+                workspaceID: workspaceID,
+                workSessionID: workSessionID,
+                paneID: paneID
+            )
+        )
+
+        let previousSnapshot = currentSnapshot
+        currentSnapshot.workSessions.append(workSession)
+        currentSnapshot.selectedWorkSessionID = workSessionID
+        do {
+            try await persistSnapshot(rollingBackTo: previousSnapshot)
+        } catch {
+            try? await managedWorktreeManager.remove(managedWorktree)
+            throw error
+        }
+
+        do {
+            try await terminalRuntime.launch(launch)
+        } catch {
+            let persistedSnapshot = currentSnapshot
+            currentSnapshot = previousSnapshot
+            do {
+                try await repository.save(previousSnapshot)
+                await snapshotChangeHandler?()
+            } catch {
+                currentSnapshot = persistedSnapshot
+                await snapshotChangeHandler?()
+                throw error
+            }
+            try? await managedWorktreeManager.remove(managedWorktree)
+            throw error
+        }
+        materializedWorkSessionIDs.insert(workSessionID)
+        return workSessionID
+    }
+
     public func snapshot() -> WorkbenchSnapshot {
         currentSnapshot
     }
@@ -714,6 +899,38 @@ public actor Workbench {
         currentSnapshot = try await repository.load()
         materializedWorkSessionIDs.removeAll()
         recoveryFallbacks.removeAll()
+        var reconciledWorktrees = false
+        for index in currentSnapshot.workSessions.indices {
+            guard var managedWorktree =
+                currentSnapshot.workSessions[index].managedWorktree
+            else {
+                continue
+            }
+            let isAvailable: Bool
+            let workSession = currentSnapshot.workSessions[index]
+            if managedWorktree.workspaceID == workSession.workspaceID,
+               managedWorktree.workSessionID == workSession.id,
+               let managedWorktreeManager
+            {
+                isAvailable = await managedWorktreeManager.isAvailable(
+                    managedWorktree
+                )
+            } else {
+                isAvailable = false
+            }
+            let state: ManagedWorktreeState = isAvailable
+                ? .available
+                : .unavailable
+            if managedWorktree.state != state {
+                managedWorktree.state = state
+                currentSnapshot.workSessions[index].managedWorktree =
+                    managedWorktree
+                reconciledWorktrees = true
+            }
+        }
+        if reconciledWorktrees {
+            try await repository.save(currentSnapshot)
+        }
 
         guard let selectedID = currentSnapshot.selectedWorkSessionID,
               let selectedSession = currentSnapshot.workSessions.first(where: {
@@ -721,11 +938,18 @@ public actor Workbench {
               }),
               let selectedWorkspace = currentSnapshot.workspaces.first(where: {
                   $0.id == selectedSession.workspaceID
-              }),
-              workspaceAvailable(selectedWorkspace.path)
+              })
         else {
             currentSnapshot.selectedWorkSessionID = nil
             return
+        }
+        do {
+            _ = try await workingDirectory(
+                for: selectedSession,
+                workspace: selectedWorkspace
+            )
+        } catch {
+            currentSnapshot.selectedWorkSessionID = nil
         }
     }
 
@@ -739,12 +963,24 @@ public actor Workbench {
     }
 
     public func prepareForCleanExit() async throws {
-        try await repository.save(currentSnapshot)
-        recoveryFallbacks.removeAll()
-        for workSession in currentSnapshot.workSessions {
-            for paneID in workSession.layout.paneIDs {
-                await terminalRuntime.stop(paneID: paneID)
+        guard !isPreparingForCleanExit else {
+            throw WorkbenchError.preparingForCleanExit
+        }
+        isPreparingForCleanExit = true
+        await managedWorktreeLifecycleGate.acquire()
+        do {
+            try await repository.save(currentSnapshot)
+            recoveryFallbacks.removeAll()
+            for workSession in currentSnapshot.workSessions {
+                for paneID in workSession.layout.paneIDs {
+                    await terminalRuntime.stop(paneID: paneID)
+                }
             }
+            await managedWorktreeLifecycleGate.release()
+        } catch {
+            isPreparingForCleanExit = false
+            await managedWorktreeLifecycleGate.release()
+            throw error
         }
     }
 
@@ -774,9 +1010,10 @@ public actor Workbench {
         }) else {
             throw WorkbenchError.workspaceNotFound(workSession.workspaceID)
         }
-        guard workspaceAvailable(workspace.path) else {
-            throw WorkbenchError.workspaceUnavailable(workspace.id)
-        }
+        let workingDirectory = try await workingDirectory(
+            for: workSession,
+            workspace: workspace
+        )
 
         let newPane = TerminalPane(id: TerminalPaneID(rawValue: UUID()))
         guard let layout = workSession.layout.splitting(
@@ -788,7 +1025,7 @@ public actor Workbench {
         }
         let launch = TerminalLaunch(
             paneID: newPane.id,
-            workingDirectory: workspace.path,
+            workingDirectory: workingDirectory,
             executable: defaultShell(),
             arguments: ["-l"],
             environment: [
@@ -902,18 +1139,83 @@ public actor Workbench {
     }
 
     public func deleteArchivedWorkSession(_ workSessionID: WorkSessionID) async throws {
-        guard currentSnapshot.workSessions.contains(where: {
+        guard !isPreparingForCleanExit else {
+            throw WorkbenchError.preparingForCleanExit
+        }
+        await managedWorktreeLifecycleGate.acquire()
+        guard !isPreparingForCleanExit else {
+            await managedWorktreeLifecycleGate.release()
+            throw WorkbenchError.preparingForCleanExit
+        }
+        do {
+            try await deleteArchivedWorkSessionWithoutAcquiringGate(
+                workSessionID
+            )
+            await managedWorktreeLifecycleGate.release()
+        } catch {
+            await managedWorktreeLifecycleGate.release()
+            throw error
+        }
+    }
+
+    private func deleteArchivedWorkSessionWithoutAcquiringGate(
+        _ workSessionID: WorkSessionID
+    ) async throws {
+        guard let workSession = currentSnapshot.workSessions.first(where: {
             $0.id == workSessionID && $0.archivedAt != nil
         }) else {
             throw WorkbenchError.workSessionNotFound(workSessionID)
         }
+        if let managedWorktree = workSession.managedWorktree {
+            guard managedWorktree.workspaceID == workSession.workspaceID,
+                  managedWorktree.workSessionID == workSession.id
+            else {
+                throw WorkbenchError.managedWorktreeOwnershipMismatch(
+                    workSession.id
+                )
+            }
+            guard let managedWorktreeManager else {
+                throw WorkbenchError.managedWorktreesUnavailable
+            }
+            try await managedWorktreeManager.remove(managedWorktree)
+        }
         let previousSnapshot = currentSnapshot
         currentSnapshot.workSessions.removeAll { $0.id == workSessionID }
-        try await persistSnapshot(rollingBackTo: previousSnapshot)
+        do {
+            try await persistSnapshot(rollingBackTo: previousSnapshot)
+        } catch {
+            if workSession.managedWorktree != nil {
+                markManagedWorktreesUnavailable(
+                    workSessionIDs: [workSessionID]
+                )
+                try? await repository.save(currentSnapshot)
+            }
+            throw error
+        }
         materializedWorkSessionIDs.remove(workSessionID)
     }
 
     public func removeWorkspace(_ workspaceID: WorkspaceID) async throws {
+        guard !isPreparingForCleanExit else {
+            throw WorkbenchError.preparingForCleanExit
+        }
+        await managedWorktreeLifecycleGate.acquire()
+        guard !isPreparingForCleanExit else {
+            await managedWorktreeLifecycleGate.release()
+            throw WorkbenchError.preparingForCleanExit
+        }
+        do {
+            try await removeWorkspaceWithoutAcquiringGate(workspaceID)
+            await managedWorktreeLifecycleGate.release()
+        } catch {
+            await managedWorktreeLifecycleGate.release()
+            throw error
+        }
+    }
+
+    private func removeWorkspaceWithoutAcquiringGate(
+        _ workspaceID: WorkspaceID
+    ) async throws {
         guard currentSnapshot.workspaces.contains(where: { $0.id == workspaceID }) else {
             throw WorkbenchError.workspaceNotFound(workspaceID)
         }
@@ -921,6 +1223,53 @@ public actor Workbench {
         let removedSessions = currentSnapshot.workSessions.filter {
             $0.workspaceID == workspaceID
         }
+        let managedSessions = removedSessions.compactMap {
+            session -> (WorkSession, ManagedWorktree)? in
+            guard let managedWorktree = session.managedWorktree else {
+                return nil
+            }
+            return (session, managedWorktree)
+        }
+        for (session, managedWorktree) in managedSessions {
+            guard managedWorktree.workspaceID == session.workspaceID,
+                  managedWorktree.workSessionID == session.id
+            else {
+                throw WorkbenchError.managedWorktreeOwnershipMismatch(
+                    session.id
+                )
+            }
+        }
+        if !managedSessions.isEmpty {
+            guard let managedWorktreeManager else {
+                throw WorkbenchError.managedWorktreesUnavailable
+            }
+            for (_, managedWorktree) in managedSessions {
+                try await managedWorktreeManager.validateRemoval(
+                    managedWorktree
+                )
+            }
+            for workSession in removedSessions {
+                for paneID in workSession.layout.paneIDs {
+                    recoveryFallbacks.removeValue(forKey: paneID)
+                    await terminalRuntime.stop(paneID: paneID)
+                }
+                materializedWorkSessionIDs.remove(workSession.id)
+            }
+            var removedWorktreeSessionIDs: Set<WorkSessionID> = []
+            do {
+                for (session, managedWorktree) in managedSessions {
+                    try await managedWorktreeManager.remove(managedWorktree)
+                    removedWorktreeSessionIDs.insert(session.id)
+                }
+            } catch {
+                markManagedWorktreesUnavailable(
+                    workSessionIDs: removedWorktreeSessionIDs
+                )
+                try? await repository.save(currentSnapshot)
+                throw error
+            }
+        }
+
         let previousSnapshot = currentSnapshot
         currentSnapshot.workspaces.removeAll { $0.id == workspaceID }
         currentSnapshot.workSessions.removeAll { $0.workspaceID == workspaceID }
@@ -929,13 +1278,25 @@ public actor Workbench {
         {
             currentSnapshot.selectedWorkSessionID = nil
         }
-        try await persistSnapshot(rollingBackTo: previousSnapshot)
+        do {
+            try await persistSnapshot(rollingBackTo: previousSnapshot)
+        } catch {
+            if !managedSessions.isEmpty {
+                markManagedWorktreesUnavailable(
+                    workSessionIDs: Set(managedSessions.map(\.0.id))
+                )
+                try? await repository.save(currentSnapshot)
+            }
+            throw error
+        }
 
-        for workSession in removedSessions {
-            materializedWorkSessionIDs.remove(workSession.id)
-            for paneID in workSession.layout.paneIDs {
-                recoveryFallbacks.removeValue(forKey: paneID)
-                await terminalRuntime.stop(paneID: paneID)
+        if managedSessions.isEmpty {
+            for workSession in removedSessions {
+                materializedWorkSessionIDs.remove(workSession.id)
+                for paneID in workSession.layout.paneIDs {
+                    recoveryFallbacks.removeValue(forKey: paneID)
+                    await terminalRuntime.stop(paneID: paneID)
+                }
             }
         }
     }
@@ -1028,6 +1389,50 @@ public actor Workbench {
         return "新会话 · \(formatter.string(from: date))"
     }
 
+    private func workingDirectory(
+        for workSession: WorkSession,
+        workspace: Workspace
+    ) async throws -> String {
+        guard let managedWorktree = workSession.managedWorktree else {
+            guard workspaceAvailable(workspace.path) else {
+                throw WorkbenchError.workspaceUnavailable(workspace.id)
+            }
+            return workspace.path
+        }
+        guard managedWorktree.workspaceID == workSession.workspaceID,
+              managedWorktree.workSessionID == workSession.id
+        else {
+            throw WorkbenchError.managedWorktreeOwnershipMismatch(
+                workSession.id
+            )
+        }
+        guard managedWorktree.state == .available else {
+            throw WorkbenchError.managedWorktreeUnavailable(workSession.id)
+        }
+        guard let managedWorktreeManager,
+              await managedWorktreeManager.isAvailable(managedWorktree)
+        else {
+            await markManagedWorktreeUnavailable(
+                workSessionID: workSession.id
+            )
+            throw WorkbenchError.managedWorktreeUnavailable(workSession.id)
+        }
+        return managedWorktree.workingDirectory
+    }
+
+    private func terminalEnvironment(
+        workspaceID: WorkspaceID,
+        workSessionID: WorkSessionID,
+        paneID: TerminalPaneID
+    ) -> [String: String] {
+        [
+            "BREATH_APPLICATION_INSTANCE_ID": applicationInstanceID.rawValue.uuidString,
+            "BREATH_WORKSPACE_ID": workspaceID.rawValue.uuidString,
+            "BREATH_WORK_SESSION_ID": workSessionID.rawValue.uuidString,
+            "BREATH_TERMINAL_PANE_ID": paneID.rawValue.uuidString,
+        ]
+    }
+
     private func materializeWorkSession(_ workSessionID: WorkSessionID) async throws {
         await ensureProcessExitMonitoring()
         guard let workSession = currentSnapshot.workSessions.first(where: {
@@ -1040,9 +1445,10 @@ public actor Workbench {
         }) else {
             throw WorkbenchError.workspaceNotFound(workSession.workspaceID)
         }
-        guard workspaceAvailable(workspace.path) else {
-            throw WorkbenchError.workspaceUnavailable(workspace.id)
-        }
+        let sessionWorkingDirectory = try await workingDirectory(
+            for: workSession,
+            workspace: workspace
+        )
 
         let previousSnapshot = currentSnapshot
         var snapshotChanged = false
@@ -1062,7 +1468,7 @@ public actor Workbench {
                 ]
                 let shellLaunch = TerminalLaunch(
                     paneID: pane.id,
-                    workingDirectory: workspace.path,
+                    workingDirectory: sessionWorkingDirectory,
                     executable: defaultShell(),
                     arguments: ["-l"],
                     environment: environment
@@ -1079,7 +1485,7 @@ public actor Workbench {
                         try await terminalRuntime.launch(
                             TerminalLaunch(
                                 paneID: pane.id,
-                                workingDirectory: workspace.path,
+                                workingDirectory: sessionWorkingDirectory,
                                 executable: command.executable,
                                 arguments: command.arguments,
                                 environment: environment
@@ -1163,6 +1569,34 @@ public actor Workbench {
         }
         currentSnapshot.workSessions[sessionIndex].layout = layout
         return true
+    }
+
+    private func markManagedWorktreesUnavailable(
+        workSessionIDs: Set<WorkSessionID>
+    ) {
+        for index in currentSnapshot.workSessions.indices
+            where workSessionIDs.contains(currentSnapshot.workSessions[index].id)
+        {
+            currentSnapshot.workSessions[index].managedWorktree?.state =
+                .unavailable
+        }
+    }
+
+    private func markManagedWorktreeUnavailable(
+        workSessionID: WorkSessionID
+    ) async {
+        guard let index = currentSnapshot.workSessions.firstIndex(where: {
+            $0.id == workSessionID
+        }),
+            currentSnapshot.workSessions[index].managedWorktree?.state
+                != .unavailable
+        else {
+            return
+        }
+        currentSnapshot.workSessions[index].managedWorktree?.state =
+            .unavailable
+        try? await repository.save(currentSnapshot)
+        await snapshotChangeHandler?()
     }
 
     private func canonicalWorkspaceURL(_ url: URL) -> URL {

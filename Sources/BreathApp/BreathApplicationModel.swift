@@ -14,8 +14,10 @@ final class BreathApplicationModel: ObservableObject {
     @Published private(set) var enabledAgents: Set<AgentKind> = []
     @Published private(set) var agentCLIStatuses: [AgentKind: AgentCLIInstallationStatus] = [:]
     @Published private(set) var updatingAgents: Set<AgentKind> = []
+    @Published private(set) var creatingWorktreeWorkspaceIDs: Set<WorkspaceID> = []
     @Published private(set) var isReady = false
     @Published private(set) var isRestoringSelectedSession = false
+    @Published private(set) var isPreparingForTermination = false
     @Published private(set) var shortcutPriority = BreathShortcutPriority()
     @Published var lastError: String?
 
@@ -102,9 +104,16 @@ final class BreathApplicationModel: ObservableObject {
             )
         }
         runtime = TerminalEngineRuntime(engine: terminalEngine)
+        let managedWorktreeService = ManagedWorktreeService(
+            managedRootURL: supportDirectory.appendingPathComponent(
+                "worktrees",
+                isDirectory: true
+            )
+        )
         workbench = Workbench(
             repository: repository,
             terminalRuntime: runtime,
+            managedWorktreeManager: managedWorktreeService,
             agentResumeCommands: BuiltInAgentResumeCommands(),
             applicationInstanceID: applicationInstanceID,
             defaultShell: {
@@ -146,7 +155,7 @@ final class BreathApplicationModel: ObservableObject {
 #endif
 
     var canPerformCommands: Bool {
-        isReady && !isRestoringSelectedSession
+        isReady && !isRestoringSelectedSession && !isPreparingForTermination
     }
 
     func updateTerminalInputFocus(
@@ -239,6 +248,27 @@ final class BreathApplicationModel: ObservableObject {
     func createWorkSession(in workspaceID: WorkspaceID) {
         perform {
             _ = try await self.workbench.createWorkSession(in: workspaceID)
+        }
+    }
+
+    func createManagedWorktreeSession(
+        in workspaceID: WorkspaceID,
+        branchName: String,
+        completion: @escaping @MainActor @Sendable (Bool) -> Void = { _ in }
+    ) {
+        guard !creatingWorktreeWorkspaceIDs.contains(workspaceID) else {
+            completion(false)
+            return
+        }
+        creatingWorktreeWorkspaceIDs.insert(workspaceID)
+        perform(completion: { [weak self] succeeded in
+            self?.creatingWorktreeWorkspaceIDs.remove(workspaceID)
+            completion(succeeded)
+        }) {
+            _ = try await self.workbench.createManagedWorktreeSession(
+                in: workspaceID,
+                branchName: branchName
+            )
         }
     }
 
@@ -464,6 +494,8 @@ final class BreathApplicationModel: ObservableObject {
     }
 
     func prepareForTermination() async -> Bool {
+        guard !isPreparingForTermination else { return false }
+        isPreparingForTermination = true
         if !started { start() }
         await startupTask?.value
         guard startupSucceeded else {
@@ -474,6 +506,7 @@ final class BreathApplicationModel: ObservableObject {
             try await workbench.prepareForCleanExit()
             return true
         } catch {
+            isPreparingForTermination = false
             lastError = error.localizedDescription
             return false
         }
@@ -485,6 +518,33 @@ final class BreathApplicationModel: ObservableObject {
             atPath: workspace.path,
             isDirectory: &isDirectory
         ) && isDirectory.boolValue
+    }
+
+    func workingDirectory(for session: WorkSession) -> String {
+        let workspacePath = snapshot.workspaces.first(where: {
+            $0.id == session.workspaceID
+        })?.path ?? ""
+        return session.workingDirectory(workspacePath: workspacePath)
+    }
+
+    func gitWorkspace(for workspaceID: WorkspaceID) -> Workspace? {
+        guard let workspace = snapshot.workspaces.first(where: {
+            $0.id == workspaceID
+        }) else {
+            return nil
+        }
+        guard let selectedID = snapshot.selectedWorkSessionID,
+              let selectedSession = snapshot.activeWorkSessions.first(where: {
+                  $0.id == selectedID && $0.workspaceID == workspaceID
+              })
+        else {
+            return workspace
+        }
+        return Workspace(
+            id: workspace.id,
+            path: workingDirectory(for: selectedSession),
+            displayName: workspace.displayName
+        )
     }
 
     private func perform(

@@ -72,6 +72,7 @@
 "移除工作区？" = "移除工作区？";
 "停止并移除" = "停止并移除";
 "移除工作区说明 %@" = "将停止相关终端并删除 Breath 元数据，不会修改 %@ 中的任何文件。";
+"移除含 Worktree 的工作区说明 %@" = "将停止相关终端、删除 Breath 托管的 Worktree 目录和元数据。任务分支会保留，不会修改原始检出 %@ 中的文件；任一 Worktree 无法安全删除时都会取消操作。";
 "好" = "好";
 "未知错误" = "未知错误";
 "工作区" = "工作区";
@@ -625,3 +626,14 @@
 "%@ is installed, but its version could not be verified." = "已安装 %@，但无法验证其版本。";
 "%@ %@ is older than the supported %@." = "%@ %@ 低于受支持的最低版本 %@。";
 "The Skill was removed, but its source record could not be cleaned up. Refresh to retry reconciliation." = "Skill 已移除，但来源记录清理失败。请刷新以重试对账。";
+"新建 Worktree 会话…" = "新建 Worktree 会话…";
+"新建 Worktree 会话" = "新建 Worktree 会话";
+"正在创建 Worktree…" = "正在创建 Worktree…";
+"任务分支" = "任务分支";
+"例如 task/123" = "例如 task/123";
+"已有本地分支会直接检出；不存在的分支会从当前 HEAD 创建。原检出的未提交修改不会复制。删除 Worktree 时会保留该分支。" = "已有本地分支会直接检出；不存在的分支会从当前 HEAD 创建。原检出的未提交修改不会复制。删除 Worktree 时会保留该分支。";
+"Worktree 分支：%@" = "Worktree 分支：%@";
+"创建基线：%@" = "创建基线：%@";
+"创建 Worktree 失败。" = "创建 Worktree 失败。";
+"复制路径" = "复制路径";
+"将删除托管 Worktree 目录，但保留任务分支 %@。存在未提交修改或未受分支保护的提交时会拒绝删除。" = "将删除托管 Worktree 目录，但保留任务分支 %@。存在未提交修改或未受分支保护的提交时会拒绝删除。";

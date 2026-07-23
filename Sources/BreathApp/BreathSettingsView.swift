@@ -117,8 +117,17 @@ struct BreathSettingsView: View {
                 model.deleteArchive(session.id)
                 archiveToDelete = nil
             }
-        } message: { _ in
-            Text(localizer.string("只会删除 Breath 元数据，不会删除项目文件或 Agent CLI 自己保存的会话。"))
+        } message: { session in
+            if let managedWorktree = session.managedWorktree {
+                Text(
+                    localizer.format(
+                        "将删除托管 Worktree 目录，但保留任务分支 %@。存在未提交修改或未受分支保护的提交时会拒绝删除。",
+                        managedWorktree.branchName
+                    )
+                )
+            } else {
+                Text(localizer.string("只会删除 Breath 元数据，不会删除项目文件或 Agent CLI 自己保存的会话。"))
+            }
         }
     }
 
@@ -443,6 +452,11 @@ struct BreathSettingsView: View {
                             Text(workspaceName(for: session))
                                 .font(applicationFont(offset: -1))
                                 .foregroundStyle(.secondary)
+                            if let managedWorktree = session.managedWorktree {
+                                Text(managedWorktree.branchName)
+                                    .font(applicationFont(offset: -1))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         Spacer()
                         Button(localizer.string("恢复")) {

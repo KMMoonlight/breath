@@ -7,6 +7,52 @@ import Testing
 
 @Suite("SQLite workbench repository")
 struct SQLiteWorkbenchRepositoryTests {
+    @Test("legacy sessions without worktree metadata remain local sessions")
+    func legacySessionDecodingDefaultsToLocalCheckout() throws {
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let snapshot = WorkbenchSnapshot(
+            workspaces: [
+                Workspace(
+                    id: workspaceID,
+                    path: "/tmp/project",
+                    displayName: "project"
+                ),
+            ],
+            workSessions: [
+                WorkSession(
+                    id: sessionID,
+                    workspaceID: workspaceID,
+                    title: "Legacy",
+                    pane: TerminalPane(id: TerminalPaneID(rawValue: UUID()))
+                ),
+            ],
+            selectedWorkSessionID: sessionID
+        )
+        let encoded = try JSONEncoder().encode(snapshot)
+        var object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        var sessions = try #require(
+            object["workSessions"] as? [[String: Any]]
+        )
+        sessions[0].removeValue(forKey: "managedWorktree")
+        object["workSessions"] = sessions
+        let legacyPayload = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try JSONDecoder().decode(
+            WorkbenchSnapshot.self,
+            from: legacyPayload
+        )
+
+        #expect(decoded.workSessions.first?.managedWorktree == nil)
+        #expect(
+            decoded.workSessions.first?.workingDirectory(
+                workspacePath: "/tmp/project"
+            ) == "/tmp/project"
+        )
+    }
+
     @Test("workbench snapshot survives a repository round trip")
     func roundTrip() async throws {
         let databaseURL = FileManager.default.temporaryDirectory
@@ -26,7 +72,16 @@ struct SQLiteWorkbenchRepositoryTests {
                     id: sessionID,
                     workspaceID: workspaceID,
                     title: "新会话 · 12:00",
-                    pane: TerminalPane(id: paneID)
+                    pane: TerminalPane(id: paneID),
+                    managedWorktree: ManagedWorktree(
+                        workspaceID: workspaceID,
+                        workSessionID: sessionID,
+                        rootPath: "/tmp/worktrees/workspace/session",
+                        gitCommonDirectory: "/tmp/project/.git",
+                        baselineCommit: "0123456789abcdef",
+                        workspaceRelativePath: "",
+                        branchName: "task/round-trip"
+                    )
                 ),
             ],
             selectedWorkSessionID: sessionID

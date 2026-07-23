@@ -8,7 +8,7 @@ import SwiftUI
 final class GitWorkbenchCoordinator: ObservableObject {
     let operationRegistry: GitOperationRegistry
 
-    private var workspaceModels: [WorkspaceID: GitWorkspaceViewModel] = [:]
+    private var workspaceModels: [String: GitWorkspaceViewModel] = [:]
     private var registryObservation: AnyCancellable?
 
     init(operationRegistry: GitOperationRegistry = .shared) {
@@ -34,14 +34,18 @@ final class GitWorkbenchCoordinator: ObservableObject {
     }
 
     func model(for workspace: Workspace) -> GitWorkspaceViewModel {
-        if let model = workspaceModels[workspace.id] {
+        let key = URL(
+            fileURLWithPath: workspace.path,
+            isDirectory: true
+        ).standardizedFileURL.path
+        if let model = workspaceModels[key] {
             return model
         }
         let model = GitWorkspaceViewModel(
             workspace: workspace,
             operationRegistry: operationRegistry
         )
-        workspaceModels[workspace.id] = model
+        workspaceModels[key] = model
         return model
     }
 
