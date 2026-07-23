@@ -101,6 +101,13 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
         cleanupError: String
     )
 
+    var inventoryErrorDescription: String {
+        if case .gitFailed(let exitCode, _) = self {
+            return "Git 操作失败（退出码 \(exitCode)），未执行清理。"
+        }
+        return errorDescription ?? "Worktree 清理失败，未执行清理。"
+    }
+
     var errorDescription: String? {
         switch self {
         case .invalidBranchName(let branchName):
@@ -442,11 +449,15 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
     }
 
     func deleteInventoryDirectory(
-        _ item: ManagedWorktreeInventoryItem
+        _ item: ManagedWorktreeInventoryItem,
+        knownWorktrees: [ManagedWorktree]
     ) async throws {
         await operationGate.acquire()
         do {
-            try await deleteInventoryDirectoryWithoutAcquiringGate(item)
+            try await deleteInventoryDirectoryWithoutAcquiringGate(
+                item,
+                knownWorktrees: knownWorktrees
+            )
             await operationGate.release()
         } catch {
             await operationGate.release()
@@ -455,7 +466,8 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
     }
 
     private func deleteInventoryDirectoryWithoutAcquiringGate(
-        _ item: ManagedWorktreeInventoryItem
+        _ item: ManagedWorktreeInventoryItem,
+        knownWorktrees: [ManagedWorktree]
     ) async throws {
         guard item.state == .orphanedCheckout
                 || item.state == .directoryOnly,
@@ -469,6 +481,14 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             fileURLWithPath: directoryPath,
             isDirectory: true
         ).standardizedFileURL
+        let rootPath = standardizedPath(rootURL.path)
+        guard !knownWorktrees.contains(where: {
+            standardizedPath($0.rootPath) == rootPath
+        }) else {
+            throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                "该 Worktree 已重新关联工作会话，请刷新库存。"
+            )
+        }
         guard let owners = managedPathOwners(for: rootURL),
               isManagedPath(
                   rootURL,
@@ -484,22 +504,52 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             )
         }
         if item.state == .directoryOnly {
+            let entryNames: Set<String>
+            do {
+                entryNames = Set(
+                    try FileManager.default.contentsOfDirectory(
+                        atPath: rootURL.path
+                    )
+                )
+            } catch {
+                throw ManagedWorktreeServiceError
+                    .inventoryDeletionNotAllowed(
+                        "无法验证目录内容，未执行删除。"
+                    )
+            }
+            let gitMetadataURL = rootURL.appendingPathComponent(
+                ".git",
+                isDirectory: false
+            )
+            let containsGitMetadata =
+                FileManager.default.fileExists(
+                    atPath: gitMetadataURL.path
+                )
+                || entryNames.contains {
+                    $0.caseInsensitiveCompare(".git") == .orderedSame
+                }
+            guard containsGitMetadata else {
+                try await directoryTrash.moveToTrash(rootURL)
+                try removeEmptyManagedAncestors(startingAt: rootURL)
+                return
+            }
             let gitProbe = try await runner.run(arguments: [
                 "-C", rootURL.path,
                 "rev-parse", "--is-inside-work-tree",
             ])
-            guard gitProbe.exitCode != 0
-                    || gitProbe.standardOutput.trimmingCharacters(
-                        in: .whitespacesAndNewlines
-                    ) != "true"
-            else {
+            guard gitProbe.exitCode == 0 else {
+                throw gitFailure(gitProbe)
+            }
+            if gitProbe.standardOutput.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ) == "true" {
                 throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
                     "该目录仍是有效的 Git Worktree，请刷新库存后重试。"
                 )
             }
-            try await directoryTrash.moveToTrash(rootURL)
-            try removeEmptyManagedAncestors(startingAt: rootURL)
-            return
+            throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                "该目录包含 Git 元数据，无法确认为普通目录残留。"
+            )
         }
         guard let storedGitCommonDirectory = item.gitCommonDirectory else {
             throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(

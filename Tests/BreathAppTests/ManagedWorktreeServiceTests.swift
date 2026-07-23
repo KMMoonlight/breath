@@ -5,6 +5,20 @@ import Testing
 
 @Suite("Managed worktree service")
 struct ManagedWorktreeServiceTests {
+    @Test("inventory cleanup summarizes Git failures without stderr")
+    func inventoryCleanupUsesBriefGitFailureMessage() {
+        let error = ManagedWorktreeServiceError.gitFailed(
+            exitCode: 73,
+            output: "fatal: secret repository detail"
+        )
+
+        #expect(
+            error.inventoryErrorDescription
+                == "Git 操作失败（退出码 73），未执行清理。"
+        )
+        #expect(!error.inventoryErrorDescription.contains("secret"))
+    }
+
     @Test("lists the current branch and other worktree start branches")
     func listsWorktreeStartBranches() async throws {
         let fixture = try GitWorktreeFixture()
@@ -343,7 +357,10 @@ struct ManagedWorktreeServiceTests {
             }
         )
 
-        try await service.deleteInventoryDirectory(checkoutItem)
+        try await service.deleteInventoryDirectory(
+            checkoutItem,
+            knownWorktrees: []
+        )
 
         #expect(
             !FileManager.default.fileExists(atPath: worktree.rootPath)
@@ -406,7 +423,59 @@ struct ManagedWorktreeServiceTests {
         await #expect(
             throws: ManagedWorktreeServiceError.worktreeContainsChanges
         ) {
-            try await service.deleteInventoryDirectory(checkoutItem)
+            try await service.deleteInventoryDirectory(
+                checkoutItem,
+                knownWorktrees: []
+            )
+        }
+        #expect(FileManager.default.fileExists(atPath: worktree.rootPath))
+    }
+
+    @Test("an orphaned checkout that became known is not removed")
+    func refusesOrphanedCheckoutThatBecameKnown() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: ManagedWorktree.sessionBranchName(for: sessionID)
+        )
+        let inventory = await service.inventory(
+            workspaces: [workspace],
+            knownWorktrees: []
+        )
+        let checkoutItem = try #require(
+            inventory.items.first {
+                $0.directoryPath.map {
+                    URL(fileURLWithPath: $0)
+                        .resolvingSymlinksInPath()
+                        .standardizedFileURL.path
+                        == URL(fileURLWithPath: worktree.rootPath)
+                            .resolvingSymlinksInPath()
+                            .standardizedFileURL.path
+                } == true
+                    && $0.state == .orphanedCheckout
+            }
+        )
+
+        await #expect(
+            throws: ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                "该 Worktree 已重新关联工作会话，请刷新库存。"
+            )
+        ) {
+            try await service.deleteInventoryDirectory(
+                checkoutItem,
+                knownWorktrees: [worktree]
+            )
         }
         #expect(FileManager.default.fileExists(atPath: worktree.rootPath))
     }
@@ -446,7 +515,10 @@ struct ManagedWorktreeServiceTests {
             }
         )
 
-        try await service.deleteInventoryDirectory(directoryItem)
+        try await service.deleteInventoryDirectory(
+            directoryItem,
+            knownWorktrees: []
+        )
 
         #expect(
             !FileManager.default.fileExists(
@@ -502,10 +574,129 @@ struct ManagedWorktreeServiceTests {
                 "该目录仍是有效的 Git Worktree，请刷新库存后重试。"
             )
         ) {
-            try await service.deleteInventoryDirectory(directoryItem)
+            try await service.deleteInventoryDirectory(
+                directoryItem,
+                knownWorktrees: []
+            )
         }
         #expect(
             FileManager.default.fileExists(atPath: checkoutDirectory.path)
+        )
+    }
+
+    @Test("an inconclusive Git probe never trashes a directory residual")
+    func refusesToTrashDirectoryWhenGitProbeFails() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let residualDirectory = fixture.managedRootURL
+            .appendingPathComponent(
+                UUID().uuidString,
+                isDirectory: true
+            )
+            .appendingPathComponent(
+                UUID().uuidString,
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: residualDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: residualDirectory.appendingPathComponent(
+                ".git",
+                isDirectory: true
+            ),
+            withIntermediateDirectories: false
+        )
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL,
+            gitExecutableURL: try fixture.gitWrapperRejectingAllCommands(),
+            directoryTrash: RemovingTestWorktreeTrash()
+        )
+        let inventory = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+        let directoryItem = try #require(
+            inventory.items.first {
+                $0.directoryPath == residualDirectory.path
+                    && $0.state == .directoryOnly
+            }
+        )
+
+        await #expect(
+            throws: ManagedWorktreeServiceError.gitFailed(
+                exitCode: 99,
+                output: ""
+            )
+        ) {
+            try await service.deleteInventoryDirectory(
+                directoryItem,
+                knownWorktrees: []
+            )
+        }
+        #expect(
+            FileManager.default.fileExists(atPath: residualDirectory.path)
+        )
+    }
+
+    @Test("Git metadata casing follows the file system")
+    func refusesToTrashDirectoryWithCaseVariantGitMetadata() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let residualDirectory = fixture.managedRootURL
+            .appendingPathComponent(
+                UUID().uuidString,
+                isDirectory: true
+            )
+            .appendingPathComponent(
+                UUID().uuidString,
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: residualDirectory.appendingPathComponent(
+                ".GIT",
+                isDirectory: true
+            ),
+            withIntermediateDirectories: true
+        )
+        let lowercaseMetadataPath = residualDirectory
+            .appendingPathComponent(".git", isDirectory: true)
+            .path
+        guard FileManager.default.fileExists(
+            atPath: lowercaseMetadataPath
+        ) else {
+            return
+        }
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL,
+            gitExecutableURL: try fixture.gitWrapperRejectingAllCommands(),
+            directoryTrash: RemovingTestWorktreeTrash()
+        )
+        let inventory = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+        let directoryItem = try #require(
+            inventory.items.first {
+                $0.directoryPath == residualDirectory.path
+                    && $0.state == .directoryOnly
+            }
+        )
+
+        await #expect(
+            throws: ManagedWorktreeServiceError.gitFailed(
+                exitCode: 99,
+                output: ""
+            )
+        ) {
+            try await service.deleteInventoryDirectory(
+                directoryItem,
+                knownWorktrees: []
+            )
+        }
+        #expect(
+            FileManager.default.fileExists(atPath: residualDirectory.path)
         )
     }
 

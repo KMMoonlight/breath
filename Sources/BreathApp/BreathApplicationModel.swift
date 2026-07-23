@@ -334,7 +334,8 @@ final class BreathApplicationModel: ObservableObject {
                 managedWorktreeInventoryError = nil
                 refreshManagedWorktreeInventory()
             } catch {
-                managedWorktreeInventoryError = error.localizedDescription
+                managedWorktreeInventoryError =
+                    managedWorktreeInventoryErrorDescription(error)
             }
         }
     }
@@ -352,13 +353,28 @@ final class BreathApplicationModel: ObservableObject {
                 deletingManagedWorktreeInventoryItemIDs.remove(item.id)
             }
             do {
-                try await managedWorktreeService.deleteInventoryDirectory(item)
+                try await managedWorktreeService.deleteInventoryDirectory(
+                    item,
+                    knownWorktrees: snapshot.workSessions.compactMap(
+                        \.managedWorktree
+                    )
+                )
                 managedWorktreeInventoryError = nil
                 refreshManagedWorktreeInventory()
             } catch {
-                managedWorktreeInventoryError = error.localizedDescription
+                managedWorktreeInventoryError =
+                    managedWorktreeInventoryErrorDescription(error)
             }
         }
+    }
+
+    private func managedWorktreeInventoryErrorDescription(
+        _ error: Error
+    ) -> String {
+        if let worktreeError = error as? ManagedWorktreeServiceError {
+            return worktreeError.inventoryErrorDescription
+        }
+        return error.localizedDescription
     }
 
     func mergeManagedWorktreeSession(
