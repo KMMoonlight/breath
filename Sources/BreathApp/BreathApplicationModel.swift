@@ -354,6 +354,11 @@ final class BreathApplicationModel: ObservableObject {
         }
     }
 
+    func saveTerminalShortcutPolicy(_ policy: TerminalShortcutPolicy) {
+        settings.terminalShortcutPolicy = policy
+        persistSettings()
+    }
+
     func synchronizeTerminalAppearance(_ appearance: ResolvedApplicationAppearance) {
         let previousTheme = effectiveTerminalColorTheme
         resolvedAppearance = appearance

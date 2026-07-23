@@ -19,7 +19,7 @@ struct TerminalKeyboardShortcutTests {
         #expect(BreathShortcutCatalog.workSessionTabs[0].shortcut.matches(firstTab))
         #expect(BreathShortcutCatalog.workSessionTabs[8].shortcut.matches(ninthTab))
         #expect(
-            !BreathShortcutCatalog.matchesTerminalFirstShortcut(formerNextTab)
+            BreathShortcutCatalog.match(for: formerNextTab) == nil
         )
         #expect(BreathShortcutCatalog.newWorkSession.matches(newSession))
         #expect(BreathShortcutCatalog.previousPane.matches(previousPane))
@@ -83,82 +83,106 @@ struct TerminalKeyboardShortcutTests {
         #expect(priority.lastFocusedTerminalPaneID(in: secondSessionID) == secondPaneID)
     }
 
-    @Test("terminal-consumed shortcut does not reach Breath")
-    func terminalConsumedShortcutStopsRouting() {
-        let event = "shift-tab"
-
-        let forwarded = TerminalShortcutArbitrator.eventToForward(
-            event,
-            terminalHasInputFocus: true,
-            matchesBreathShortcut: { _ in true },
-            terminalHandler: { _ in true }
-        )
-
-        #expect(forwarded == nil)
-    }
-
-    @Test("unhandled terminal shortcut falls back to Breath")
-    func unhandledTerminalShortcutFallsBackToBreath() {
+    @Test("Breath-first keeps registered application shortcuts in Breath")
+    func breathFirstKeepsApplicationShortcuts() {
         let event = "command-t"
+        var terminalReceivedEvent = false
 
         let forwarded = TerminalShortcutArbitrator.eventToForward(
             event,
+            policy: .breathFirst,
             terminalHasInputFocus: true,
-            matchesBreathShortcut: { _ in true },
-            terminalHandler: { _ in false }
+            shortcutMatch: { _ in .application },
+            terminalHandler: { _ in terminalReceivedEvent = true }
         )
 
         #expect(forwarded == event)
+        #expect(!terminalReceivedEvent)
     }
 
-    @Test(
-        "terminal gets first refusal for application shortcuts",
-        arguments: ["t", "1"]
-    )
-    func terminalGetsFirstRefusalForApplicationShortcuts(
-        character: String
-    ) throws {
-        let event = try commandKeyEvent(character)
-        var terminalReceivedEvent = false
+    @Test("terminal-first sends registered application shortcuts only to the terminal")
+    func terminalFirstSendsApplicationShortcutsToTerminal() {
+        let event = "command-t"
+        var terminalReceivedEvent: String?
 
         let forwarded = TerminalShortcutArbitrator.eventToForward(
             event,
+            policy: .terminalFirst,
             terminalHasInputFocus: true,
-            matchesBreathShortcut:
-                BreathShortcutCatalog.matchesTerminalFirstShortcut,
-            terminalHandler: { _ in
-                terminalReceivedEvent = true
-                return true
-            }
+            shortcutMatch: { _ in .application },
+            terminalHandler: { terminalReceivedEvent = $0 }
         )
 
         #expect(forwarded == nil)
-        #expect(terminalReceivedEvent)
+        #expect(terminalReceivedEvent == event)
     }
 
-    @Test(
-        "Breath receives application shortcuts declined by the terminal",
-        arguments: ["t", "1"]
-    )
-    func breathReceivesApplicationShortcutsDeclinedByTerminal(
-        character: String
-    ) throws {
-        let event = try commandKeyEvent(character)
+    @Test("terminal-first keeps terminal-scoped Breath shortcuts in Breath")
+    func terminalFirstKeepsTerminalScopedShortcuts() {
+        let event = "command-d"
         var terminalReceivedEvent = false
 
         let forwarded = TerminalShortcutArbitrator.eventToForward(
             event,
+            policy: .terminalFirst,
             terminalHasInputFocus: true,
-            matchesBreathShortcut:
-                BreathShortcutCatalog.matchesTerminalFirstShortcut,
-            terminalHandler: { _ in
-                terminalReceivedEvent = true
-                return false
-            }
+            shortcutMatch: { _ in .terminal },
+            terminalHandler: { _ in terminalReceivedEvent = true }
         )
 
-        #expect(forwarded === event)
-        #expect(terminalReceivedEvent)
+        #expect(forwarded == event)
+        #expect(!terminalReceivedEvent)
+    }
+
+    @Test("terminal-first keeps explicitly allowed application shortcuts in Breath")
+    func terminalFirstKeepsAllowedApplicationShortcuts() {
+        let event = "allowed-application-shortcut"
+        var terminalReceivedEvent = false
+
+        let forwarded = TerminalShortcutArbitrator.eventToForward(
+            event,
+            policy: .terminalFirst,
+            terminalHasInputFocus: true,
+            shortcutMatch: { _ in
+                BreathShortcutMatch(
+                    scope: .application,
+                    allowInTerminal: true
+                )
+            },
+            terminalHandler: { _ in terminalReceivedEvent = true }
+        )
+
+        #expect(forwarded == event)
+        #expect(!terminalReceivedEvent)
+    }
+
+    @Test("unregistered shortcuts continue through the terminal input path")
+    func unregisteredShortcutsContinueNormally() {
+        let event = "shift-tab"
+        var terminalReceivedEvent = false
+
+        let forwarded = TerminalShortcutArbitrator.eventToForward(
+            event,
+            policy: .breathFirst,
+            terminalHasInputFocus: true,
+            shortcutMatch: { _ in nil },
+            terminalHandler: { _ in terminalReceivedEvent = true }
+        )
+
+        #expect(forwarded == event)
+        #expect(!terminalReceivedEvent)
+    }
+
+    @Test("shortcut catalog separates application and terminal ownership")
+    func shortcutCatalogSeparatesOwnership() throws {
+        #expect(
+            BreathShortcutCatalog.match(for: try commandKeyEvent("t"))
+                == .application
+        )
+        #expect(
+            BreathShortcutCatalog.match(for: try commandKeyEvent("d"))
+                == .terminal
+        )
     }
 
     @MainActor

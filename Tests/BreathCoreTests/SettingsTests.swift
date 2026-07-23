@@ -30,6 +30,37 @@ struct SettingsTests {
         #expect(settings.language == .system)
     }
 
+    @Test("terminal shortcut ownership defaults to Breath-first")
+    func terminalShortcutPolicyDefault() {
+        #expect(SettingsSnapshot.default.terminalShortcutPolicy == .breathFirst)
+    }
+
+    @Test("legacy settings snapshots default terminal shortcut ownership to Breath-first")
+    func legacyTerminalShortcutPolicyDefault() throws {
+        let payload = Data(
+            """
+            {
+              "application": {
+                "appearance": "system",
+                "sidebarDensity": "comfortable",
+                "fontSize": 12,
+                "language": "system"
+              },
+              "terminal": {
+                "fontFamily": "Menlo",
+                "fontSize": 13,
+                "colorTheme": "dark",
+                "cursorStyle": "block"
+              }
+            }
+            """.utf8
+        )
+
+        let settings = try JSONDecoder().decode(SettingsSnapshot.self, from: payload)
+
+        #expect(settings.terminalShortcutPolicy == .breathFirst)
+    }
+
     @Test("application and terminal styles are separate value objects")
     func separateStyleDomains() throws {
         var settings = SettingsSnapshot.default

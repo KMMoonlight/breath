@@ -6,6 +6,34 @@ import Foundation
 #if BREATH_HAS_GHOSTTY && canImport(GhosttyKit)
 import GhosttyKit
 
+enum GhosttyScrollInput {
+    static func modifiers(
+        hasPreciseScrollingDeltas: Bool,
+        momentumPhase: NSEvent.Phase
+    ) -> ghostty_input_scroll_mods_t {
+        let precision = hasPreciseScrollingDeltas ? 1 : 0
+        let momentum: Int
+        if momentumPhase.contains(.began) {
+            momentum = Int(GHOSTTY_MOUSE_MOMENTUM_BEGAN.rawValue)
+        } else if momentumPhase.contains(.stationary) {
+            momentum = Int(GHOSTTY_MOUSE_MOMENTUM_STATIONARY.rawValue)
+        } else if momentumPhase.contains(.changed) {
+            momentum = Int(GHOSTTY_MOUSE_MOMENTUM_CHANGED.rawValue)
+        } else if momentumPhase.contains(.ended) {
+            momentum = Int(GHOSTTY_MOUSE_MOMENTUM_ENDED.rawValue)
+        } else if momentumPhase.contains(.cancelled) {
+            momentum = Int(GHOSTTY_MOUSE_MOMENTUM_CANCELLED.rawValue)
+        } else if momentumPhase.contains(.mayBegin) {
+            momentum = Int(GHOSTTY_MOUSE_MOMENTUM_MAY_BEGIN.rawValue)
+        } else {
+            momentum = Int(GHOSTTY_MOUSE_MOMENTUM_NONE.rawValue)
+        }
+        // ghostty_input_scroll_mods_t packs precision into bit 0 and
+        // the three-bit momentum value into bits 1...3.
+        return ghostty_input_scroll_mods_t(precision | (momentum << 1))
+    }
+}
+
 @MainActor
 private func requestPasteConfirmation(for value: String, in window: NSWindow?) -> Bool {
     let alert = NSAlert()
@@ -156,7 +184,7 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         let palette = colors.ansiColors.enumerated()
             .map { "palette = \($0.offset)=\($0.element.ghosttyHex)" }
             .joined(separator: "\n")
-        let shortcutUnbinds = BreathShortcut.terminalFirst
+        let shortcutUnbinds = BreathShortcut.registeredByBreath
             .flatMap(\.ghosttyUnbindConfigurationLines)
             .joined(separator: "\n")
         let contents = """
@@ -173,7 +201,7 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         window-vsync = \(synchronizeRendering)
         window-decoration = false
         confirm-close-surface = false
-        # Breath owns these shortcuts; Ghostty host actions must not consume them.
+        # Breath routes these shortcuts; Ghostty host actions must not consume them.
         \(shortcutUnbinds)
         """
         try Data(contents.utf8).write(to: url, options: .atomic)
@@ -584,7 +612,10 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
             surface,
             event.scrollingDeltaX,
             event.scrollingDeltaY,
-            0
+            GhosttyScrollInput.modifiers(
+                hasPreciseScrollingDeltas: event.hasPreciseScrollingDeltas,
+                momentumPhase: event.momentumPhase
+            )
         )
     }
 

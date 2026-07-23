@@ -112,7 +112,8 @@ struct SQLiteWorkbenchRepositoryTests {
                 fontSize: 14,
                 colorTheme: .solarizedDark,
                 cursorStyle: .underline
-            )
+            ),
+            terminalShortcutPolicy: .terminalFirst
         )
 
         try await repository.saveSettings(expected)

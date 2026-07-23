@@ -1,4 +1,9 @@
 public struct BreathShortcut: Hashable, Sendable {
+    public enum Scope: Hashable, Sendable {
+        case application
+        case terminal
+    }
+
     public struct Modifiers: OptionSet, Hashable, Sendable {
         public let rawValue: UInt8
 
@@ -14,10 +19,19 @@ public struct BreathShortcut: Hashable, Sendable {
 
     public let character: Character
     public let modifiers: Modifiers
+    public let scope: Scope
+    public let allowInTerminal: Bool
 
-    public init(_ character: Character, modifiers: Modifiers) {
+    public init(
+        _ character: Character,
+        modifiers: Modifiers,
+        scope: Scope = .application,
+        allowInTerminal: Bool = false
+    ) {
         self.character = character
         self.modifiers = modifiers
+        self.scope = scope
+        self.allowInTerminal = allowInTerminal
     }
 }
 
@@ -26,14 +40,34 @@ public extension BreathShortcut {
     static let workSessionTabs = (1...9).map { number in
         Self(Character(String(number)), modifiers: [.command])
     }
-    static let previousPane = Self("[", modifiers: [.command])
-    static let nextPane = Self("]", modifiers: [.command])
+    static let previousPane = Self(
+        "[",
+        modifiers: [.command],
+        scope: .terminal
+    )
+    static let nextPane = Self(
+        "]",
+        modifiers: [.command],
+        scope: .terminal
+    )
     static let openSettings = Self(",", modifiers: [.command])
-    static let splitHorizontally = Self("d", modifiers: [.command])
-    static let splitVertically = Self("d", modifiers: [.command, .shift])
-    static let closePane = Self("w", modifiers: [.command])
+    static let splitHorizontally = Self(
+        "d",
+        modifiers: [.command],
+        scope: .terminal
+    )
+    static let splitVertically = Self(
+        "d",
+        modifiers: [.command, .shift],
+        scope: .terminal
+    )
+    static let closePane = Self(
+        "w",
+        modifiers: [.command],
+        scope: .terminal
+    )
 
-    static let terminalFirst = [
+    static let registeredByBreath = [
         newWorkSession,
         previousPane,
         nextPane,

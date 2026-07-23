@@ -52,13 +52,35 @@ struct TerminalEngineRuntimeTests {
         try await Task.sleep(for: .milliseconds(100))
     }
 
-    @Test("libghostty delivers opted-in child input but declines host shortcuts")
+    @Test("libghostty encodes Command shortcuts for enhanced terminal applications")
     @MainActor
     func libghosttyShortcutArbitration() async throws {
         await NativeUITestGate.shared.acquire()
         defer { NativeUITestGate.shared.release() }
         try await verifyLibghosttyShortcutArbitration()
         try await Task.sleep(for: .milliseconds(100))
+    }
+
+    @Test("libghostty marks precise scrolling deltas as pixels")
+    func libghosttyPreciseScrolling() {
+        #expect(
+            GhosttyScrollInput.modifiers(
+                hasPreciseScrollingDeltas: true,
+                momentumPhase: []
+            ) == 0b0000_0001
+        )
+        #expect(
+            GhosttyScrollInput.modifiers(
+                hasPreciseScrollingDeltas: false,
+                momentumPhase: []
+            ) == 0
+        )
+        #expect(
+            GhosttyScrollInput.modifiers(
+                hasPreciseScrollingDeltas: true,
+                momentumPhase: .changed
+            ) == 0b0000_0111
+        )
     }
 
     @Test("writing Ghostty configuration does not instantiate AppKit's shared font manager")
@@ -218,7 +240,7 @@ private func verifyLibghosttyShortcutArbitration() async throws {
         "d": 2,
         "w": 13,
     ]
-    for shortcut in BreathShortcut.terminalFirst {
+    for shortcut in BreathShortcut.registeredByBreath {
         let keyCode = try #require(shortcutKeyCodes[shortcut.character])
         let characters = shortcut.modifiers.contains(.shift)
             ? String(shortcut.character).uppercased()
@@ -247,15 +269,22 @@ private func verifyLibghosttyShortcutArbitration() async throws {
         keyCode: 17,
         modifiers: [.command]
     ))
-    var terminalApplicationReceivedShortcut = false
+    var terminalApplicationReceivedCommandT = false
     for _ in 0..<20 {
         try await Task.sleep(for: .milliseconds(25))
         if engine.handleShortcutKeyDown(commandT, for: terminalApplicationPaneID) {
-            terminalApplicationReceivedShortcut = true
+            terminalApplicationReceivedCommandT = true
             break
         }
     }
-    #expect(terminalApplicationReceivedShortcut)
+    #expect(terminalApplicationReceivedCommandT)
+
+    let shiftTab = try #require(shortcutKeyEvent(
+        "\t",
+        keyCode: 48,
+        modifiers: [.shift]
+    ))
+    #expect(engine.handleShortcutKeyDown(shiftTab, for: terminalApplicationPaneID))
     await engine.close(terminalApplicationPaneID)
 }
 

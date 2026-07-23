@@ -276,6 +276,11 @@
 "克隆到新目录" = "Clone into New Directory";
 "跨重启保存 Git Console" = "Persist Git Console Across Restarts";
 "快捷键冲突" = "Shortcut Conflict";
+"终端中的快捷键" = "Shortcuts in Terminal";
+"快捷键优先级" = "Shortcut Priority";
+"Breath 优先" = "Breath First";
+"终端优先" = "Terminal First";
+"选择终端聚焦时，由 Breath 还是终端内应用优先获得冲突快捷键。" = "Choose whether Breath or the application inside the focused terminal wins when shortcuts overlap.";
 "类型改变" = "Type Changed";
 "例如：swift test" = "For example: swift test";
 "密码、Token 或 Passphrase" = "Password, Token, or Passphrase";

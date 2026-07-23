@@ -429,16 +429,49 @@ public struct TerminalSettings: Equatable, Codable, Sendable {
     }
 }
 
+public enum TerminalShortcutPolicy: String, CaseIterable, Equatable, Codable, Sendable {
+    case breathFirst = "breath-first"
+    case terminalFirst = "terminal-first"
+}
+
 public struct SettingsSnapshot: Equatable, Codable, Sendable {
     public var application: ApplicationSettings
     public var terminal: TerminalSettings
+    public var terminalShortcutPolicy: TerminalShortcutPolicy
 
     public init(
         application: ApplicationSettings = ApplicationSettings(),
-        terminal: TerminalSettings = TerminalSettings()
+        terminal: TerminalSettings = TerminalSettings(),
+        terminalShortcutPolicy: TerminalShortcutPolicy = .breathFirst
     ) {
         self.application = application
         self.terminal = terminal
+        self.terminalShortcutPolicy = terminalShortcutPolicy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case application
+        case terminal
+        case terminalShortcutPolicy
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            application: try container.decode(ApplicationSettings.self, forKey: .application),
+            terminal: try container.decode(TerminalSettings.self, forKey: .terminal),
+            terminalShortcutPolicy: try container.decodeIfPresent(
+                TerminalShortcutPolicy.self,
+                forKey: .terminalShortcutPolicy
+            ) ?? .breathFirst
+        )
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(application, forKey: .application)
+        try container.encode(terminal, forKey: .terminal)
+        try container.encode(terminalShortcutPolicy, forKey: .terminalShortcutPolicy)
     }
 
     public static let `default` = SettingsSnapshot()

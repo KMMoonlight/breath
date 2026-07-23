@@ -1,13 +1,22 @@
+import BreathCore
+
 enum TerminalShortcutArbitrator {
     static func eventToForward<Event>(
         _ event: Event,
+        policy: TerminalShortcutPolicy,
         terminalHasInputFocus: Bool,
-        matchesBreathShortcut: (Event) -> Bool,
-        terminalHandler: (Event) -> Bool
+        shortcutMatch: (Event) -> BreathShortcutMatch?,
+        terminalHandler: (Event) -> Void
     ) -> Event? {
-        guard terminalHasInputFocus, matchesBreathShortcut(event) else {
+        guard terminalHasInputFocus,
+              let match = shortcutMatch(event)
+        else {
             return event
         }
-        return terminalHandler(event) ? nil : event
+        guard policy == .terminalFirst, !match.isAllowedInTerminal else {
+            return event
+        }
+        terminalHandler(event)
+        return nil
     }
 }

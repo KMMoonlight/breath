@@ -2033,6 +2033,7 @@ private struct TerminalPaneView: View {
                 engine: model.terminalEngine,
                 paneID: pane.id,
                 placeholder: localizer.string("终端正在启动…"),
+                shortcutPolicy: model.settings.terminalShortcutPolicy,
                 onFocusChange: { isFocused in
                     hasInputFocus = isFocused
                     model.updateTerminalInputFocus(
@@ -2041,13 +2042,18 @@ private struct TerminalPaneView: View {
                         isFocused: isFocused
                     )
                 },
-                isBreathShortcut: { event in
-                    BreathShortcutCatalog.matchesTerminalFirstShortcut(event)
-                        || GitShortcutResolver.commandID(
+                breathShortcutMatch: { event in
+                    if let match = BreathShortcutCatalog.match(for: event) {
+                        return match
+                    }
+                    if GitShortcutResolver.commandID(
                             matching: event,
                             preferences: GitPreferencesStore.shared.preferences,
                             requiredScope: .global
-                        ) != nil
+                    ) != nil {
+                        return .application
+                    }
+                    return nil
                 }
             )
         }
@@ -2336,15 +2342,17 @@ private struct TerminalNativeView: NSViewRepresentable {
     let engine: any TerminalViewProviding
     let paneID: TerminalPaneID
     let placeholder: String
+    let shortcutPolicy: TerminalShortcutPolicy
     let onFocusChange: (Bool) -> Void
-    let isBreathShortcut: (NSEvent) -> Bool
+    let breathShortcutMatch: (NSEvent) -> BreathShortcutMatch?
 
     func makeNSView(context: Context) -> TerminalHostView {
         let host = TerminalHostView()
         host.onFocusChange = onFocusChange
-        host.isBreathShortcut = isBreathShortcut
+        host.shortcutPolicy = shortcutPolicy
+        host.breathShortcutMatch = breathShortcutMatch
         host.handleTerminalShortcut = { event in
-            engine.handleShortcutKeyDown(event, for: paneID)
+            _ = engine.handleShortcutKeyDown(event, for: paneID)
         }
         host.install(engine.view(for: paneID), placeholder: placeholder)
         return host
@@ -2352,9 +2360,10 @@ private struct TerminalNativeView: NSViewRepresentable {
 
     func updateNSView(_ nsView: TerminalHostView, context: Context) {
         nsView.onFocusChange = onFocusChange
-        nsView.isBreathShortcut = isBreathShortcut
+        nsView.shortcutPolicy = shortcutPolicy
+        nsView.breathShortcutMatch = breathShortcutMatch
         nsView.handleTerminalShortcut = { event in
-            engine.handleShortcutKeyDown(event, for: paneID)
+            _ = engine.handleShortcutKeyDown(event, for: paneID)
         }
         nsView.install(engine.view(for: paneID), placeholder: placeholder)
     }
@@ -2392,8 +2401,9 @@ final class TerminalHostView: NSView {
     private var lastReportedFocus: Bool?
     private var retainsInputFocus = false
     var onFocusChange: ((Bool) -> Void)?
-    var isBreathShortcut: ((NSEvent) -> Bool)?
-    var handleTerminalShortcut: ((NSEvent) -> Bool)?
+    var shortcutPolicy: TerminalShortcutPolicy = .breathFirst
+    var breathShortcutMatch: ((NSEvent) -> BreathShortcutMatch?)?
+    var handleTerminalShortcut: ((NSEvent) -> Void)?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -2458,9 +2468,10 @@ final class TerminalHostView: NSView {
                 // Ordinary terminal input must keep using keyDown and the IME path.
                 let eventToForward = TerminalShortcutArbitrator.eventToForward(
                     event,
+                    policy: self.shortcutPolicy,
                     terminalHasInputFocus: self.hasInputFocus(in: window),
-                    matchesBreathShortcut: self.isBreathShortcut ?? { _ in false },
-                    terminalHandler: self.handleTerminalShortcut ?? { _ in false }
+                    shortcutMatch: self.breathShortcutMatch ?? { _ in nil },
+                    terminalHandler: self.handleTerminalShortcut ?? { _ in }
                 )
                 guard let eventToForward else { return nil }
                 self.reportFocusAfterEvent()

@@ -397,6 +397,31 @@ struct BreathSettingsView: View {
 
     private var shortcutsSettings: some View {
         settingsList {
+            Section(localizer.string("终端中的快捷键")) {
+                settingsControlRow("快捷键优先级") {
+                    settingsMenuPicker(
+                        selection: terminalShortcutPolicy,
+                        options: [
+                            (
+                                localizer.string("Breath 优先"),
+                                TerminalShortcutPolicy.breathFirst
+                            ),
+                            (
+                                localizer.string("终端优先"),
+                                TerminalShortcutPolicy.terminalFirst
+                            ),
+                        ],
+                        accessibilityLabel: localizer.string("快捷键优先级")
+                    )
+                }
+                Text(
+                    localizer.string(
+                        "选择终端聚焦时，由 Breath 还是终端内应用优先获得冲突快捷键。"
+                    )
+                )
+                .font(applicationFont(offset: -2))
+                .foregroundStyle(.secondary)
+            }
             Section(localizer.string("Breath")) {
                 ForEach(Self.supportedShortcuts) { shortcut in
                     HStack {
@@ -738,6 +763,13 @@ struct BreathSettingsView: View {
 
     private var terminalCursorStyle: Binding<TerminalCursorStyle> {
         terminalBinding(\.cursorStyle)
+    }
+
+    private var terminalShortcutPolicy: Binding<TerminalShortcutPolicy> {
+        Binding(
+            get: { model.settings.terminalShortcutPolicy },
+            set: { model.saveTerminalShortcutPolicy($0) }
+        )
     }
 
     private func terminalBinding<Value>(

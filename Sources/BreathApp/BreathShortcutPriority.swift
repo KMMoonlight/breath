@@ -2,9 +2,32 @@ import AppKit
 import BreathCore
 import SwiftUI
 
+struct BreathShortcutMatch: Equatable {
+    let scope: BreathShortcut.Scope
+    let allowInTerminal: Bool
+
+    static let application = Self(scope: .application, allowInTerminal: false)
+    static let terminal = Self(scope: .terminal, allowInTerminal: false)
+
+    init(_ shortcut: BreathShortcut) {
+        scope = shortcut.scope
+        allowInTerminal = shortcut.allowInTerminal
+    }
+
+    init(scope: BreathShortcut.Scope, allowInTerminal: Bool) {
+        self.scope = scope
+        self.allowInTerminal = allowInTerminal
+    }
+
+    var isAllowedInTerminal: Bool {
+        scope == .terminal || allowInTerminal
+    }
+}
+
 struct BreathShortcutDefinition {
     let character: Character
     let modifiers: EventModifiers
+    let match: BreathShortcutMatch
 
     init(_ shortcut: BreathShortcut) {
         character = shortcut.character
@@ -14,6 +37,7 @@ struct BreathShortcutDefinition {
         if shortcut.modifiers.contains(.control) { eventModifiers.insert(.control) }
         if shortcut.modifiers.contains(.shift) { eventModifiers.insert(.shift) }
         modifiers = eventModifiers
+        match = BreathShortcutMatch(shortcut)
     }
 
     var keyboardShortcut: KeyboardShortcut {
@@ -68,12 +92,12 @@ enum BreathShortcutCatalog {
     static let splitHorizontally = BreathShortcutDefinition(.splitHorizontally)
     static let splitVertically = BreathShortcutDefinition(.splitVertically)
     static let closePane = BreathShortcutDefinition(.closePane)
-    private static let terminalFirst = BreathShortcut.terminalFirst.map(
+    private static let registered = BreathShortcut.registeredByBreath.map(
         BreathShortcutDefinition.init
     )
 
-    static func matchesTerminalFirstShortcut(_ event: NSEvent) -> Bool {
-        terminalFirst.contains { $0.matches(event) }
+    static func match(for event: NSEvent) -> BreathShortcutMatch? {
+        registered.first(where: { $0.matches(event) })?.match
     }
 }
 
