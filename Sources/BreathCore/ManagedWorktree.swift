@@ -72,8 +72,65 @@ public struct ManagedWorktree: Equatable, Codable, Sendable {
         case baselineCommit
         case workspaceRelativePath
         case branchName
-        case createdBranch = "createdTaskBranch"
+        case createdBranch
+        case legacyCreatedTaskBranch = "createdTaskBranch"
         case state
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        workspaceID = try container.decode(
+            WorkspaceID.self,
+            forKey: .workspaceID
+        )
+        workSessionID = try container.decode(
+            WorkSessionID.self,
+            forKey: .workSessionID
+        )
+        rootPath = try container.decode(String.self, forKey: .rootPath)
+        gitCommonDirectory = try container.decode(
+            String.self,
+            forKey: .gitCommonDirectory
+        )
+        baselineCommit = try container.decode(
+            String.self,
+            forKey: .baselineCommit
+        )
+        workspaceRelativePath = try container.decode(
+            String.self,
+            forKey: .workspaceRelativePath
+        )
+        branchName = try container.decode(String.self, forKey: .branchName)
+        createdBranch = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .createdBranch
+        ) ?? container.decodeIfPresent(
+            Bool.self,
+            forKey: .legacyCreatedTaskBranch
+        )
+        state = try container.decodeIfPresent(
+            ManagedWorktreeState.self,
+            forKey: .state
+        ) ?? .available
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(workspaceID, forKey: .workspaceID)
+        try container.encode(workSessionID, forKey: .workSessionID)
+        try container.encode(rootPath, forKey: .rootPath)
+        try container.encode(
+            gitCommonDirectory,
+            forKey: .gitCommonDirectory
+        )
+        try container.encode(baselineCommit, forKey: .baselineCommit)
+        try container.encode(
+            workspaceRelativePath,
+            forKey: .workspaceRelativePath
+        )
+        try container.encode(branchName, forKey: .branchName)
+        try container.encodeIfPresent(createdBranch, forKey: .createdBranch)
+        try container.encode(state, forKey: .state)
     }
 
     public var workingDirectory: String {

@@ -250,7 +250,7 @@ flowchart TB
     WS --> REPO["Repository 接口"]
     REPO --> DB["GRDB / SQLite"]
     UI --> UP["Sparkle 2 Updater"]
-    WS --> GW["Git Worktree Service\n发现 / 创建 / 校验 / 导出 / 清理"]
+    WS --> GW["Git Worktree Service\n发现 / 创建 / 校验 / 安全删除"]
 ```
 
 ### 8.1 模块边界
@@ -264,7 +264,7 @@ flowchart TB
 | TerminalEngine | 隔离 libghostty 的不稳定嵌入 API，向上暴露窄接口 |
 | Agent Runtime | 本地 Socket、事件校验、适配器、状态映射、标题与恢复命令 |
 | Persistence | GRDB migrations、事务、仓储实现和启动恢复快照 |
-| Git Worktree Service | 仓库发现、同仓库操作串行、托管工作树生命周期、分支导出、删除风险检查与启动对账 |
+| Git Worktree Service | 仓库发现、同仓库操作串行、托管工作树的分阶段创建与失败补偿、删除风险检查和启动可用性校验 |
 | Updater | Sparkle 检查、确认、签名验证及重启协调 |
 
 SwiftUI 视图只依赖领域模型和用例，不直接访问 GRDB 记录或 libghostty API。libghostty 固定在验证过的源码 revision，并通过 TerminalEngine 接口隔离，cmux 只作为技术参考。
@@ -275,7 +275,7 @@ SQLite 至少保存：
 
 - 工作区 ID、规范化路径、展示信息和排序。
 - 工作会话 ID、工作区 ID、标题来源、归档状态、创建与最近活动时间。
-- 会话目录类型，以及托管工作树的路径、仓库关联、创建基线、工作区相对路径、最近导出分支和清理状态。
+- 会话目录类型，以及托管工作树的路径、仓库关联、创建基线、工作区相对路径、会话分支和可用状态。
 - 带稳定窗格 ID 的版本化递归分屏树、方向和比例。
 - 终端窗格当前 Agent 类型、原生标题、原生会话标识和恢复标记。
 - 正常退出快照、最后选中的工作会话和 schema 版本。
@@ -310,7 +310,7 @@ SQLite 至少保存：
 13. 应用配置和终端配置只改变各自范围内的样式，不改变行为，也不读取 Ghostty 配置。
 14. 签名、公证后的 GitHub Release 可以被 Sparkle 发现、验证并在用户确认后安装。
 15. 用户可以从工作区菜单创建专属托管工作树会话；其全部窗格和 Git 工具都使用该工作树。
-16. 工作树创建、归档、恢复、分支导出、风险删除、工作区移除和崩溃后对账符合 [`managed-worktree-sessions.md`](managed-worktree-sessions.md)。
+16. 工作树的分阶段创建、失败补偿、归档、恢复、会话分支保留、风险删除、工作区移除和启动可用性校验符合 [`managed-worktree-sessions.md`](managed-worktree-sessions.md)；首版不承诺孤儿发现或崩溃后自动清理。
 
 ## 11. 实施前技术验证
 
@@ -321,7 +321,7 @@ SQLite 至少保存：
 3. 验证用户级 hooks/plugin 的可逆合并、备份、冲突检测和静默失效。
 4. 验证正常退出快照的事务性，避免进程已停止但恢复标记未保存。
 5. 验证 Sparkle、libghostty 和 hook helper 一起签名、公证后的完整发布产物。
-6. 验证 `/usr/bin/git` 2.20+ 下的 worktree 创建与清理，尤其是 hooks、filters、LFS、锁文件、linked worktree、路径越界和崩溃恢复边界。
+6. 验证 `/usr/bin/git` 2.20+ 下的 worktree 创建与清理，尤其是 hooks、filters、LFS、锁文件、linked worktree、路径越界、仓库身份校验和失败补偿边界。
 
 ## 12. 决策记录
 

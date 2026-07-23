@@ -69,6 +69,41 @@ struct ManagedWorktreeServiceTests {
         #expect(!startBranches.contains { $0.name == "origin/HEAD" })
     }
 
+    @Test("rejects detached HEAD instead of selecting an unrelated branch")
+    func rejectsDetachedHead() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let headCommit = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "rev-parse", "HEAD",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "branch", "aaa-unrelated",
+        ])
+        _ = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "checkout", "--detach", headCommit,
+        ])
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+
+        await #expect(
+            throws: ManagedWorktreeServiceError.unsupportedRepository(
+                "当前 Git 仓库处于 detached HEAD 状态，请先检出一个分支。"
+            )
+        ) {
+            try await service.startBranches(
+                for: Workspace(
+                    id: WorkspaceID(rawValue: UUID()),
+                    path: fixture.workspaceURL.path,
+                    displayName: "client"
+                )
+            )
+        }
+    }
+
     @Test("creates a dedicated session branch from a checked-out start branch")
     func createsDedicatedSessionBranch() async throws {
         let fixture = try GitWorktreeFixture()
@@ -164,6 +199,47 @@ struct ManagedWorktreeServiceTests {
                 )
             )
         }
+    }
+
+    @Test("rejects a checked-out workspace path containing a symlink")
+    func rejectsSymlinkWorkspacePath() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let branchName = "feature/symlink-workspace"
+        try fixture.createBranchReplacingWorkspaceWithSymlink(
+            named: branchName
+        )
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let sessionBranch = ManagedWorktree.sessionBranchName(for: sessionID)
+        let expectedRoot = fixture.managedRootURL
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(workspaceID.rawValue.uuidString)
+            .appendingPathComponent(sessionID.rawValue.uuidString)
+            .path
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+
+        await #expect(throws: ManagedWorktreeServiceError.self) {
+            try await service.create(
+                workspace: Workspace(
+                    id: workspaceID,
+                    path: fixture.workspaceURL.path,
+                    displayName: "client"
+                ),
+                workSessionID: sessionID,
+                branchName: sessionBranch,
+                startBranch: ManagedWorktreeStartBranch(
+                    reference: "refs/heads/\(branchName)",
+                    name: branchName,
+                    kind: .localBranch,
+                    isCurrent: false
+                )
+            )
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: expectedRoot))
     }
 
     @Test("creates a linked checkout bound to the requested task branch")
@@ -425,6 +501,43 @@ struct ManagedWorktreeServiceTests {
         #expect(FileManager.default.fileExists(atPath: worktree.rootPath))
     }
 
+    @Test("removal verifies the checkout's actual git common directory")
+    func removalRejectsMismatchedGitCommonDirectory() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: fixture.workspaceURL.path,
+                displayName: "client"
+            ),
+            workSessionID: WorkSessionID(rawValue: UUID()),
+            branchName: "task/wrong-common-directory"
+        )
+        let cloneURL = try fixture.cloneRepository()
+        let forgedMetadata = ManagedWorktree(
+            workspaceID: worktree.workspaceID,
+            workSessionID: worktree.workSessionID,
+            rootPath: worktree.rootPath,
+            gitCommonDirectory: cloneURL
+                .appendingPathComponent(".git", isDirectory: true)
+                .path,
+            baselineCommit: worktree.baselineCommit,
+            workspaceRelativePath: worktree.workspaceRelativePath,
+            branchName: worktree.branchName,
+            createdBranch: worktree.createdBranch
+        )
+
+        await #expect(throws: ManagedWorktreeServiceError.self) {
+            try await service.validateRemoval(forgedMetadata)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: worktree.rootPath))
+    }
+
     @Test("checkout uses a fresh empty hooks directory")
     func checkoutDoesNotReuseMutableHooksDirectory() async throws {
         let fixture = try GitWorktreeFixture()
@@ -541,6 +654,49 @@ struct ManagedWorktreeServiceTests {
                 "show-ref", "--verify", "--quiet",
                 "refs/heads/task/competing",
             ]).isEmpty
+        )
+    }
+
+    @Test("creation rejects a session branch moved before worktree add")
+    func movedSessionBranchBeforeCheckoutIsRejected() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let movedCommit = try fixture.createAlternateCommit()
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = "task/ref-moved"
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL,
+            gitExecutableURL: try fixture
+                .gitWrapperMovingBranchBeforeWorktreeAdd(
+                    branchName: branchName,
+                    targetCommit: movedCommit
+                )
+        )
+        let expectedRoot = fixture.managedRootURL
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(workspaceID.rawValue.uuidString)
+            .appendingPathComponent(sessionID.rawValue.uuidString)
+            .path
+
+        await #expect(throws: ManagedWorktreeServiceError.self) {
+            try await service.create(
+                workspace: Workspace(
+                    id: workspaceID,
+                    path: fixture.workspaceURL.path,
+                    displayName: "client"
+                ),
+                workSessionID: sessionID,
+                branchName: branchName
+            )
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: expectedRoot))
+        #expect(
+            try fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "rev-parse", "refs/heads/\(branchName)",
+            ]).trimmingCharacters(in: .whitespacesAndNewlines) == movedCommit
         )
     }
 
@@ -673,6 +829,82 @@ private struct GitWorktreeFixture {
         try? FileManager.default.removeItem(at: rootURL)
     }
 
+    func createBranchReplacingWorkspaceWithSymlink(
+        named branchName: String
+    ) throws {
+        let originalBranch = try git([
+            "-C", repositoryURL.path,
+            "branch", "--show-current",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try git([
+            "-C", repositoryURL.path,
+            "switch", "-c", branchName,
+        ])
+        try FileManager.default.removeItem(at: workspaceURL)
+        let externalURL = rootURL.appendingPathComponent(
+            "external-workspace",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: externalURL,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: workspaceURL,
+            withDestinationURL: externalURL
+        )
+        _ = try git(["-C", repositoryURL.path, "add", "-A"])
+        _ = try git([
+            "-C", repositoryURL.path,
+            "-c", "user.name=Breath Tests",
+            "-c", "user.email=breath@example.invalid",
+            "commit", "-m", "replace workspace with symlink",
+        ])
+        _ = try git([
+            "-C", repositoryURL.path,
+            "switch", originalBranch,
+        ])
+    }
+
+    func cloneRepository() throws -> URL {
+        let cloneURL = rootURL.appendingPathComponent(
+            "repository-clone",
+            isDirectory: true
+        )
+        _ = try git(["clone", "--quiet", repositoryURL.path, cloneURL.path])
+        return cloneURL
+    }
+
+    func createAlternateCommit() throws -> String {
+        let originalBranch = try git([
+            "-C", repositoryURL.path,
+            "branch", "--show-current",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try git([
+            "-C", repositoryURL.path,
+            "switch", "-c", "alternate",
+        ])
+        try Data("alternate".utf8).write(
+            to: workspaceURL.appendingPathComponent("tracked.txt")
+        )
+        _ = try git(["-C", repositoryURL.path, "add", "."])
+        _ = try git([
+            "-C", repositoryURL.path,
+            "-c", "user.name=Breath Tests",
+            "-c", "user.email=breath@example.invalid",
+            "commit", "-m", "alternate",
+        ])
+        let commit = try git([
+            "-C", repositoryURL.path,
+            "rev-parse", "HEAD",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try git([
+            "-C", repositoryURL.path,
+            "switch", originalBranch,
+        ])
+        return commit
+    }
+
     func gitWrapperFailingAfterWorktreeAdd() throws -> URL {
         let wrapperURL = rootURL.appendingPathComponent("git-wrapper")
         let script = """
@@ -703,6 +935,38 @@ private struct GitWorktreeFixture {
         if [ "$3" = "update-ref" ] && [ "$4" = "refs/heads/task/competing" ]; then
           /usr/bin/git -C "$2" update-ref "$4" "$5" "$6"
         fi
+        exec /usr/bin/git "$@"
+        """
+        try Data(script.utf8).write(to: wrapperURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: wrapperURL.path
+        )
+        return wrapperURL
+    }
+
+    func gitWrapperMovingBranchBeforeWorktreeAdd(
+        branchName: String,
+        targetCommit: String
+    ) throws -> URL {
+        let wrapperURL = rootURL.appendingPathComponent(
+            "git-wrapper-moving-branch"
+        )
+        let repositoryPath = repositoryURL.path.replacingOccurrences(
+            of: "'",
+            with: "'\"'\"'"
+        )
+        let script = """
+        #!/bin/sh
+        previous=
+        for argument in "$@"; do
+          if [ "$previous" = "worktree" ] && [ "$argument" = "add" ]; then
+            /usr/bin/git -C '\(repositoryPath)' update-ref \
+              'refs/heads/\(branchName)' '\(targetCommit)'
+            break
+          fi
+          previous="$argument"
+        done
         exec /usr/bin/git "$@"
         """
         try Data(script.utf8).write(to: wrapperURL)

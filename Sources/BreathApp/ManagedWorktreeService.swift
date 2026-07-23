@@ -31,6 +31,9 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
     case unsupportedRepository(String)
     case managedPathAlreadyExists(String)
     case unsafeManagedPath(String)
+    case unsafeWorkspacePath(String)
+    case repositoryIdentityMismatch(expected: String, actual: String)
+    case checkoutCommitMismatch(expected: String, actual: String)
     case gitFailed(exitCode: Int32, output: String)
     case incompleteCheckout(String)
     case worktreeContainsChanges
@@ -56,6 +59,20 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
             return "Worktree 托管目录已经存在：\(path)"
         case .unsafeManagedPath(let path):
             return "拒绝操作不属于 Breath 的 Worktree 路径：\(path)"
+        case .unsafeWorkspacePath(let path):
+            return "Worktree 工作区路径包含符号链接或逃出了检出根目录：\(path)"
+        case .repositoryIdentityMismatch(let expected, let actual):
+            return """
+            Worktree 所属 Git 仓库与记录不一致。
+            记录：\(expected)
+            实际：\(actual)
+            """
+        case .checkoutCommitMismatch(let expected, let actual):
+            return """
+            Worktree 检出的提交与创建基线不一致。
+            预期：\(expected)
+            实际：\(actual)
+            """
         case .gitFailed(let exitCode, let output):
             let detail = output.isEmpty ? "Git 没有返回详细信息。" : output
             return "Git 操作失败（退出码 \(exitCode)）：\(detail)"
@@ -94,6 +111,12 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
     private enum WorktreeLock {
         case unlocked
         case locked(String?)
+    }
+
+    private struct GitWorktreeListEntry: Sendable {
+        let path: String
+        let isLocked: Bool
+        let lockReason: String?
     }
 
     private let managedRootURL: URL
@@ -337,14 +360,19 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             )
         }
 
-        var isDirectory: ObjCBool = false
-        if !FileManager.default.fileExists(
-            atPath: worktree.workingDirectory,
-            isDirectory: &isDirectory
-        ) || !isDirectory.boolValue {
-            let creationError = ManagedWorktreeServiceError.incompleteCheckout(
-                worktree.workingDirectory
-            )
+        do {
+            let checkoutCommit = try await checkedOutput([
+                "-C", worktree.rootPath,
+                "rev-parse", "--verify", "HEAD^{commit}",
+            ]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard checkoutCommit == worktree.baselineCommit else {
+                throw ManagedWorktreeServiceError.checkoutCommitMismatch(
+                    expected: worktree.baselineCommit,
+                    actual: checkoutCommit
+                )
+            }
+            try validateWorkspaceDirectory(worktree)
+        } catch let creationError {
             try await throwAfterRollingBackCreation(
                 worktree,
                 checkoutHooksURL: checkoutHooksURL,
@@ -364,14 +392,26 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
     }
 
     func isAvailable(_ worktree: ManagedWorktree) async -> Bool {
+        let rootURL = URL(
+            fileURLWithPath: worktree.rootPath,
+            isDirectory: true
+        ).standardizedFileURL
         guard isManagedPath(
-            URL(fileURLWithPath: worktree.rootPath, isDirectory: true),
+            rootURL,
             workspaceID: worktree.workspaceID,
             workSessionID: worktree.workSessionID
         ),
-              FileManager.default.fileExists(atPath: worktree.workingDirectory),
               FileManager.default.fileExists(atPath: worktree.gitCommonDirectory)
         else {
+            return false
+        }
+        do {
+            try validateWorkspaceDirectory(worktree)
+            try await validateRepositoryIdentity(
+                worktree,
+                rootURL: rootURL
+            )
+        } catch {
             return false
         }
         guard let result = try? await runner.run(arguments: [
@@ -380,23 +420,10 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         ]), result.exitCode == 0 else {
             return false
         }
-        let expectedPath = URL(
-            fileURLWithPath: worktree.rootPath,
-            isDirectory: true
-        ).resolvingSymlinksInPath().standardizedFileURL.path
-        return result.standardOutput
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .compactMap { line -> String? in
-                let prefix = "worktree "
-                guard line.hasPrefix(prefix) else { return nil }
-                return String(line.dropFirst(prefix.count))
-            }
-            .contains { path in
-                URL(fileURLWithPath: path, isDirectory: true)
-                    .resolvingSymlinksInPath()
-                    .standardizedFileURL
-                    .path == expectedPath
-            }
+        return worktreeEntry(
+            at: rootURL,
+            in: parseWorktreeList(result.standardOutput)
+        ) != nil
     }
 
     func remove(_ worktree: ManagedWorktree) async throws {
@@ -452,6 +479,8 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         guard FileManager.default.fileExists(atPath: rootURL.path) else {
             return
         }
+        try await validateRepositoryIdentity(worktree, rootURL: rootURL)
+        try validateWorkspaceDirectory(worktree)
         if case .locked(let reason) = try await worktreeLock(
             worktree,
             rootURL: rootURL
@@ -523,6 +552,20 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             throw ManagedWorktreeServiceError.unsupportedRepository(
                 "Git 仓库还没有可检出的提交。"
             )
+        }
+        let symbolicHead = try await runner.run(arguments: [
+            "-C", workspaceURL.path,
+            "symbolic-ref", "--quiet", "HEAD",
+        ])
+        switch symbolicHead.exitCode {
+        case 0:
+            break
+        case 1:
+            throw ManagedWorktreeServiceError.unsupportedRepository(
+                "当前 Git 仓库处于 detached HEAD 状态，请先检出一个分支。"
+            )
+        default:
+            throw gitFailure(symbolicHead)
         }
         if await configIsTrue(
             key: "core.sparseCheckout",
@@ -682,6 +725,9 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             try removeEmptyManagedAncestors(startingAt: rootURL)
             return
         }
+        if rootExists {
+            try await validateRepositoryIdentity(worktree, rootURL: rootURL)
+        }
         let result = try await runner.run(arguments: [
             "--git-dir=\(worktree.gitCommonDirectory)",
             "worktree", "remove", rootURL.path,
@@ -804,20 +850,10 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             "--git-dir=\(worktree.gitCommonDirectory)",
             "worktree", "list", "--porcelain",
         ])
-        let expectedPath = rootURL.resolvingSymlinksInPath()
-            .standardizedFileURL.path
-        return output
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .contains { line in
-                let prefix = "worktree "
-                guard line.hasPrefix(prefix) else { return false }
-                return URL(
-                    fileURLWithPath: String(line.dropFirst(prefix.count)),
-                    isDirectory: true
-                )
-                .resolvingSymlinksInPath()
-                .standardizedFileURL.path == expectedPath
-            }
+        return worktreeEntry(
+            at: rootURL,
+            in: parseWorktreeList(output)
+        ) != nil
     }
 
     private func worktreeLock(
@@ -828,27 +864,164 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             "--git-dir=\(worktree.gitCommonDirectory)",
             "worktree", "list", "--porcelain",
         ])
-        let expectedPath = rootURL.resolvingSymlinksInPath()
-            .standardizedFileURL.path
-        var isTarget = false
+        guard let entry = worktreeEntry(
+            at: rootURL,
+            in: parseWorktreeList(output)
+        ) else {
+            return .unlocked
+        }
+        if entry.isLocked {
+            return .locked(entry.lockReason)
+        }
+        return .unlocked
+    }
+
+    private func parseWorktreeList(
+        _ output: String
+    ) -> [GitWorktreeListEntry] {
+        var entries: [GitWorktreeListEntry] = []
+        var path: String?
+        var isLocked = false
+        var lockReason: String?
+
+        func appendCurrentEntry() {
+            guard let path else { return }
+            entries.append(
+                GitWorktreeListEntry(
+                    path: path,
+                    isLocked: isLocked,
+                    lockReason: lockReason
+                )
+            )
+        }
+
         for line in output.split(
             separator: "\n",
             omittingEmptySubsequences: false
         ) {
             if line.hasPrefix("worktree ") {
-                let path = String(line.dropFirst("worktree ".count))
-                isTarget = URL(fileURLWithPath: path, isDirectory: true)
-                    .resolvingSymlinksInPath()
-                    .standardizedFileURL.path == expectedPath
-            } else if isTarget, line == "locked" {
-                return .locked(nil)
-            } else if isTarget, line.hasPrefix("locked ") {
-                return .locked(String(line.dropFirst("locked ".count)))
+                appendCurrentEntry()
+                path = String(line.dropFirst("worktree ".count))
+                isLocked = false
+                lockReason = nil
+            } else if line == "locked" {
+                isLocked = true
+                lockReason = nil
+            } else if line.hasPrefix("locked ") {
+                isLocked = true
+                lockReason = String(line.dropFirst("locked ".count))
             } else if line.isEmpty {
-                isTarget = false
+                appendCurrentEntry()
+                path = nil
+                isLocked = false
+                lockReason = nil
             }
         }
-        return .unlocked
+        appendCurrentEntry()
+        return entries
+    }
+
+    private func worktreeEntry(
+        at rootURL: URL,
+        in entries: [GitWorktreeListEntry]
+    ) -> GitWorktreeListEntry? {
+        let expectedPath = rootURL.resolvingSymlinksInPath()
+            .standardizedFileURL.path
+        return entries.first { entry in
+            URL(fileURLWithPath: entry.path, isDirectory: true)
+                .resolvingSymlinksInPath()
+                .standardizedFileURL.path == expectedPath
+        }
+    }
+
+    private func validateWorkspaceDirectory(
+        _ worktree: ManagedWorktree
+    ) throws {
+        let rootURL = URL(
+            fileURLWithPath: worktree.rootPath,
+            isDirectory: true
+        ).standardizedFileURL
+        guard !worktree.workspaceRelativePath.hasPrefix("/") else {
+            throw ManagedWorktreeServiceError.unsafeWorkspacePath(
+                worktree.workingDirectory
+            )
+        }
+        var workspaceURL = rootURL
+        let components = worktree.workspaceRelativePath.split(
+            separator: "/",
+            omittingEmptySubsequences: true
+        )
+        for component in components {
+            guard component != ".", component != ".." else {
+                throw ManagedWorktreeServiceError.unsafeWorkspacePath(
+                    worktree.workingDirectory
+                )
+            }
+            workspaceURL.appendPathComponent(String(component))
+            if isSymbolicLink(workspaceURL) {
+                throw ManagedWorktreeServiceError.unsafeWorkspacePath(
+                    workspaceURL.path
+                )
+            }
+        }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: workspaceURL.path,
+            isDirectory: &isDirectory
+        ), isDirectory.boolValue else {
+            throw ManagedWorktreeServiceError.incompleteCheckout(
+                workspaceURL.path
+            )
+        }
+        let resolvedRoot = rootURL.resolvingSymlinksInPath()
+            .standardizedFileURL.path
+        let resolvedWorkspace = workspaceURL.resolvingSymlinksInPath()
+            .standardizedFileURL.path
+        let rootPrefix = resolvedRoot.hasSuffix("/")
+            ? resolvedRoot
+            : resolvedRoot + "/"
+        guard resolvedWorkspace == resolvedRoot
+                || resolvedWorkspace.hasPrefix(rootPrefix)
+        else {
+            throw ManagedWorktreeServiceError.unsafeWorkspacePath(
+                workspaceURL.path
+            )
+        }
+    }
+
+    private func validateRepositoryIdentity(
+        _ worktree: ManagedWorktree,
+        rootURL: URL
+    ) async throws {
+        let commonPath = try await checkedOutput([
+            "-C", rootURL.path,
+            "rev-parse", "--git-common-dir",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let actualDirectory: URL
+        if commonPath.hasPrefix("/") {
+            actualDirectory = URL(
+                fileURLWithPath: commonPath,
+                isDirectory: true
+            )
+        } else {
+            actualDirectory = URL(
+                fileURLWithPath: commonPath,
+                relativeTo: rootURL
+            )
+        }
+        let actualPath = actualDirectory.resolvingSymlinksInPath()
+            .standardizedFileURL.path
+        let expectedPath = URL(
+            fileURLWithPath: worktree.gitCommonDirectory,
+            isDirectory: true
+        ).resolvingSymlinksInPath().standardizedFileURL.path
+        guard actualPath == expectedPath else {
+            throw ManagedWorktreeServiceError.repositoryIdentityMismatch(
+                expected: expectedPath,
+                actual: actualPath
+            )
+        }
     }
 
     private func prepareManagedDirectories(

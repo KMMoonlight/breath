@@ -756,6 +756,48 @@ struct WorkbenchTests {
         #expect(launches[1].workingDirectory == "/tmp/example-project")
     }
 
+    @Test("workspace removal waits for an in-flight pane split")
+    func splitPaneAndRemoveWorkspaceAreSerialized() async throws {
+        let runtime = SuspendedLaunchTerminalRuntime(
+            suspendedLaunchNumber: 2
+        )
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(),
+            terminalRuntime: runtime,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(
+                fileURLWithPath: "/tmp/example-project",
+                isDirectory: true
+            )
+        )
+        _ = try await workbench.createWorkSession(in: workspaceID)
+        let paneID = try #require(
+            await workbench.snapshot().workSessions.first?.pane.id
+        )
+
+        let split = Task {
+            try await workbench.splitPane(
+                paneID,
+                orientation: .horizontal
+            )
+        }
+        while await runtime.launchCallCount < 2 {
+            await Task.yield()
+        }
+        let removal = Task {
+            try await workbench.removeWorkspace(workspaceID)
+        }
+
+        await runtime.allowLaunches()
+        _ = try await split.value
+        try await removal.value
+
+        #expect(await workbench.snapshot() == .empty)
+        #expect(await runtime.activePaneIDs.isEmpty)
+    }
+
     @Test("clean exit persists before stopping every terminal pane")
     func cleanExit() async throws {
         let effects = EffectLog()
@@ -904,6 +946,55 @@ struct WorkbenchTests {
         #expect(await runtime.launchCallCount == 1)
         await runtime.allowLaunches()
         try await materialization.value
+    }
+
+    @Test("workspace removal waits for in-flight session materialization")
+    func materializationAndRemoveWorkspaceAreSerialized() async throws {
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let paneID = TerminalPaneID(rawValue: UUID())
+        let stored = WorkbenchSnapshot(
+            workspaces: [
+                Workspace(
+                    id: workspaceID,
+                    path: "/tmp/example-project",
+                    displayName: "example-project"
+                ),
+            ],
+            workSessions: [
+                WorkSession(
+                    id: sessionID,
+                    workspaceID: workspaceID,
+                    title: "saved",
+                    pane: TerminalPane(id: paneID)
+                ),
+            ],
+            selectedWorkSessionID: sessionID
+        )
+        let runtime = SuspendedLaunchTerminalRuntime()
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(snapshot: stored),
+            terminalRuntime: runtime,
+            defaultShell: { "/bin/zsh" }
+        )
+        try await workbench.restoreSnapshotFromRepository()
+
+        let materialization = Task {
+            try await workbench.materializeSelectedWorkSession()
+        }
+        while await runtime.launchCallCount == 0 {
+            await Task.yield()
+        }
+        let removal = Task {
+            try await workbench.removeWorkspace(workspaceID)
+        }
+
+        await runtime.allowLaunches()
+        try await materialization.value
+        try await removal.value
+
+        #expect(await workbench.snapshot() == .empty)
+        #expect(await runtime.activePaneIDs.isEmpty)
     }
 
     @Test("an unavailable selected workspace is retained but not materialized")
@@ -1985,15 +2076,26 @@ private actor RecordingManagedWorktreeManager: ManagedWorktreeManaging {
 }
 
 private actor SuspendedLaunchTerminalRuntime: TerminalRuntime {
+    private let suspendedLaunchNumber: Int
     private(set) var launchCallCount = 0
+    private(set) var activePaneIDs: Set<TerminalPaneID> = []
     private var launchesAllowed = false
+
+    init(suspendedLaunchNumber: Int = 1) {
+        self.suspendedLaunchNumber = suspendedLaunchNumber
+    }
 
     func launch(_ request: TerminalLaunch) async throws {
         launchCallCount += 1
-        while !launchesAllowed { await Task.yield() }
+        if launchCallCount == suspendedLaunchNumber {
+            while !launchesAllowed { await Task.yield() }
+        }
+        activePaneIDs.insert(request.paneID)
     }
 
-    func stop(paneID: TerminalPaneID) async {}
+    func stop(paneID: TerminalPaneID) async {
+        activePaneIDs.remove(paneID)
+    }
 
     func allowLaunches() {
         launchesAllowed = true

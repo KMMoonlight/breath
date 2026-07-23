@@ -53,6 +53,37 @@ struct SQLiteWorkbenchRepositoryTests {
         )
     }
 
+    @Test("managed worktree migrates the created branch coding key")
+    func managedWorktreeCreatedBranchCodingKeyMigration() throws {
+        let worktree = ManagedWorktree(
+            workspaceID: WorkspaceID(rawValue: UUID()),
+            workSessionID: WorkSessionID(rawValue: UUID()),
+            rootPath: "/tmp/worktrees/workspace/session",
+            gitCommonDirectory: "/tmp/project/.git",
+            baselineCommit: "0123456789abcdef",
+            workspaceRelativePath: "apps/client",
+            branchName: "breath/session",
+            createdBranch: true
+        )
+
+        let encoded = try JSONEncoder().encode(worktree)
+        var object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        #expect(object["createdBranch"] as? Bool == true)
+        #expect(object["createdTaskBranch"] == nil)
+
+        object["createdTaskBranch"] = object.removeValue(
+            forKey: "createdBranch"
+        )
+        let legacyPayload = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(
+            ManagedWorktree.self,
+            from: legacyPayload
+        )
+        #expect(decoded.createdBranch == true)
+    }
+
     @Test("workbench snapshot survives a repository round trip")
     func roundTrip() async throws {
         let databaseURL = FileManager.default.temporaryDirectory

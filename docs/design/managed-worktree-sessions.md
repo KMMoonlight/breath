@@ -23,7 +23,7 @@ Breath 允许多个 Agent 在同一 Git 仓库的独立分支检出中并行工�
 
 Breath 使用固定的 `/usr/bin/git`。创建时验证以下条件：
 
-- 工作区目录自身位于一个具有有效 `HEAD` 的非 bare Git 仓库内。
+- 工作区目录自身位于一个具有有效提交、且 `HEAD` 正附着于分支的非 bare Git 仓库内；detached HEAD 不受支持。
 - 仓库没有启用 sparse checkout。
 - 工作区可以是仓库根目录、仓库内的子目录，或另一个有效 linked worktree 中的目录。
 - 工作区若只是包含若干内部仓库、但自身不属于任何 Git 仓库，则不提供工作树会话；用户应分别添加内部仓库。
@@ -47,6 +47,7 @@ git worktree add <managed-path> breath/<work-session-id>
 - 首版创建弹窗不提供“复用已有本地分支”。未来若提供，必须先确认该分支没有被任何其他 Worktree 检出，并在删除时保留该分支。
 - staged、unstaged、untracked 和 ignored 内容都不复制到工作树。
 - 原检出的 staged、unstaged、untracked 和 ignored 内容不会进入新 Worktree；创建弹窗明确提示这一点。
+- `git worktree add` 返回后再次解析新工作树的 `HEAD`；若它不再等于捕获的 commit，创建失败并进入补偿清理，不接受外部 Git 进程移动后的引用。
 - 如果捕获的 commit 在执行时已不可访问，创建失败，不改用新的 `HEAD`。
 
 创建不得隐式执行仓库代码或网络操作：
@@ -183,6 +184,8 @@ Breath 只递归删除能够证明属于自己的路径：
 - 规范化后仍位于 Breath `worktrees/` 根目录内。
 - workspace ID 与 work-session ID 路径组件和持久化数据一致。
 - 托管根目录先解析为规范路径，workspace/session 两级目标不能是符号链接。
+- 会话工作目录从 Worktree 根逐级解析；工作区相对路径中的任一组件是符号链接，或最终路径逃出 Worktree 根时，拒绝启动终端或 Agent。
+- 删除前从 Worktree 根重新解析 Git common directory，并要求它与持久化记录指向同一真实目录。
 - 不把数据库中的任意绝对路径直接作为递归删除目标。
 
 正常删除通过 Git 移除 linked worktree，再只清理已经为空的 workspace/session 托管目录，不对任意残留目录执行递归强删。只有从未发布的创建中间态允许在精确校验路径后递归清理对应 Session 目录。
@@ -207,7 +210,7 @@ Git lock、gc、repack 或其他外部冲突发生时，Breath 不删除锁文�
 - `.worktreeinclude` 或 ignored 文件复制。
 - submodule 自动初始化。
 - Git LFS 或自定义 checkout filter 自动执行。
-- sparse checkout、bare repository 或 unborn `HEAD` 支持。
+- sparse checkout、bare repository、unborn 或 detached `HEAD` 支持。
 - 外部 worktree 导入、展示或清理。
 - 自定义 Git 可执行文件。
 - 自动清理仍绑定工作会话的托管工作树。
@@ -219,7 +222,7 @@ Git lock、gc、repack 或其他外部冲突发生时，Breath 不删除锁文�
 ## 17. 验收标准
 
 1. 普通新建和 `⌘T` 继续创建本地会话；只有工作区菜单可以明确创建工作树会话。
-2. 工作区根目录、仓库子目录和 linked worktree 中的目录都能列出本地与远程跟踪分支；创建弹窗默认选择当前分支，并支持搜索选择其他起始分支。非 Git、unborn、bare 和 sparse 仓库在加载或创建时给出明确错误。
+2. 工作区根目录、仓库子目录和 linked worktree 中的目录都能列出本地与远程跟踪分支；创建弹窗默认选择当前分支，并支持搜索选择其他起始分支。非 Git、unborn、detached、bare 和 sparse 仓库在加载或创建时给出明确错误。
 3. 每个用户创建的 Worktree 会话都严格从所选起始分支解析出的 commit hash 创建独立 `breath/<work-session-id>` 会话分支；即使起始分支已被其他 Worktree 检出也能创建。新 Worktree 不包含本地未提交或 ignored 文件，不执行 hooks、filters、LFS 下载或 submodule 初始化。
 4. 同一工作树会话的全部窗格、Git 工作台、Finder、编辑器和 Agent 恢复都使用会话工作目录。
 5. 创建工作树、启动终端或持久化失败时，不会持久化或暴露半成品会话；清理失败会明确报告，不会静默遗留。

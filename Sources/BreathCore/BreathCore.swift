@@ -1041,6 +1041,19 @@ public actor Workbench {
     }
 
     public func selectWorkSession(_ workSessionID: WorkSessionID) async throws {
+        await managedWorktreeLifecycleGate.acquire()
+        do {
+            try await selectWorkSessionWithoutAcquiringGate(workSessionID)
+            await managedWorktreeLifecycleGate.release()
+        } catch {
+            await managedWorktreeLifecycleGate.release()
+            throw error
+        }
+    }
+
+    private func selectWorkSessionWithoutAcquiringGate(
+        _ workSessionID: WorkSessionID
+    ) async throws {
         let previousSelection = currentSnapshot.selectedWorkSessionID
         guard currentSnapshot.workSessions.contains(where: {
             $0.id == workSessionID && $0.archivedAt == nil
@@ -1048,7 +1061,14 @@ public actor Workbench {
             throw WorkbenchError.workSessionNotFound(workSessionID)
         }
         if !materializedWorkSessionIDs.contains(workSessionID) {
-            try await materializeWorkSession(workSessionID)
+            try await materializeWorkSessionWithoutAcquiringGate(
+                workSessionID
+            )
+        }
+        guard currentSnapshot.workSessions.contains(where: {
+            $0.id == workSessionID && $0.archivedAt == nil
+        }) else {
+            throw WorkbenchError.workSessionNotFound(workSessionID)
         }
         currentSnapshot.selectedWorkSessionID = workSessionID
         do {
@@ -1123,12 +1143,20 @@ public actor Workbench {
     }
 
     public func materializeSelectedWorkSession() async throws {
-        guard let selectedID = currentSnapshot.selectedWorkSessionID,
-              !materializedWorkSessionIDs.contains(selectedID)
-        else {
-            return
+        await managedWorktreeLifecycleGate.acquire()
+        do {
+            if let selectedID = currentSnapshot.selectedWorkSessionID,
+               !materializedWorkSessionIDs.contains(selectedID)
+            {
+                try await materializeWorkSessionWithoutAcquiringGate(
+                    selectedID
+                )
+            }
+            await managedWorktreeLifecycleGate.release()
+        } catch {
+            await managedWorktreeLifecycleGate.release()
+            throw error
         }
-        try await materializeWorkSession(selectedID)
     }
 
     public func prepareForCleanExit() async throws {
@@ -1168,12 +1196,29 @@ public actor Workbench {
         _ paneID: TerminalPaneID,
         orientation: SplitOrientation
     ) async throws -> TerminalPaneID {
-        guard let sessionIndex = currentSnapshot.workSessions.firstIndex(where: {
-            $0.layout.paneIDs.contains(paneID)
+        await managedWorktreeLifecycleGate.acquire()
+        do {
+            let newPaneID = try await splitPaneWithoutAcquiringGate(
+                paneID,
+                orientation: orientation
+            )
+            await managedWorktreeLifecycleGate.release()
+            return newPaneID
+        } catch {
+            await managedWorktreeLifecycleGate.release()
+            throw error
+        }
+    }
+
+    private func splitPaneWithoutAcquiringGate(
+        _ paneID: TerminalPaneID,
+        orientation: SplitOrientation
+    ) async throws -> TerminalPaneID {
+        guard let workSession = currentSnapshot.workSessions.first(where: {
+            $0.archivedAt == nil && $0.layout.paneIDs.contains(paneID)
         }) else {
             throw WorkbenchError.terminalPaneNotFound(paneID)
         }
-        let workSession = currentSnapshot.workSessions[sessionIndex]
         guard let workspace = currentSnapshot.workspaces.first(where: {
             $0.id == workSession.workspaceID
         }) else {
@@ -1184,12 +1229,24 @@ public actor Workbench {
             workspace: workspace
         )
 
+        guard let refreshedSession = currentSnapshot.workSessions.first(
+            where: {
+                $0.id == workSession.id
+                    && $0.workspaceID == workspace.id
+                    && $0.archivedAt == nil
+                    && $0.layout.paneIDs.contains(paneID)
+            }
+        ), currentSnapshot.workspaces.contains(where: {
+            $0.id == workspace.id
+        }) else {
+            throw WorkbenchError.workSessionNotFound(workSession.id)
+        }
         let newPane = TerminalPane(id: TerminalPaneID(rawValue: UUID()))
-        guard let layout = workSession.layout.splitting(
+        guard refreshedSession.layout.splitting(
             paneID: paneID,
             orientation: orientation,
             newPane: newPane
-        ) else {
+        ) != nil else {
             throw WorkbenchError.terminalPaneNotFound(paneID)
         }
         let launch = TerminalLaunch(
@@ -1205,15 +1262,44 @@ public actor Workbench {
             ]
         )
 
-        let previousSnapshot = currentSnapshot
         await ensureInputSubmissionMonitoring()
         try await terminalRuntime.launch(launch)
+        guard let sessionIndex = currentSnapshot.workSessions.firstIndex(
+            where: {
+                $0.id == workSession.id
+                    && $0.workspaceID == workspace.id
+                    && $0.archivedAt == nil
+            }
+        ) else {
+            await terminalRuntime.stop(paneID: newPane.id)
+            throw WorkbenchError.workSessionNotFound(workSession.id)
+        }
+        guard let layout = currentSnapshot.workSessions[sessionIndex]
+            .layout.splitting(
+                paneID: paneID,
+                orientation: orientation,
+                newPane: newPane
+            )
+        else {
+            await terminalRuntime.stop(paneID: newPane.id)
+            throw WorkbenchError.terminalPaneNotFound(paneID)
+        }
+        let previousSnapshot = currentSnapshot
         currentSnapshot.workSessions[sessionIndex].layout = layout
         do {
             try await persistSnapshot(rollingBackTo: previousSnapshot)
         } catch {
             await terminalRuntime.stop(paneID: newPane.id)
             throw error
+        }
+        guard currentSnapshot.workSessions.contains(where: {
+            $0.id == workSession.id
+                && $0.workspaceID == workspace.id
+                && $0.archivedAt == nil
+                && $0.layout.paneIDs.contains(newPane.id)
+        }) else {
+            await terminalRuntime.stop(paneID: newPane.id)
+            throw WorkbenchError.workSessionNotFound(workSession.id)
         }
         return newPane.id
     }
@@ -1608,23 +1694,42 @@ public actor Workbench {
         ]
     }
 
-    private func materializeWorkSession(_ workSessionID: WorkSessionID) async throws {
+    private func materializeWorkSessionWithoutAcquiringGate(
+        _ workSessionID: WorkSessionID
+    ) async throws {
         await ensureProcessExitMonitoring()
         await ensureInputSubmissionMonitoring()
+        guard let initialWorkSession = currentSnapshot.workSessions.first(
+            where: {
+                $0.id == workSessionID && $0.archivedAt == nil
+            }
+        ) else {
+            throw WorkbenchError.workSessionNotFound(workSessionID)
+        }
+        guard let initialWorkspace = currentSnapshot.workspaces.first(where: {
+            $0.id == initialWorkSession.workspaceID
+        }) else {
+            throw WorkbenchError.workspaceNotFound(
+                initialWorkSession.workspaceID
+            )
+        }
+        let sessionWorkingDirectory = try await workingDirectory(
+            for: initialWorkSession,
+            workspace: initialWorkspace
+        )
+
         guard let workSession = currentSnapshot.workSessions.first(where: {
             $0.id == workSessionID
+                && $0.workspaceID == initialWorkspace.id
+                && $0.archivedAt == nil
         }) else {
             throw WorkbenchError.workSessionNotFound(workSessionID)
         }
         guard let workspace = currentSnapshot.workspaces.first(where: {
-            $0.id == workSession.workspaceID
+            $0.id == initialWorkspace.id
         }) else {
-            throw WorkbenchError.workspaceNotFound(workSession.workspaceID)
+            throw WorkbenchError.workspaceNotFound(initialWorkspace.id)
         }
-        let sessionWorkingDirectory = try await workingDirectory(
-            for: workSession,
-            workspace: workspace
-        )
 
         let previousSnapshot = currentSnapshot
         var snapshotChanged = false
@@ -1667,11 +1772,44 @@ public actor Workbench {
                                 environment: environment
                             )
                         )
+                        guard ownsTerminalPane(
+                            pane.id,
+                            workSessionID: workSessionID,
+                            workspaceID: workspace.id
+                        ) else {
+                            removeRecoveryFallback(
+                                pane.id,
+                                token: fallback.token
+                            )
+                            await terminalRuntime.stop(paneID: pane.id)
+                            throw WorkbenchError.workSessionNotFound(
+                                workSessionID
+                            )
+                        }
                         launchedPaneIDs.append(pane.id)
                     } catch {
                         removeRecoveryFallback(pane.id, token: fallback.token)
                         await terminalRuntime.stop(paneID: pane.id)
+                        guard ownsTerminalPane(
+                            pane.id,
+                            workSessionID: workSessionID,
+                            workspaceID: workspace.id
+                        ) else {
+                            throw WorkbenchError.workSessionNotFound(
+                                workSessionID
+                            )
+                        }
                         try await terminalRuntime.launch(shellLaunch)
+                        guard ownsTerminalPane(
+                            pane.id,
+                            workSessionID: workSessionID,
+                            workspaceID: workspace.id
+                        ) else {
+                            await terminalRuntime.stop(paneID: pane.id)
+                            throw WorkbenchError.workSessionNotFound(
+                                workSessionID
+                            )
+                        }
                         launchedPaneIDs.append(pane.id)
                         snapshotChanged = markPaneIdle(
                             pane.id,
@@ -1681,6 +1819,16 @@ public actor Workbench {
                     }
                 } else {
                     try await terminalRuntime.launch(shellLaunch)
+                    guard ownsTerminalPane(
+                        pane.id,
+                        workSessionID: workSessionID,
+                        workspaceID: workspace.id
+                    ) else {
+                        await terminalRuntime.stop(paneID: pane.id)
+                        throw WorkbenchError.workSessionNotFound(
+                            workSessionID
+                        )
+                    }
                     launchedPaneIDs.append(pane.id)
                     if pane.agentBinding != nil || pane.state != .idle {
                         snapshotChanged = markPaneIdle(
@@ -1693,6 +1841,15 @@ public actor Workbench {
             }
             if snapshotChanged {
                 try await persistSnapshot(rollingBackTo: previousSnapshot)
+            }
+            guard currentSnapshot.workSessions.contains(where: {
+                $0.id == workSessionID
+                    && $0.workspaceID == workspace.id
+                    && $0.archivedAt == nil
+            }), currentSnapshot.workspaces.contains(where: {
+                $0.id == workspace.id
+            }) else {
+                throw WorkbenchError.workSessionNotFound(workSessionID)
             }
             materializedWorkSessionIDs.insert(workSessionID)
         } catch {
@@ -1709,6 +1866,21 @@ public actor Workbench {
             }
             throw error
         }
+    }
+
+    private func ownsTerminalPane(
+        _ paneID: TerminalPaneID,
+        workSessionID: WorkSessionID,
+        workspaceID: WorkspaceID
+    ) -> Bool {
+        currentSnapshot.workspaces.contains(where: {
+            $0.id == workspaceID
+        }) && currentSnapshot.workSessions.contains(where: {
+            $0.id == workSessionID
+                && $0.workspaceID == workspaceID
+                && $0.archivedAt == nil
+                && $0.layout.paneIDs.contains(paneID)
+        })
     }
 
     private func persistSnapshot(
