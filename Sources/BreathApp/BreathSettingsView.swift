@@ -56,6 +56,12 @@ private struct ShortcutReference: Identifiable {
     var id: String { action }
 }
 
+private struct WorktreeInventoryStatePresentation {
+    let title: String
+    let systemImage: String
+    let needsAttention: Bool
+}
+
 struct BreathSettingsView: View {
     private static let availableFontFamilies: [String] = {
         let families = CTFontManagerCopyAvailableFontFamilyNames() as? [String] ?? []
@@ -702,6 +708,15 @@ struct BreathSettingsView: View {
     private var worktreesSettings: some View {
         settingsList {
             Section {
+                if let error = model.managedWorktreeInventoryError {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(error)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
                 if model.managedWorktreeInventory.isEmpty {
                     if model.isRefreshingManagedWorktreeInventory {
                         HStack(spacing: 8) {
@@ -710,14 +725,9 @@ struct BreathSettingsView: View {
                             Text(localizer.string("正在扫描 Worktree…"))
                                 .foregroundStyle(.secondary)
                         }
-                    } else if let error = model.managedWorktreeInventoryError {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(error)
-                                .foregroundStyle(.red)
-                                .textSelection(.enabled)
-                            Button(localizer.string("重新加载")) {
-                                model.refreshManagedWorktreeInventory()
-                            }
+                    } else if model.managedWorktreeInventoryError != nil {
+                        Button(localizer.string("重新加载")) {
+                            model.refreshManagedWorktreeInventory()
                         }
                     } else {
                         Text(localizer.string("没有 Worktree 分支或目录"))
@@ -763,10 +773,13 @@ struct BreathSettingsView: View {
     private func worktreeInventoryRow(
         _ item: ManagedWorktreeInventoryItem
     ) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: worktreeInventoryStateIcon(item.state))
+        let presentation = worktreeInventoryPresentation(item.state)
+        return HStack(spacing: 10) {
+            Image(systemName: presentation.systemImage)
                 .foregroundStyle(
-                    item.state == .tracked ? Color.secondary : Color.orange
+                    presentation.needsAttention
+                        ? Color.orange
+                        : Color.secondary
                 )
                 .frame(width: 18)
 
@@ -801,8 +814,10 @@ struct BreathSettingsView: View {
             Spacer(minLength: 12)
 
             statusChip(
-                localizer.string(worktreeInventoryStateTitle(item.state)),
-                foreground: item.state == .tracked ? .secondary : .orange
+                localizer.string(presentation.title),
+                foreground: presentation.needsAttention
+                    ? .orange
+                    : .secondary
             )
 
             if let directoryPath = item.directoryPath {
@@ -836,25 +851,40 @@ struct BreathSettingsView: View {
         }
     }
 
-    private func worktreeInventoryStateTitle(
+    private func worktreeInventoryPresentation(
         _ state: ManagedWorktreeInventoryState
-    ) -> String {
+    ) -> WorktreeInventoryStatePresentation {
         switch state {
-        case .tracked: "会话使用中"
-        case .branchOnly: "仅剩分支"
-        case .directoryOnly: "目录残留"
-        case .orphanedCheckout: "未关联会话"
-        }
-    }
-
-    private func worktreeInventoryStateIcon(
-        _ state: ManagedWorktreeInventoryState
-    ) -> String {
-        switch state {
-        case .tracked: "checkmark.circle"
-        case .branchOnly: "arrow.triangle.branch"
-        case .directoryOnly: "folder.badge.questionmark"
-        case .orphanedCheckout: "exclamationmark.triangle"
+        case .tracked:
+            WorktreeInventoryStatePresentation(
+                title: "会话使用中",
+                systemImage: "checkmark.circle",
+                needsAttention: false
+            )
+        case .unavailable:
+            WorktreeInventoryStatePresentation(
+                title: "工作树不可用",
+                systemImage: "exclamationmark.triangle.fill",
+                needsAttention: true
+            )
+        case .branchOnly:
+            WorktreeInventoryStatePresentation(
+                title: "仅剩分支",
+                systemImage: "arrow.triangle.branch",
+                needsAttention: true
+            )
+        case .directoryOnly:
+            WorktreeInventoryStatePresentation(
+                title: "目录残留",
+                systemImage: "folder.badge.questionmark",
+                needsAttention: true
+            )
+        case .orphanedCheckout:
+            WorktreeInventoryStatePresentation(
+                title: "未关联会话",
+                systemImage: "exclamationmark.triangle",
+                needsAttention: true
+            )
         }
     }
 

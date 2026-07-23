@@ -78,38 +78,152 @@ struct ManagedWorktreeServiceTests {
             path: fixture.workspaceURL.path,
             displayName: "client"
         )
+        let activeSessionID = WorkSessionID(rawValue: UUID())
+        let removedSessionID = WorkSessionID(rawValue: UUID())
+        let activeBranchName = ManagedWorktree.sessionBranchName(
+            for: activeSessionID
+        )
+        let removedBranchName = ManagedWorktree.sessionBranchName(
+            for: removedSessionID
+        )
         let service = ManagedWorktreeService(
             managedRootURL: fixture.managedRootURL
         )
         let activeWorktree = try await service.create(
             workspace: workspace,
-            workSessionID: WorkSessionID(rawValue: UUID()),
-            branchName: "breath/active"
+            workSessionID: activeSessionID,
+            branchName: activeBranchName
         )
         let removedWorktree = try await service.create(
             workspace: workspace,
-            workSessionID: WorkSessionID(rawValue: UUID()),
-            branchName: "breath/retained"
+            workSessionID: removedSessionID,
+            branchName: removedBranchName
         )
         try await service.remove(removedWorktree)
+        _ = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "branch", "breath/not-a-session",
+        ])
 
-        let inventory = try await service.inventory(
+        let inventory = await service.inventory(
             workspaces: [workspace],
             knownWorktrees: [activeWorktree]
         )
 
         #expect(
-            inventory.contains {
-                $0.branchName == "breath/active"
+            inventory.items.contains {
+                $0.branchName == activeBranchName
                     && $0.directoryPath == activeWorktree.rootPath
                     && $0.state == .tracked
             }
         )
         #expect(
-            inventory.contains {
-                $0.branchName == "breath/retained"
+            inventory.items.contains {
+                $0.branchName == removedBranchName
                     && $0.directoryPath == nil
                     && $0.state == .branchOnly
+            }
+        )
+        #expect(
+            !inventory.items.contains {
+                $0.branchName == "breath/not-a-session"
+            }
+        )
+    }
+
+    @Test("inventory retains repository discovery after workspace removal")
+    func inventoryRetainsRepositoryAfterWorkspaceRemoval() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = ManagedWorktree.sessionBranchName(for: sessionID)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: branchName
+        )
+        try await service.remove(worktree)
+
+        let inventory = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+
+        #expect(
+            inventory.items.contains {
+                $0.branchName == branchName
+                    && $0.directoryPath == nil
+                    && $0.state == .branchOnly
+            }
+        )
+    }
+
+    @Test("inventory uses a known checkout when its workspace is unavailable")
+    func inventoryUsesKnownCheckoutWhenWorkspaceUnavailable() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = ManagedWorktree.sessionBranchName(for: sessionID)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: branchName
+        )
+        let unavailableWorkspace = Workspace(
+            id: workspace.id,
+            path: fixture.rootURL.appendingPathComponent("missing").path,
+            displayName: workspace.displayName
+        )
+
+        let inventory = await service.inventory(
+            workspaces: [unavailableWorkspace],
+            knownWorktrees: [worktree]
+        )
+
+        #expect(
+            inventory.items.contains {
+                $0.branchName == branchName
+                    && $0.directoryPath == worktree.rootPath
+                    && $0.state == .tracked
+            }
+        )
+
+        let unavailableWorktree = ManagedWorktree(
+            workspaceID: worktree.workspaceID,
+            workSessionID: worktree.workSessionID,
+            rootPath: worktree.rootPath,
+            gitCommonDirectory: worktree.gitCommonDirectory,
+            baselineCommit: worktree.baselineCommit,
+            workspaceRelativePath: worktree.workspaceRelativePath,
+            branchName: worktree.branchName,
+            createdBranch: worktree.createdBranch,
+            state: .unavailable
+        )
+        let unavailableInventory = await service.inventory(
+            workspaces: [unavailableWorkspace],
+            knownWorktrees: [unavailableWorktree]
+        )
+        #expect(
+            unavailableInventory.items.contains {
+                $0.branchName == branchName
+                    && $0.directoryPath == worktree.rootPath
+                    && $0.state == .unavailable
             }
         )
     }
@@ -132,24 +246,31 @@ struct ManagedWorktreeServiceTests {
             managedRootURL: fixture.managedRootURL
         )
 
-        let inventory = try await service.inventory(
+        let inventory = await service.inventory(
             workspaces: [
                 Workspace(
                     id: WorkspaceID(rawValue: UUID()),
                     path: fixture.workspaceURL.path,
                     displayName: "client"
                 ),
+                Workspace(
+                    id: WorkspaceID(rawValue: UUID()),
+                    path: fixture.rootURL
+                        .appendingPathComponent("missing-workspace").path,
+                    displayName: "missing"
+                ),
             ],
             knownWorktrees: []
         )
 
         #expect(
-            inventory.contains {
+            inventory.items.contains {
                 $0.branchName == nil
                     && $0.directoryPath == orphanedDirectory.path
                     && $0.state == .directoryOnly
             }
         )
+        #expect(!inventory.warnings.isEmpty)
     }
 
     @Test("rejects detached HEAD instead of selecting an unrelated branch")

@@ -669,6 +669,7 @@
 "列出 Breath 会话分支与托管目录。仅剩分支、目录残留和未关联会话的检出目录会继续占用本地资源。" = "Lists Breath session branches and managed directories. Branch-only entries, leftover directories, and checkouts without an associated session continue to use local resources.";
 "无法识别分支" = "Unknown Branch";
 "会话使用中" = "In Use";
+"工作树不可用" = "Unavailable";
 "仅剩分支" = "Branch Only";
 "目录残留" = "Leftover Directory";
 "未关联会话" = "No Session";

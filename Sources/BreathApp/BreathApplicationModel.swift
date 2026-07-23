@@ -304,15 +304,14 @@ final class BreathApplicationModel: ObservableObject {
         )
         Task {
             defer { isRefreshingManagedWorktreeInventory = false }
-            do {
-                managedWorktreeInventory = try await managedWorktreeService
-                    .inventory(
-                        workspaces: workspaces,
-                        knownWorktrees: knownWorktrees
-                    )
-            } catch {
-                managedWorktreeInventoryError = error.localizedDescription
-            }
+            let inventory = await managedWorktreeService.inventory(
+                workspaces: workspaces,
+                knownWorktrees: knownWorktrees
+            )
+            managedWorktreeInventory = inventory.items
+            managedWorktreeInventoryError = inventory.warnings.isEmpty
+                ? nil
+                : inventory.warnings.joined(separator: "\n")
         }
     }
 

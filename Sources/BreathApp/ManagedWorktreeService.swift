@@ -26,9 +26,15 @@ private actor ManagedWorktreeOperationGate {
 
 enum ManagedWorktreeInventoryState: Equatable, Sendable {
     case tracked
+    case unavailable
     case branchOnly
     case directoryOnly
     case orphanedCheckout
+}
+
+struct ManagedWorktreeInventorySnapshot: Equatable, Sendable {
+    let items: [ManagedWorktreeInventoryItem]
+    let warnings: [String]
 }
 
 struct ManagedWorktreeInventoryItem: Equatable, Identifiable, Sendable {
@@ -152,10 +158,21 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
 }
 
 struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
+    private struct InventoryRepository: Codable, Sendable {
+        let gitCommonDirectory: String
+        let repositoryPath: String
+        let displayName: String
+    }
+
     private struct RepositoryContext: Sendable {
         let repositoryRoot: URL
         let gitCommonDirectory: URL
         let workspaceRelativePath: String
+    }
+
+    private struct RepositoryLocations: Sendable {
+        let repositoryRoot: URL
+        let gitCommonDirectory: URL
     }
 
     private enum WorktreeLock {
@@ -172,6 +189,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
 
     private let managedRootURL: URL
     private let disabledHooksURL: URL
+    private let inventoryRepositoriesURL: URL
     private let runner: GitCommandRunner
     private let operationGate: ManagedWorktreeOperationGate
 
@@ -186,6 +204,9 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         disabledHooksURL = root.appendingPathComponent(
             ".disabled-hooks",
             isDirectory: true
+        )
+        inventoryRepositoriesURL = root.appendingPathComponent(
+            ".repositories.json"
         )
         runner = GitCommandRunner(executableURL: gitExecutableURL)
         operationGate = ManagedWorktreeOperationGate()
@@ -251,25 +272,77 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
     func inventory(
         workspaces: [Workspace],
         knownWorktrees: [ManagedWorktree]
-    ) async throws -> [ManagedWorktreeInventoryItem] {
+    ) async -> ManagedWorktreeInventorySnapshot {
+        await operationGate.acquire()
+        let snapshot = await inventoryWithoutAcquiringGate(
+            workspaces: workspaces,
+            knownWorktrees: knownWorktrees
+        )
+        await operationGate.release()
+        return snapshot
+    }
+
+    private func inventoryWithoutAcquiringGate(
+        workspaces: [Workspace],
+        knownWorktrees: [ManagedWorktree]
+    ) async -> ManagedWorktreeInventorySnapshot {
         var items: [ManagedWorktreeInventoryItem] = []
+        var warnings: [String] = []
         var representedDirectoryPaths: Set<String> = []
-        var visitedGitDirectories: Set<String> = []
+        var representedKnownWorktreeIDs: Set<WorkSessionID> = []
+        var repositories: [String: InventoryRepository] = [:]
 
+        do {
+            for repository in try loadInventoryRepositories() {
+                repositories[
+                    standardizedPath(repository.gitCommonDirectory)
+                ] = repository
+            }
+        } catch {
+            warnings.append(
+                "无法读取 Worktree 仓库记录：\(error.localizedDescription)"
+            )
+        }
         for workspace in workspaces {
-            let context: RepositoryContext
             do {
-                context = try await repositoryContext(for: workspace)
+                let repository = try await inventoryRepository(for: workspace)
+                repositories[
+                    standardizedPath(repository.gitCommonDirectory)
+                ] = repository
             } catch {
+                warnings.append(
+                    "无法读取 \(workspace.displayName) 的 Git 仓库："
+                        + error.localizedDescription
+                )
+            }
+        }
+        for worktree in knownWorktrees {
+            let gitDirectoryPath = standardizedPath(
+                worktree.gitCommonDirectory
+            )
+            guard repositories[gitDirectoryPath] == nil else {
                 continue
             }
-            let gitDirectoryPath = context.gitCommonDirectory
-                .resolvingSymlinksInPath()
-                .standardizedFileURL.path
-            guard visitedGitDirectories.insert(gitDirectoryPath).inserted else {
-                continue
+            let workspace = workspaces.first {
+                $0.id == worktree.workspaceID
             }
+            repositories[gitDirectoryPath] = InventoryRepository(
+                gitCommonDirectory: worktree.gitCommonDirectory,
+                repositoryPath: workspace?.path ?? worktree.rootPath,
+                displayName: workspace?.displayName ?? ""
+            )
+        }
+        do {
+            try saveInventoryRepositories(Array(repositories.values))
+        } catch {
+            warnings.append(
+                "无法保存 Worktree 仓库记录：\(error.localizedDescription)"
+            )
+        }
 
+        for (gitDirectoryPath, repository) in repositories.sorted(by: {
+            $0.key.localizedStandardCompare($1.key) == .orderedAscending
+        }) {
             let branches: [String]
             let worktreeEntries: [GitWorktreeListEntry]
             do {
@@ -282,6 +355,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                 ])
                 .split(separator: "\n", omittingEmptySubsequences: true)
                 .map(String.init)
+                .filter { managedWorkSessionID(for: $0) != nil }
                 worktreeEntries = parseWorktreeList(
                     try await checkedOutput([
                         "--git-dir=\(gitDirectoryPath)",
@@ -289,10 +363,19 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                     ])
                 )
             } catch {
+                let name = repository.displayName.isEmpty
+                    ? repository.repositoryPath
+                    : repository.displayName
+                warnings.append(
+                    "无法扫描 \(name) 的 Worktree："
+                        + error.localizedDescription
+                )
                 continue
             }
 
+            var representedBranchNames: Set<String> = []
             for branchName in branches {
+                representedBranchNames.insert(branchName)
                 let branchReference = "refs/heads/\(branchName)"
                 let entry = worktreeEntries.first {
                     $0.branchReference == branchReference
@@ -315,21 +398,29 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                 }
                 let knownWorktree = existingDirectoryPath.flatMap { path in
                     knownWorktrees.first {
-                        standardizedPath($0.rootPath) == standardizedPath(path)
+                        standardizedPath($0.gitCommonDirectory)
+                            == gitDirectoryPath
+                            && standardizedPath($0.rootPath)
+                                == standardizedPath(path)
                     }
                 }
                 let state: ManagedWorktreeInventoryState
                 if existingDirectoryPath == nil {
                     state = .branchOnly
-                } else if knownWorktree != nil {
-                    state = .tracked
+                } else if let knownWorktree {
+                    representedKnownWorktreeIDs.insert(
+                        knownWorktree.workSessionID
+                    )
+                    state = knownWorktree.state == .available
+                        ? .tracked
+                        : .unavailable
                 } else {
                     state = .orphanedCheckout
                 }
                 items.append(
                     ManagedWorktreeInventoryItem(
-                        repositoryName: workspace.displayName,
-                        repositoryPath: context.repositoryRoot.path,
+                        repositoryName: repository.displayName,
+                        repositoryPath: repository.repositoryPath,
                         branchName: branchName,
                         directoryPath: knownWorktree?.rootPath
                             ?? existingDirectoryPath,
@@ -338,11 +429,6 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                 )
             }
 
-            let representedBranchNames = Set(
-                items.lazy
-                    .filter { $0.repositoryPath == context.repositoryRoot.path }
-                    .compactMap(\.branchName)
-            )
             for entry in worktreeEntries {
                 let directoryURL = URL(
                     fileURLWithPath: entry.path,
@@ -366,42 +452,98 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                 }
                 let path = standardizedPath(entry.path)
                 representedDirectoryPaths.insert(path)
-                let isTracked = knownWorktrees.contains {
-                    standardizedPath($0.rootPath) == path
+                let knownWorktree = knownWorktrees.first {
+                    standardizedPath($0.gitCommonDirectory)
+                        == gitDirectoryPath
+                        && standardizedPath($0.rootPath) == path
+                }
+                if let knownWorktree {
+                    representedKnownWorktreeIDs.insert(
+                        knownWorktree.workSessionID
+                    )
+                }
+                let state: ManagedWorktreeInventoryState
+                if let knownWorktree {
+                    state = knownWorktree.state == .available
+                        ? .tracked
+                        : .unavailable
+                } else {
+                    state = .orphanedCheckout
                 }
                 items.append(
                     ManagedWorktreeInventoryItem(
-                        repositoryName: workspace.displayName,
-                        repositoryPath: context.repositoryRoot.path,
+                        repositoryName: repository.displayName,
+                        repositoryPath: repository.repositoryPath,
                         branchName: branchName,
-                        directoryPath: entry.path,
-                        state: isTracked ? .tracked : .orphanedCheckout
+                        directoryPath: knownWorktree?.rootPath ?? entry.path,
+                        state: state
                     )
                 )
             }
         }
 
-        for directoryURL in try managedCheckoutDirectories() {
-            let path = standardizedPath(directoryURL.path)
-            guard representedDirectoryPaths.insert(path).inserted else {
-                continue
+        do {
+            for directoryURL in try managedCheckoutDirectories() {
+                let path = standardizedPath(directoryURL.path)
+                guard representedDirectoryPaths.insert(path).inserted else {
+                    continue
+                }
+                let knownWorktree = knownWorktrees.first {
+                    standardizedPath($0.rootPath) == path
+                }
+                if let knownWorktree {
+                    representedKnownWorktreeIDs.insert(
+                        knownWorktree.workSessionID
+                    )
+                }
+                let workspace = workspaceOwningManagedDirectory(
+                    directoryURL,
+                    workspaces: workspaces
+                )
+                items.append(
+                    ManagedWorktreeInventoryItem(
+                        repositoryName: workspace?.displayName ?? "",
+                        repositoryPath: workspace?.path ?? "",
+                        branchName: knownWorktree?.branchName,
+                        directoryPath: knownWorktree?.rootPath
+                            ?? directoryURL.path,
+                        state: knownWorktree == nil
+                            ? .directoryOnly
+                            : .unavailable
+                    )
+                )
             }
-            let workspace = workspaceOwningManagedDirectory(
-                directoryURL,
-                workspaces: workspaces
+        } catch {
+            warnings.append(
+                "无法扫描 Worktree 托管目录：\(error.localizedDescription)"
             )
+        }
+
+        for worktree in knownWorktrees
+            where !representedKnownWorktreeIDs.contains(
+                worktree.workSessionID
+            )
+        {
+            let workspace = workspaces.first {
+                $0.id == worktree.workspaceID
+            }
             items.append(
                 ManagedWorktreeInventoryItem(
                     repositoryName: workspace?.displayName ?? "",
                     repositoryPath: workspace?.path ?? "",
-                    branchName: nil,
-                    directoryPath: directoryURL.path,
-                    state: .directoryOnly
+                    branchName: worktree.branchName,
+                    directoryPath: FileManager.default.fileExists(
+                        atPath: worktree.rootPath
+                    ) ? worktree.rootPath : nil,
+                    state: .unavailable
                 )
             )
         }
 
-        return items.sorted(by: inventorySort)
+        return ManagedWorktreeInventorySnapshot(
+            items: items.sorted(by: inventorySort),
+            warnings: warnings
+        )
     }
 
     func create(
@@ -510,6 +652,10 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             try prepareManagedDirectories(
                 for: rootURL,
                 checkoutHooksURL: checkoutHooksURL
+            )
+            try recordInventoryRepository(
+                context,
+                displayName: workspace.displayName
             )
         } catch let preparationError {
             do {
@@ -982,6 +1128,23 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         }
     }
 
+    private func inventoryRepository(
+        for workspace: Workspace
+    ) async throws -> InventoryRepository {
+        let workspaceURL = URL(
+            fileURLWithPath: workspace.path,
+            isDirectory: true
+        ).standardizedFileURL
+        let locations = try await repositoryLocations(
+            for: workspaceURL
+        )
+        return InventoryRepository(
+            gitCommonDirectory: locations.gitCommonDirectory.path,
+            repositoryPath: locations.repositoryRoot.path,
+            displayName: workspace.displayName
+        )
+    }
+
     private func repositoryContext(
         for workspace: Workspace
     ) async throws -> RepositoryContext {
@@ -1043,14 +1206,27 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             )
         }
 
+        let locations = try await repositoryLocations(
+            for: workspaceURL
+        )
+        let relativePath = try relativePath(
+            from: locations.repositoryRoot,
+            to: workspaceURL
+        )
+        return RepositoryContext(
+            repositoryRoot: locations.repositoryRoot,
+            gitCommonDirectory: locations.gitCommonDirectory,
+            workspaceRelativePath: relativePath
+        )
+    }
+
+    private func repositoryLocations(
+        for workspaceURL: URL
+    ) async throws -> RepositoryLocations {
         let rootPath = try await checkedOutput([
             "-C", workspaceURL.path,
             "rev-parse", "--show-toplevel",
         ]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let repositoryRoot = URL(
-            fileURLWithPath: rootPath,
-            isDirectory: true
-        ).standardizedFileURL
         let commonPath = try await checkedOutput([
             "-C", workspaceURL.path,
             "rev-parse", "--git-common-dir",
@@ -1067,14 +1243,12 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                 relativeTo: workspaceURL
             ).standardizedFileURL
         }
-        let relativePath = try relativePath(
-            from: repositoryRoot,
-            to: workspaceURL
-        )
-        return RepositoryContext(
-            repositoryRoot: repositoryRoot,
-            gitCommonDirectory: gitCommonDirectory,
-            workspaceRelativePath: relativePath
+        return RepositoryLocations(
+            repositoryRoot: URL(
+                fileURLWithPath: rootPath,
+                isDirectory: true
+            ).standardizedFileURL,
+            gitCommonDirectory: gitCommonDirectory
         )
     }
 
@@ -1419,12 +1593,9 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         at rootURL: URL,
         in entries: [GitWorktreeListEntry]
     ) -> GitWorktreeListEntry? {
-        let expectedPath = rootURL.resolvingSymlinksInPath()
-            .standardizedFileURL.path
+        let expectedPath = standardizedPath(rootURL.path)
         return entries.first { entry in
-            URL(fileURLWithPath: entry.path, isDirectory: true)
-                .resolvingSymlinksInPath()
-                .standardizedFileURL.path == expectedPath
+            standardizedPath(entry.path) == expectedPath
         }
     }
 
@@ -1443,6 +1614,88 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         URL(fileURLWithPath: path, isDirectory: true)
             .resolvingSymlinksInPath()
             .standardizedFileURL.path
+    }
+
+    private func managedWorkSessionID(
+        for branchName: String
+    ) -> WorkSessionID? {
+        let prefix = "breath/"
+        guard branchName.hasPrefix(prefix),
+              let value = UUID(
+                  uuidString: String(branchName.dropFirst(prefix.count))
+              )
+        else {
+            return nil
+        }
+        let workSessionID = WorkSessionID(rawValue: value)
+        guard branchName == ManagedWorktree.sessionBranchName(
+            for: workSessionID
+        ) else {
+            return nil
+        }
+        return workSessionID
+    }
+
+    private func recordInventoryRepository(
+        _ context: RepositoryContext,
+        displayName: String
+    ) throws {
+        var repositories: [String: InventoryRepository] = [:]
+        for repository in try loadInventoryRepositories() {
+            repositories[
+                standardizedPath(repository.gitCommonDirectory)
+            ] = repository
+        }
+        let repository = InventoryRepository(
+            gitCommonDirectory: context.gitCommonDirectory.path,
+            repositoryPath: context.repositoryRoot.path,
+            displayName: displayName
+        )
+        repositories[
+            standardizedPath(repository.gitCommonDirectory)
+        ] = repository
+        try saveInventoryRepositories(Array(repositories.values))
+    }
+
+    private func loadInventoryRepositories() throws
+        -> [InventoryRepository]
+    {
+        guard FileManager.default.fileExists(
+            atPath: inventoryRepositoriesURL.path
+        ) else {
+            return []
+        }
+        return try JSONDecoder().decode(
+            [InventoryRepository].self,
+            from: Data(contentsOf: inventoryRepositoriesURL)
+        )
+    }
+
+    private func saveInventoryRepositories(
+        _ repositories: [InventoryRepository]
+    ) throws {
+        guard !repositories.isEmpty else { return }
+        try FileManager.default.createDirectory(
+            at: managedRootURL,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let repositories = repositories.sorted {
+            standardizedPath($0.gitCommonDirectory)
+                .localizedStandardCompare(
+                    standardizedPath($1.gitCommonDirectory)
+                ) == .orderedAscending
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(repositories).write(
+            to: inventoryRepositoriesURL,
+            options: .atomic
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: inventoryRepositoriesURL.path
+        )
     }
 
     private func managedCheckoutDirectories() throws -> [URL] {
