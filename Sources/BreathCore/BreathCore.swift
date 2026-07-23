@@ -66,6 +66,7 @@ public enum AgentKind: String, CaseIterable, Equatable, Hashable, Codable, Senda
 public enum AgentLifecycle: String, Equatable, Codable, Sendable {
     case turnStarted
     case needsAttention
+    case attentionResolved
     case turnCompleted
     case sessionEnded
     case metadataUpdated
@@ -550,11 +551,18 @@ public protocol TerminalRuntime: Sendable {
     func setProcessExitHandler(
         _ handler: @escaping @Sendable (TerminalPaneID) -> Void
     ) async
+    func setInputSubmittedHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) async -> Void
+    ) async
 }
 
 public extension TerminalRuntime {
     func setProcessExitHandler(
         _ handler: @escaping @Sendable (TerminalPaneID) -> Void
+    ) async {}
+
+    func setInputSubmittedHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) async -> Void
     ) async {}
 }
 
@@ -692,6 +700,7 @@ public actor Workbench {
     private var materializedWorkSessionIDs: Set<WorkSessionID>
     private var recoveryFallbacks: [TerminalPaneID: RecoveryFallback]
     private var monitorsProcessExits = false
+    private var monitorsInputSubmissions = false
     private var isPreparingForCleanExit = false
     private var snapshotChangeHandler: (@Sendable () async -> Void)?
 
@@ -771,6 +780,7 @@ public actor Workbench {
         )
 
         let previousSnapshot = currentSnapshot
+        await ensureInputSubmissionMonitoring()
         try await terminalRuntime.launch(launch)
         currentSnapshot.workSessions.append(workSession)
         currentSnapshot.selectedWorkSessionID = workSessionID
@@ -920,6 +930,7 @@ public actor Workbench {
         )
 
         do {
+            await ensureInputSubmissionMonitoring()
             try await terminalRuntime.launch(launch)
         } catch let creationError {
             await terminalRuntime.stop(paneID: paneID)
@@ -1195,6 +1206,7 @@ public actor Workbench {
         )
 
         let previousSnapshot = currentSnapshot
+        await ensureInputSubmissionMonitoring()
         try await terminalRuntime.launch(launch)
         currentSnapshot.workSessions[sessionIndex].layout = layout
         do {
@@ -1515,6 +1527,11 @@ public actor Workbench {
             case .needsAttention:
                 pane.state = .needsAttention
                 pane.agentBinding?.isActive = true
+            case .attentionResolved:
+                if pane.state == .needsAttention {
+                    pane.state = .running
+                    pane.agentBinding?.isActive = true
+                }
             case .turnCompleted:
                 pane.state = .turnCompleted
                 pane.agentBinding?.isActive = true
@@ -1593,6 +1610,7 @@ public actor Workbench {
 
     private func materializeWorkSession(_ workSessionID: WorkSessionID) async throws {
         await ensureProcessExitMonitoring()
+        await ensureInputSubmissionMonitoring()
         guard let workSession = currentSnapshot.workSessions.first(where: {
             $0.id == workSessionID
         }) else {
@@ -1775,6 +1793,34 @@ public actor Workbench {
         await terminalRuntime.setProcessExitHandler { [weak self] paneID in
             Task { await self?.handleTerminalProcessExit(paneID) }
         }
+    }
+
+    private func ensureInputSubmissionMonitoring() async {
+        guard !monitorsInputSubmissions else { return }
+        monitorsInputSubmissions = true
+        await terminalRuntime.setInputSubmittedHandler { [weak self] paneID in
+            await self?.handleTerminalInputSubmitted(paneID)
+        }
+    }
+
+    private func handleTerminalInputSubmitted(_ paneID: TerminalPaneID) async {
+        guard let sessionIndex = currentSnapshot.workSessions.firstIndex(where: {
+            $0.layout.paneIDs.contains(paneID)
+        }) else {
+            return
+        }
+        let layout = currentSnapshot.workSessions[sessionIndex].layout
+        guard let pane = layout.panes.first(where: { $0.id == paneID }),
+              pane.state == .needsAttention,
+              let updatedLayout = layout.updatingPane(id: paneID, transform: {
+                  $0.state = .running
+              })
+        else {
+            return
+        }
+        let previousSnapshot = currentSnapshot
+        currentSnapshot.workSessions[sessionIndex].layout = updatedLayout
+        try? await persistSnapshot(rollingBackTo: previousSnapshot)
     }
 
     private func handleTerminalProcessExit(_ paneID: TerminalPaneID) async {

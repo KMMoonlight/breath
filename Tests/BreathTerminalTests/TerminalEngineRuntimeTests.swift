@@ -15,10 +15,27 @@ struct TerminalEngineRuntimeTests {
         #expect(TerminalPasteSafety.requiresConfirmation("echo ok\u{001B}"))
     }
 
+    @MainActor
+    @Test("plain Return keys submit terminal input")
+    func inputSubmissionKeys() throws {
+        let returnKey = try #require(shortcutKeyEvent("\r", keyCode: 36, modifiers: []))
+        let keypadEnter = try #require(shortcutKeyEvent("\r", keyCode: 76, modifiers: []))
+        let shiftReturn = try #require(
+            shortcutKeyEvent("\r", keyCode: 36, modifiers: [.shift])
+        )
+        let tab = try #require(shortcutKeyEvent("\t", keyCode: 48, modifiers: []))
+
+        #expect(TerminalInputSubmission.isSubmitKey(returnKey))
+        #expect(TerminalInputSubmission.isSubmitKey(keypadEnter))
+        #expect(!TerminalInputSubmission.isSubmitKey(shiftReturn))
+        #expect(!TerminalInputSubmission.isSubmitKey(tab))
+    }
+
     @Test("runtime forwards shell lifecycle and live terminal-only styling")
     func lifecycleAndStyle() async throws {
         let engine = RecordingTerminalEngine()
         let runtime = TerminalEngineRuntime(engine: engine)
+        let inputSubmissions = InputSubmissionLog()
         let paneID = TerminalPaneID(rawValue: UUID())
         let launch = TerminalLaunch(
             paneID: paneID,
@@ -34,13 +51,18 @@ struct TerminalEngineRuntimeTests {
             cursorStyle: .bar
         )
 
+        await runtime.setInputSubmittedHandler { paneID in
+            await inputSubmissions.append(paneID)
+        }
         try await runtime.launch(launch)
         await runtime.apply(settings: style)
+        await engine.submitInput(in: paneID)
         await runtime.stop(paneID: paneID)
 
         #expect(await engine.opened == [launch])
         #expect(await engine.appliedSettings == [style])
         #expect(await engine.closed == [paneID])
+        #expect(await inputSubmissions.paneIDs == [paneID])
     }
 
     @Test("libghostty creates a native surface, accepts composed text, resizes, and reloads style")
@@ -169,6 +191,10 @@ private func verifyLibghosttySurface() async throws {
     let engine = fixture.engine
     guard engine.usesLibghostty else { return }
 
+    let inputSubmissions = InputSubmissionLog()
+    await engine.setInputSubmittedHandler { paneID in
+        await inputSubmissions.append(paneID)
+    }
     let paneID = TerminalPaneID(rawValue: UUID())
     try await engine.open(
         TerminalLaunch(
@@ -192,6 +218,13 @@ private func verifyLibghosttySurface() async throws {
         "中文",
         replacementRange: NSRange(location: NSNotFound, length: 0)
     )
+    let returnKey = try #require(shortcutKeyEvent("\r", keyCode: 36, modifiers: []))
+    view.keyDown(with: returnKey)
+    for _ in 0..<20 {
+        if await inputSubmissions.paneIDs == [paneID] { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await inputSubmissions.paneIDs == [paneID])
     await engine.apply(
         settings: TerminalSettings(
             fontFamily: "SF Mono",
@@ -323,6 +356,7 @@ private actor RecordingTerminalEngine: TerminalEngine {
     private(set) var opened: [TerminalLaunch] = []
     private(set) var appliedSettings: [TerminalSettings] = []
     private(set) var closed: [TerminalPaneID] = []
+    private var inputSubmittedHandler: (@Sendable (TerminalPaneID) async -> Void)?
 
     func open(_ launch: TerminalLaunch) throws {
         opened.append(launch)
@@ -334,5 +368,23 @@ private actor RecordingTerminalEngine: TerminalEngine {
 
     func apply(settings: TerminalSettings) {
         appliedSettings.append(settings)
+    }
+
+    func setInputSubmittedHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) async -> Void
+    ) {
+        inputSubmittedHandler = handler
+    }
+
+    func submitInput(in paneID: TerminalPaneID) async {
+        await inputSubmittedHandler?(paneID)
+    }
+}
+
+private actor InputSubmissionLog {
+    private(set) var paneIDs: [TerminalPaneID] = []
+
+    func append(_ paneID: TerminalPaneID) {
+        paneIDs.append(paneID)
     }
 }

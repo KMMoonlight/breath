@@ -3,6 +3,20 @@ import BreathCore
 import CoreText
 import Foundation
 
+enum TerminalInputSubmission {
+    static func isSubmitKey(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              !event.isARepeat,
+              event.keyCode == 36 || event.keyCode == 76
+        else {
+            return false
+        }
+        return event.modifierFlags
+            .intersection([.command, .control, .option, .shift])
+            .isEmpty
+    }
+}
+
 #if BREATH_HAS_GHOSTTY && canImport(GhosttyKit)
 import GhosttyKit
 
@@ -80,6 +94,7 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
     private var settings: TerminalSettings
     private var views: [TerminalPaneID: GhosttySurfaceView] = [:]
     private var processExitHandler: (@Sendable (TerminalPaneID) -> Void)?
+    private var inputSubmittedHandler: (@Sendable (TerminalPaneID) async -> Void)?
     public let usesLibghostty = true
 
     public init(
@@ -118,9 +133,21 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
                   self.views[launch.paneID] === view
             else { return }
             view.processExitHandler = nil
+            view.inputSubmittedHandler = nil
             self.views.removeValue(forKey: launch.paneID)
             view.closeSurface()
             self.processExitHandler?(launch.paneID)
+        }
+        view.inputSubmittedHandler = { [weak self, weak view] in
+            guard let self, let view,
+                  self.views[launch.paneID] === view,
+                  let handler = self.inputSubmittedHandler
+            else {
+                return
+            }
+            Task {
+                await handler(launch.paneID)
+            }
         }
         views[launch.paneID] = view
     }
@@ -128,6 +155,7 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
     public func close(_ paneID: TerminalPaneID) async {
         guard let view = views.removeValue(forKey: paneID) else { return }
         view.processExitHandler = nil
+        view.inputSubmittedHandler = nil
         view.closeSurface()
     }
 
@@ -160,6 +188,12 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         _ handler: @escaping @Sendable (TerminalPaneID) -> Void
     ) async {
         processExitHandler = handler
+    }
+
+    public func setInputSubmittedHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) async -> Void
+    ) async {
+        inputSubmittedHandler = handler
     }
 
     static func writeConfiguration(
@@ -447,6 +481,7 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
     fileprivate var cellSize = CGSize(width: 8, height: 16)
     fileprivate var processExited = false
     fileprivate var processExitHandler: (() -> Void)?
+    fileprivate var inputSubmittedHandler: (() -> Void)?
     private var markedText = NSMutableAttributedString()
     private var keyTextAccumulator: [String]?
     private var trackingArea: NSTrackingArea?
@@ -642,22 +677,31 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
         keyTextAccumulator = nil
         syncPreedit(clearIfNeeded: hadMarkedText)
 
+        let handled: Bool
         if committed.isEmpty {
-            _ = sendKey(
+            handled = sendKey(
                 event,
                 action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS,
                 text: event.terminalCharacters,
                 composing: hasMarkedText() || hadMarkedText
             )
         } else {
+            var handledCommittedText = false
             for text in committed {
-                _ = sendKey(
+                handledCommittedText = sendKey(
                     event,
                     action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS,
                     text: text,
                     composing: false
-                )
+                ) || handledCommittedText
             }
+            handled = handledCommittedText
+        }
+        if handled,
+           !hadMarkedText,
+           TerminalInputSubmission.isSubmitKey(event)
+        {
+            inputSubmittedHandler?()
         }
     }
 

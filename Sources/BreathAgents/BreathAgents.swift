@@ -239,6 +239,7 @@ public struct AgentAdapterRegistry: Sendable {
             userConfigurationPath: "~/.gemini/settings.json",
             hookRegistrations: [
                 AgentHookRegistration(eventName: "BeforeAgent", lifecycle: .turnStarted),
+                AgentHookRegistration(eventName: "BeforeTool", lifecycle: .attentionResolved),
                 AgentHookRegistration(eventName: "AfterAgent", lifecycle: .turnCompleted),
                 AgentHookRegistration(eventName: "Notification", lifecycle: .needsAttention),
                 AgentHookRegistration(eventName: "SessionEnd", lifecycle: .sessionEnded),
@@ -257,6 +258,7 @@ public struct AgentAdapterRegistry: Sendable {
             userConfigurationPath: "~/.copilot/hooks/breath.json",
             hookRegistrations: [
                 AgentHookRegistration(eventName: "userPromptSubmitted", lifecycle: .turnStarted),
+                AgentHookRegistration(eventName: "preToolUse", lifecycle: .attentionResolved),
                 AgentHookRegistration(eventName: "permissionRequest", lifecycle: .needsAttention),
                 AgentHookRegistration(eventName: "agentStop", lifecycle: .turnCompleted),
                 AgentHookRegistration(eventName: "sessionEnd", lifecycle: .sessionEnded),
@@ -321,6 +323,7 @@ public struct AgentAdapterRegistry: Sendable {
                 AgentHookRegistration(eventName: "session.status", lifecycle: .turnStarted),
                 AgentHookRegistration(eventName: "session.updated", lifecycle: .metadataUpdated),
                 AgentHookRegistration(eventName: "permission.asked", lifecycle: .needsAttention),
+                AgentHookRegistration(eventName: "permission.replied", lifecycle: .attentionResolved),
                 AgentHookRegistration(eventName: "session.idle", lifecycle: .turnCompleted),
             ],
             globalSkills: AgentGlobalSkillsCapability(
@@ -351,6 +354,7 @@ public struct AgentAdapterRegistry: Sendable {
 
     private static let standardHooks = [
         AgentHookRegistration(eventName: "UserPromptSubmit", lifecycle: .turnStarted),
+        AgentHookRegistration(eventName: "PreToolUse", lifecycle: .attentionResolved),
         AgentHookRegistration(eventName: "PermissionRequest", lifecycle: .needsAttention),
         AgentHookRegistration(eventName: "Stop", lifecycle: .turnCompleted),
         AgentHookRegistration(eventName: "SessionEnd", lifecycle: .sessionEnded),

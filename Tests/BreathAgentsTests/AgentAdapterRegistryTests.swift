@@ -46,6 +46,13 @@ struct AgentAdapterRegistryTests {
             #expect(!adapter.userConfigurationPath.isEmpty)
             #expect(adapter.hookRegistrations.contains(where: { $0.lifecycle == .turnStarted }))
             #expect(adapter.hookRegistrations.contains(where: { $0.lifecycle == .turnCompleted }))
+            if adapter.hookRegistrations.contains(where: { $0.lifecycle == .needsAttention }) {
+                #expect(
+                    adapter.hookRegistrations.contains(where: {
+                        $0.lifecycle == .attentionResolved
+                    })
+                )
+            }
         }
     }
 
@@ -100,6 +107,9 @@ struct AgentAdapterRegistryTests {
         #expect(claude.hookRegistrations.contains(
             AgentHookRegistration(eventName: "SessionStart", lifecycle: .turnStarted)
         ))
+        #expect(claude.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "PreToolUse", lifecycle: .attentionResolved)
+        ))
 
         let gemini = try #require(
             AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .geminiCLI }
@@ -109,6 +119,9 @@ struct AgentAdapterRegistryTests {
         ))
         #expect(gemini.hookRegistrations.contains(
             AgentHookRegistration(eventName: "SessionEnd", lifecycle: .sessionEnded)
+        ))
+        #expect(gemini.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "BeforeTool", lifecycle: .attentionResolved)
         ))
 
         let openCode = try #require(
@@ -122,6 +135,9 @@ struct AgentAdapterRegistryTests {
         ))
         #expect(!openCode.hookRegistrations.contains(
             AgentHookRegistration(eventName: "session.updated", lifecycle: .turnStarted)
+        ))
+        #expect(openCode.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "permission.replied", lifecycle: .attentionResolved)
         ))
 
         let cursor = try #require(
@@ -281,6 +297,11 @@ struct AgentAdapterRegistryTests {
         #expect((promptHooks[0]["bash"] as? String)?.contains("--agent-hook githubCopilotCLI turnStarted") == true)
         #expect(promptHooks[0]["hooks"] == nil)
         #expect(promptHooks[0]["breathManaged"] == nil)
+        let progressHooks = try #require(hooks["preToolUse"] as? [[String: Any]])
+        #expect(
+            (progressHooks[0]["bash"] as? String)?
+                .contains("--agent-hook githubCopilotCLI attentionResolved") == true
+        )
 
         let uninstalled = try editor.uninstall(from: installed)
         let uninstalledObject = try #require(
@@ -671,6 +692,7 @@ struct AgentAdapterRegistryTests {
             }
             if kind == .openCode {
                 #expect(source.contains("properties.status?.type !== \"busy\""))
+                #expect(source.contains("\"permission.replied\": \"attentionResolved\""))
             }
             let mode = try #require(
                 FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions]

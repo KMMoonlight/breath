@@ -1036,8 +1036,38 @@ struct WorkbenchTests {
             AgentEvent(
                 applicationInstanceID: applicationInstanceID,
                 agent: .codex,
-                lifecycle: .turnCompleted,
+                lifecycle: .attentionResolved,
                 occurredAt: Date(timeIntervalSince1970: 202),
+                workspaceID: workspaceID,
+                workSessionID: sessionID,
+                paneID: paneID,
+                workingDirectory: "/tmp/example-project"
+            )
+        )
+        session = try #require(await workbench.snapshot().workSessions.first)
+        #expect(session.pane.state == .running)
+
+        try await workbench.handleAgentEvent(
+            AgentEvent(
+                applicationInstanceID: applicationInstanceID,
+                agent: .codex,
+                lifecycle: .turnCompleted,
+                occurredAt: Date(timeIntervalSince1970: 203),
+                workspaceID: workspaceID,
+                workSessionID: sessionID,
+                paneID: paneID,
+                workingDirectory: "/tmp/example-project"
+            )
+        )
+        session = try #require(await workbench.snapshot().workSessions.first)
+        #expect(session.pane.state == .turnCompleted)
+
+        try await workbench.handleAgentEvent(
+            AgentEvent(
+                applicationInstanceID: applicationInstanceID,
+                agent: .codex,
+                lifecycle: .attentionResolved,
+                occurredAt: Date(timeIntervalSince1970: 204),
                 workspaceID: workspaceID,
                 workSessionID: sessionID,
                 paneID: paneID,
@@ -1052,7 +1082,7 @@ struct WorkbenchTests {
                 applicationInstanceID: applicationInstanceID,
                 agent: .codex,
                 lifecycle: .sessionEnded,
-                occurredAt: Date(timeIntervalSince1970: 203),
+                occurredAt: Date(timeIntervalSince1970: 205),
                 workspaceID: workspaceID,
                 workSessionID: sessionID,
                 paneID: paneID,
@@ -1062,6 +1092,48 @@ struct WorkbenchTests {
         session = try #require(await workbench.snapshot().workSessions.first)
         #expect(session.pane.state == .idle)
         #expect(session.pane.agentBinding?.isActive == false)
+    }
+
+    @Test("submitting terminal input clears an Agent attention wait")
+    func terminalInputResolvesAttention() async throws {
+        let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
+        let terminalRuntime = RecordingTerminalRuntime()
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(),
+            terminalRuntime: terminalRuntime,
+            applicationInstanceID: applicationInstanceID,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+        let workSessionID = try await workbench.createWorkSession(in: workspaceID)
+        let paneID = try #require(await workbench.snapshot().workSessions.first?.pane.id)
+
+        for (lifecycle, occurredAt) in [
+            (AgentLifecycle.turnStarted, Date(timeIntervalSince1970: 200)),
+            (.needsAttention, Date(timeIntervalSince1970: 201)),
+        ] {
+            try await workbench.handleAgentEvent(
+                AgentEvent(
+                    applicationInstanceID: applicationInstanceID,
+                    agent: .codex,
+                    lifecycle: lifecycle,
+                    occurredAt: occurredAt,
+                    workspaceID: workspaceID,
+                    workSessionID: workSessionID,
+                    paneID: paneID,
+                    workingDirectory: "/tmp/example-project"
+                )
+            )
+        }
+        #expect(
+            await workbench.snapshot().workSessions.first?.pane.state == .needsAttention
+        )
+
+        await terminalRuntime.submitInput(in: paneID)
+
+        #expect(await workbench.snapshot().workSessions.first?.pane.state == .running)
     }
 
     @Test("late events from an older Agent session cannot steal the pane binding")
@@ -1815,6 +1887,7 @@ private actor RecordingTerminalRuntime: TerminalRuntime {
     private let effects: EffectLog?
     private(set) var launches: [TerminalLaunch] = []
     private(set) var stoppedPaneIDs: [TerminalPaneID] = []
+    private var inputSubmittedHandler: (@Sendable (TerminalPaneID) async -> Void)?
 
     init(effects: EffectLog? = nil) {
         self.effects = effects
@@ -1828,6 +1901,16 @@ private actor RecordingTerminalRuntime: TerminalRuntime {
     func stop(paneID: TerminalPaneID) async {
         stoppedPaneIDs.append(paneID)
         await effects?.append(.stopped(paneID))
+    }
+
+    func setInputSubmittedHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) async -> Void
+    ) async {
+        inputSubmittedHandler = handler
+    }
+
+    func submitInput(in paneID: TerminalPaneID) async {
+        await inputSubmittedHandler?(paneID)
     }
 }
 

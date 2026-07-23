@@ -8,11 +8,18 @@ public protocol TerminalEngine: Sendable {
     func setProcessExitHandler(
         _ handler: @escaping @Sendable (TerminalPaneID) -> Void
     ) async
+    func setInputSubmittedHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) async -> Void
+    ) async
 }
 
 public extension TerminalEngine {
     func setProcessExitHandler(
         _ handler: @escaping @Sendable (TerminalPaneID) -> Void
+    ) async {}
+
+    func setInputSubmittedHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) async -> Void
     ) async {}
 }
 
@@ -65,5 +72,11 @@ public final class TerminalEngineRuntime: TerminalRuntime, @unchecked Sendable {
         _ handler: @escaping @Sendable (TerminalPaneID) -> Void
     ) async {
         await engine.setProcessExitHandler(handler)
+    }
+
+    public func setInputSubmittedHandler(
+        _ handler: @escaping @Sendable (TerminalPaneID) async -> Void
+    ) async {
+        await engine.setInputSubmittedHandler(handler)
     }
 }

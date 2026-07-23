@@ -129,9 +129,13 @@ struct AgentIntegrationPreferenceStoreTests {
         let geminiSettingsURL = homeDirectory.appendingPathComponent(".gemini/settings.json")
         #expect(installed.contains("existing-tool"))
         #expect(installed.contains("--agent-hook codex"))
+        #expect(installed.contains("PreToolUse"))
+        #expect(installed.contains("--agent-hook codex attentionResolved"))
         #expect(claudeSettings.contains("--agent-hook claudeCode"))
         #expect(claudeSettings.contains("SessionStart"))
         #expect(claudeSettings.contains("--agent-hook claudeCode turnStarted"))
+        #expect(claudeSettings.contains("PreToolUse"))
+        #expect(claudeSettings.contains("--agent-hook claudeCode attentionResolved"))
         #expect(!FileManager.default.fileExists(atPath: geminiSettingsURL.path))
 
         try Data("{\"environmentVariables\":{}}".utf8).write(to: claudeSettingsURL)
@@ -139,6 +143,8 @@ struct AgentIntegrationPreferenceStoreTests {
         let repairedClaudeSettings = try String(contentsOf: claudeSettingsURL, encoding: .utf8)
         #expect(repairedClaudeSettings.contains("SessionStart"))
         #expect(repairedClaudeSettings.contains("--agent-hook claudeCode turnStarted"))
+        #expect(repairedClaudeSettings.contains("PreToolUse"))
+        #expect(repairedClaudeSettings.contains("--agent-hook claudeCode attentionResolved"))
         #expect(await model.prepareForTermination())
     }
 
