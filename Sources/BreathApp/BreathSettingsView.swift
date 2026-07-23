@@ -62,6 +62,20 @@ private struct WorktreeInventoryStatePresentation {
     let needsAttention: Bool
 }
 
+private enum WorktreeInventoryDeletionKind: Equatable {
+    case branch
+    case directory
+}
+
+private struct PendingWorktreeInventoryDeletion: Identifiable {
+    let kind: WorktreeInventoryDeletionKind
+    let item: ManagedWorktreeInventoryItem
+
+    var id: String {
+        "\(kind)-\(item.id)"
+    }
+}
+
 struct BreathSettingsView: View {
     private static let availableFontFamilies: [String] = {
         let families = CTFontManagerCopyAvailableFontFamilyNames() as? [String] ?? []
@@ -85,6 +99,8 @@ struct BreathSettingsView: View {
     @StateObject private var gitPreferencesStore = GitPreferencesStore.shared
     @State private var selectedTab: BreathSettingsTab
     @State private var archiveToDelete: WorkSession?
+    @State private var pendingWorktreeInventoryDeletion:
+        PendingWorktreeInventoryDeletion?
     @State private var gitExecutableTestResult: String?
 
     init(
@@ -136,6 +152,61 @@ struct BreathSettingsView: View {
                 )
             } else {
                 Text(localizer.string("只会删除 Breath 元数据，不会删除项目文件或 Agent CLI 自己保存的会话。"))
+            }
+        }
+        .alert(
+            worktreeInventoryDeletionTitle,
+            isPresented: worktreeInventoryDeletionPresented,
+            presenting: pendingWorktreeInventoryDeletion
+        ) { deletion in
+            Button(localizer.string("取消"), role: .cancel) {
+                pendingWorktreeInventoryDeletion = nil
+            }
+            Button(
+                localizer.string(
+                    deletion.kind == .branch
+                        ? "删除分支"
+                        : "删除文件目录"
+                ),
+                role: .destructive
+            ) {
+                switch deletion.kind {
+                case .branch:
+                    model.deleteManagedWorktreeInventoryBranch(
+                        deletion.item
+                    )
+                case .directory:
+                    model.deleteManagedWorktreeInventoryDirectory(
+                        deletion.item
+                    )
+                }
+                pendingWorktreeInventoryDeletion = nil
+            }
+        } message: { deletion in
+            switch deletion.kind {
+            case .branch:
+                Text(
+                    localizer.format(
+                        "将永久删除残留分支 %@。如果提交没有其他引用，之后可能无法恢复。",
+                        deletion.item.branchName ?? ""
+                    )
+                )
+            case .directory:
+                if deletion.item.state == .directoryOnly {
+                    Text(
+                        localizer.format(
+                            "将文件目录 %@ 移入 macOS 废纸篓，可从废纸篓恢复。",
+                            deletion.item.directoryPath ?? ""
+                        )
+                    )
+                } else {
+                    Text(
+                        localizer.format(
+                            "将删除未关联会话的 Git Worktree 目录 %@，但保留其分支。目录存在未提交修改或已锁定时会拒绝删除。",
+                            deletion.item.directoryPath ?? ""
+                        )
+                    )
+                }
             }
         }
     }
@@ -774,6 +845,8 @@ struct BreathSettingsView: View {
         _ item: ManagedWorktreeInventoryItem
     ) -> some View {
         let presentation = worktreeInventoryPresentation(item.state)
+        let isDeleting = model.deletingManagedWorktreeInventoryItemIDs
+            .contains(item.id)
         return HStack(spacing: 10) {
             Image(systemName: presentation.systemImage)
                 .foregroundStyle(
@@ -820,7 +893,10 @@ struct BreathSettingsView: View {
                     : .secondary
             )
 
-            if let directoryPath = item.directoryPath {
+            if isDeleting {
+                ProgressView()
+                    .controlSize(.small)
+            } else if let directoryPath = item.directoryPath {
                 Button {
                     NSWorkspace.shared.activateFileViewerSelecting([
                         URL(
@@ -847,6 +923,42 @@ struct BreathSettingsView: View {
                 Button(localizer.string("复制路径")) {
                     copyToPasteboard(directoryPath)
                 }
+            }
+            if item.state == .branchOnly, item.branchName != nil {
+                Divider()
+                Button(
+                    localizer.string("删除残留分支…"),
+                    role: .destructive
+                ) {
+                    pendingWorktreeInventoryDeletion =
+                        PendingWorktreeInventoryDeletion(
+                            kind: .branch,
+                            item: item
+                        )
+                }
+                .disabled(
+                    isDeleting
+                        || model.isRefreshingManagedWorktreeInventory
+                )
+            }
+            if item.state == .directoryOnly
+                || item.state == .orphanedCheckout
+            {
+                Divider()
+                Button(
+                    localizer.string("删除文件目录…"),
+                    role: .destructive
+                ) {
+                    pendingWorktreeInventoryDeletion =
+                        PendingWorktreeInventoryDeletion(
+                            kind: .directory,
+                            item: item
+                        )
+                }
+                .disabled(
+                    isDeleting
+                        || model.isRefreshingManagedWorktreeInventory
+                )
             }
         }
     }
@@ -1199,6 +1311,28 @@ struct BreathSettingsView: View {
     private func workspaceName(for session: WorkSession) -> String {
         model.snapshot.workspaces.first(where: { $0.id == session.workspaceID })?
             .displayName ?? localizer.string("工作区已移除")
+    }
+
+    private var worktreeInventoryDeletionTitle: String {
+        guard let deletion = pendingWorktreeInventoryDeletion else {
+            return ""
+        }
+        return localizer.string(
+            deletion.kind == .branch
+                ? "删除残留分支？"
+                : "删除文件目录？"
+        )
+    }
+
+    private var worktreeInventoryDeletionPresented: Binding<Bool> {
+        Binding(
+            get: { pendingWorktreeInventoryDeletion != nil },
+            set: {
+                if !$0 {
+                    pendingWorktreeInventoryDeletion = nil
+                }
+            }
+        )
     }
 
     private var deleteAlertPresented: Binding<Bool> {

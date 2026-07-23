@@ -19,6 +19,8 @@ final class BreathApplicationModel: ObservableObject {
         [ManagedWorktreeInventoryItem] = []
     @Published private(set) var isRefreshingManagedWorktreeInventory = false
     @Published private(set) var managedWorktreeInventoryError: String?
+    @Published private(set) var deletingManagedWorktreeInventoryItemIDs:
+        Set<String> = []
     @Published private(set) var isReady = false
     @Published private(set) var isRestoringSelectedSession = false
     @Published private(set) var isPreparingForTermination = false
@@ -312,6 +314,50 @@ final class BreathApplicationModel: ObservableObject {
             managedWorktreeInventoryError = inventory.warnings.isEmpty
                 ? nil
                 : inventory.warnings.joined(separator: "\n")
+        }
+    }
+
+    func deleteManagedWorktreeInventoryBranch(
+        _ item: ManagedWorktreeInventoryItem
+    ) {
+        guard !isRefreshingManagedWorktreeInventory,
+              deletingManagedWorktreeInventoryItemIDs.insert(item.id).inserted
+        else {
+            return
+        }
+        Task {
+            defer {
+                deletingManagedWorktreeInventoryItemIDs.remove(item.id)
+            }
+            do {
+                try await managedWorktreeService.deleteInventoryBranch(item)
+                managedWorktreeInventoryError = nil
+                refreshManagedWorktreeInventory()
+            } catch {
+                managedWorktreeInventoryError = error.localizedDescription
+            }
+        }
+    }
+
+    func deleteManagedWorktreeInventoryDirectory(
+        _ item: ManagedWorktreeInventoryItem
+    ) {
+        guard !isRefreshingManagedWorktreeInventory,
+              deletingManagedWorktreeInventoryItemIDs.insert(item.id).inserted
+        else {
+            return
+        }
+        Task {
+            defer {
+                deletingManagedWorktreeInventoryItemIDs.remove(item.id)
+            }
+            do {
+                try await managedWorktreeService.deleteInventoryDirectory(item)
+                managedWorktreeInventoryError = nil
+                refreshManagedWorktreeInventory()
+            } catch {
+                managedWorktreeInventoryError = error.localizedDescription
+            }
         }
     }
 

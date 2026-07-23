@@ -1306,6 +1306,40 @@ struct WindowLayoutSourceTests {
         #expect(removalSource.contains("workbench.removeWorkspace(id)"))
     }
 
+    @Test("Worktree inventory rows expose confirmed cleanup actions")
+    func worktreeInventoryRowsExposeCleanupActions() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let settingsSource = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/BreathSettingsView.swift"
+            ),
+            encoding: .utf8
+        )
+        let modelSource = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/BreathApplicationModel.swift"
+            ),
+            encoding: .utf8
+        )
+
+        #expect(settingsSource.contains("删除残留分支…"))
+        #expect(settingsSource.contains("删除文件目录…"))
+        #expect(settingsSource.contains("pendingWorktreeInventoryDeletion"))
+        #expect(
+            modelSource.contains(
+                "deleteManagedWorktreeInventoryBranch"
+            )
+        )
+        #expect(
+            modelSource.contains(
+                "deleteManagedWorktreeInventoryDirectory"
+            )
+        )
+    }
+
     @Test("workspace disclosure keeps balanced icon spacing")
     func workspaceDisclosureKeepsBalancedIconSpacing() throws {
         let root = URL(

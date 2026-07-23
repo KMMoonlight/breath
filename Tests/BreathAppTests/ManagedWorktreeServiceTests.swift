@@ -166,6 +166,299 @@ struct ManagedWorktreeServiceTests {
         )
     }
 
+    @Test("a retained inventory branch can be deleted")
+    func deletesRetainedInventoryBranch() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = ManagedWorktree.sessionBranchName(for: sessionID)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: branchName
+        )
+        try await service.remove(worktree)
+        let beforeDeletion = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+        let branchItem = try #require(
+            beforeDeletion.items.first {
+                $0.branchName == branchName && $0.state == .branchOnly
+            }
+        )
+
+        try await service.deleteInventoryBranch(branchItem)
+
+        let afterDeletion = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+        #expect(
+            !afterDeletion.items.contains {
+                $0.branchName == branchName
+            }
+        )
+    }
+
+    @Test("an inventory branch that became checked out is not deleted")
+    func refusesInventoryBranchThatBecameCheckedOut() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = ManagedWorktree.sessionBranchName(for: sessionID)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: branchName
+        )
+        try await service.remove(worktree)
+        let inventory = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+        let branchItem = try #require(
+            inventory.items.first {
+                $0.branchName == branchName && $0.state == .branchOnly
+            }
+        )
+        let externalCheckout = fixture.rootURL.appendingPathComponent(
+            "external-checkout",
+            isDirectory: true
+        )
+        _ = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "worktree", "add", externalCheckout.path, branchName,
+        ])
+
+        await #expect(
+            throws: ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                "该分支已被 Git Worktree 检出，请刷新库存后重试。"
+            )
+        ) {
+            try await service.deleteInventoryBranch(branchItem)
+        }
+    }
+
+    @Test("a clean orphaned checkout can be removed from inventory")
+    func removesCleanOrphanedInventoryCheckout() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = ManagedWorktree.sessionBranchName(for: sessionID)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: branchName
+        )
+        let beforeDeletion = await service.inventory(
+            workspaces: [workspace],
+            knownWorktrees: []
+        )
+        let checkoutItem = try #require(
+            beforeDeletion.items.first {
+                $0.directoryPath.map {
+                    URL(fileURLWithPath: $0)
+                        .resolvingSymlinksInPath()
+                        .standardizedFileURL.path
+                        == URL(fileURLWithPath: worktree.rootPath)
+                            .resolvingSymlinksInPath()
+                            .standardizedFileURL.path
+                } == true
+                    && $0.state == .orphanedCheckout
+            }
+        )
+
+        try await service.deleteInventoryDirectory(checkoutItem)
+
+        #expect(
+            !FileManager.default.fileExists(atPath: worktree.rootPath)
+        )
+        let afterDeletion = await service.inventory(
+            workspaces: [workspace],
+            knownWorktrees: []
+        )
+        #expect(
+            afterDeletion.items.contains {
+                $0.branchName == branchName
+                    && $0.directoryPath == nil
+                    && $0.state == .branchOnly
+            }
+        )
+    }
+
+    @Test("a dirty orphaned checkout is not removed from inventory")
+    func refusesDirtyOrphanedInventoryCheckout() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: ManagedWorktree.sessionBranchName(for: sessionID)
+        )
+        try Data("uncommitted".utf8).write(
+            to: URL(
+                fileURLWithPath: worktree.rootPath,
+                isDirectory: true
+            ).appendingPathComponent("untracked.txt")
+        )
+        let inventory = await service.inventory(
+            workspaces: [workspace],
+            knownWorktrees: []
+        )
+        let checkoutItem = try #require(
+            inventory.items.first {
+                $0.directoryPath.map {
+                    URL(fileURLWithPath: $0)
+                        .resolvingSymlinksInPath()
+                        .standardizedFileURL.path
+                        == URL(fileURLWithPath: worktree.rootPath)
+                            .resolvingSymlinksInPath()
+                            .standardizedFileURL.path
+                } == true
+                    && $0.state == .orphanedCheckout
+            }
+        )
+
+        await #expect(
+            throws: ManagedWorktreeServiceError.worktreeContainsChanges
+        ) {
+            try await service.deleteInventoryDirectory(checkoutItem)
+        }
+        #expect(FileManager.default.fileExists(atPath: worktree.rootPath))
+    }
+
+    @Test("an unregistered residual directory is moved to Trash")
+    func trashesUnregisteredInventoryDirectory() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let residualDirectory = fixture.managedRootURL
+            .appendingPathComponent(
+                UUID().uuidString,
+                isDirectory: true
+            )
+            .appendingPathComponent(
+                UUID().uuidString,
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: residualDirectory,
+            withIntermediateDirectories: true
+        )
+        try Data("residual".utf8).write(
+            to: residualDirectory.appendingPathComponent("keep.txt")
+        )
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL,
+            directoryTrash: RemovingTestWorktreeTrash()
+        )
+        let beforeDeletion = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+        let directoryItem = try #require(
+            beforeDeletion.items.first {
+                $0.directoryPath == residualDirectory.path
+                    && $0.state == .directoryOnly
+            }
+        )
+
+        try await service.deleteInventoryDirectory(directoryItem)
+
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: residualDirectory.path
+            )
+        )
+        let afterDeletion = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+        #expect(
+            !afterDeletion.items.contains {
+                $0.directoryPath == residualDirectory.path
+            }
+        )
+    }
+
+    @Test("a valid Git checkout is never trashed as a directory residual")
+    func refusesToTrashValidGitCheckout() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let checkoutDirectory = fixture.managedRootURL
+            .appendingPathComponent(
+                UUID().uuidString,
+                isDirectory: true
+            )
+            .appendingPathComponent(
+                UUID().uuidString,
+                isDirectory: true
+            )
+        _ = try fixture.git([
+            "clone", "--quiet",
+            fixture.repositoryURL.path,
+            checkoutDirectory.path,
+        ])
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL,
+            directoryTrash: RemovingTestWorktreeTrash()
+        )
+        let inventory = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+        let directoryItem = try #require(
+            inventory.items.first {
+                $0.directoryPath == checkoutDirectory.path
+                    && $0.state == .directoryOnly
+            }
+        )
+
+        await #expect(
+            throws: ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                "该目录仍是有效的 Git Worktree，请刷新库存后重试。"
+            )
+        ) {
+            try await service.deleteInventoryDirectory(directoryItem)
+        }
+        #expect(
+            FileManager.default.fileExists(atPath: checkoutDirectory.path)
+        )
+    }
+
     @Test("inventory reports a missing known checkout once as unavailable")
     func inventoryReportsMissingKnownCheckoutOnce() async throws {
         let fixture = try GitWorktreeFixture()
@@ -1891,4 +2184,13 @@ private struct GitWorktreeFixture {
 
 private enum GitWorktreeFixtureError: Error {
     case commandFailed(arguments: [String], exitCode: Int32, output: String)
+}
+
+private struct RemovingTestWorktreeTrash:
+    ManagedWorktreeDirectoryTrashing,
+    Sendable
+{
+    func moveToTrash(_ url: URL) async throws {
+        try FileManager.default.removeItem(at: url)
+    }
 }

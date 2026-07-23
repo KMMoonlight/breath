@@ -1,6 +1,23 @@
 import BreathCore
 import Foundation
 
+protocol ManagedWorktreeDirectoryTrashing: Sendable {
+    func moveToTrash(_ url: URL) async throws
+}
+
+private struct MacOSManagedWorktreeDirectoryTrash:
+    ManagedWorktreeDirectoryTrashing,
+    Sendable
+{
+    func moveToTrash(_ url: URL) async throws {
+        var resultingURL: NSURL?
+        try FileManager.default.trashItem(
+            at: url,
+            resultingItemURL: &resultingURL
+        )
+    }
+}
+
 private actor ManagedWorktreeOperationGate {
     private var isHeld = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -40,6 +57,7 @@ struct ManagedWorktreeInventorySnapshot: Equatable, Sendable {
 struct ManagedWorktreeInventoryItem: Equatable, Identifiable, Sendable {
     let repositoryName: String
     let repositoryPath: String
+    let gitCommonDirectory: String?
     let branchName: String?
     let directoryPath: String?
     let state: ManagedWorktreeInventoryState
@@ -58,6 +76,7 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
     case invalidStartBranch(String)
     case sessionBranchAlreadyExists(String)
     case unsupportedRepository(String)
+    case inventoryDeletionNotAllowed(String)
     case managedPathAlreadyExists(String)
     case unsafeManagedPath(String)
     case unsafeSessionWorkingDirectory(String)
@@ -90,6 +109,8 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
         case .sessionBranchAlreadyExists(let branchName):
             return "Worktree 会话分支已经存在：\(branchName)"
         case .unsupportedRepository(let reason):
+            return reason
+        case .inventoryDeletionNotAllowed(let reason):
             return reason
         case .managedPathAlreadyExists(let path):
             return "Worktree 托管目录已经存在：\(path)"
@@ -192,10 +213,13 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
     private let inventoryRepositoriesURL: URL
     private let runner: GitCommandRunner
     private let operationGate: ManagedWorktreeOperationGate
+    private let directoryTrash: any ManagedWorktreeDirectoryTrashing
 
     init(
         managedRootURL: URL,
-        gitExecutableURL: URL = URL(fileURLWithPath: "/usr/bin/git")
+        gitExecutableURL: URL = URL(fileURLWithPath: "/usr/bin/git"),
+        directoryTrash: any ManagedWorktreeDirectoryTrashing =
+            MacOSManagedWorktreeDirectoryTrash()
     ) {
         let root = managedRootURL.standardizedFileURL
         self.managedRootURL = root
@@ -208,6 +232,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         )
         runner = GitCommandRunner(executableURL: gitExecutableURL)
         operationGate = ManagedWorktreeOperationGate()
+        self.directoryTrash = directoryTrash
     }
 
     func startBranches(
@@ -357,6 +382,184 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         return didPreserveRepository
     }
 
+    func deleteInventoryBranch(
+        _ item: ManagedWorktreeInventoryItem
+    ) async throws {
+        await operationGate.acquire()
+        do {
+            try await deleteInventoryBranchWithoutAcquiringGate(item)
+            await operationGate.release()
+        } catch {
+            await operationGate.release()
+            throw error
+        }
+    }
+
+    private func deleteInventoryBranchWithoutAcquiringGate(
+        _ item: ManagedWorktreeInventoryItem
+    ) async throws {
+        guard item.state == .branchOnly,
+              item.directoryPath == nil,
+              let branchName = item.branchName,
+              managedWorkSessionID(for: branchName) != nil,
+              let gitCommonDirectory = item.gitCommonDirectory
+        else {
+            throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                "只能从 Worktree 库存中删除没有检出目录的 Breath 会话分支。"
+            )
+        }
+        let gitDirectoryPath = standardizedPath(gitCommonDirectory)
+        guard FileManager.default.fileExists(atPath: gitDirectoryPath) else {
+            throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                "Worktree 所属 Git 仓库不可用，无法删除分支。"
+            )
+        }
+        let branchReference = "refs/heads/\(branchName)"
+        let entries = parseWorktreeList(
+            try await checkedOutput([
+                "--git-dir=\(gitDirectoryPath)",
+                "worktree", "list", "--porcelain",
+            ])
+        )
+        guard !entries.contains(where: {
+            $0.branchReference == branchReference
+        }) else {
+            throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                "该分支已被 Git Worktree 检出，请刷新库存后重试。"
+            )
+        }
+        let commit = try await checkedOutput([
+            "--git-dir=\(gitDirectoryPath)",
+            "rev-parse", "--verify", "\(branchReference)^{commit}",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await checkedResult([
+            "--git-dir=\(gitDirectoryPath)",
+            "update-ref", "-d", branchReference, commit,
+        ])
+    }
+
+    func deleteInventoryDirectory(
+        _ item: ManagedWorktreeInventoryItem
+    ) async throws {
+        await operationGate.acquire()
+        do {
+            try await deleteInventoryDirectoryWithoutAcquiringGate(item)
+            await operationGate.release()
+        } catch {
+            await operationGate.release()
+            throw error
+        }
+    }
+
+    private func deleteInventoryDirectoryWithoutAcquiringGate(
+        _ item: ManagedWorktreeInventoryItem
+    ) async throws {
+        guard item.state == .orphanedCheckout
+                || item.state == .directoryOnly,
+              let directoryPath = item.directoryPath
+        else {
+            throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                "只能删除库存中的目录残留或未关联会话目录。"
+            )
+        }
+        let rootURL = URL(
+            fileURLWithPath: directoryPath,
+            isDirectory: true
+        ).standardizedFileURL
+        guard let owners = managedPathOwners(for: rootURL),
+              isManagedPath(
+                  rootURL,
+                  workspaceID: owners.workspaceID,
+                  workSessionID: owners.workSessionID
+              )
+        else {
+            throw ManagedWorktreeServiceError.unsafeManagedPath(rootURL.path)
+        }
+        guard FileManager.default.fileExists(atPath: rootURL.path) else {
+            throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                "Worktree 目录已经不存在，请刷新库存。"
+            )
+        }
+        if item.state == .directoryOnly {
+            let gitProbe = try await runner.run(arguments: [
+                "-C", rootURL.path,
+                "rev-parse", "--is-inside-work-tree",
+            ])
+            guard gitProbe.exitCode != 0
+                    || gitProbe.standardOutput.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ) != "true"
+            else {
+                throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                    "该目录仍是有效的 Git Worktree，请刷新库存后重试。"
+                )
+            }
+            try await directoryTrash.moveToTrash(rootURL)
+            try removeEmptyManagedAncestors(startingAt: rootURL)
+            return
+        }
+        guard let storedGitCommonDirectory = item.gitCommonDirectory else {
+            throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                "无法确认 Worktree 所属 Git 仓库，请刷新库存。"
+            )
+        }
+        let gitDirectoryPath = standardizedPath(storedGitCommonDirectory)
+        let actualGitDirectoryPath = try await gitCommonDirectory(
+            for: rootURL
+        )
+        guard actualGitDirectoryPath == gitDirectoryPath else {
+            throw ManagedWorktreeServiceError.repositoryIdentityMismatch(
+                expected: gitDirectoryPath,
+                actual: actualGitDirectoryPath
+            )
+        }
+        let entries = parseWorktreeList(
+            try await checkedOutput([
+                "--git-dir=\(gitDirectoryPath)",
+                "worktree", "list", "--porcelain",
+            ])
+        )
+        guard let entry = worktreeEntry(at: rootURL, in: entries) else {
+            throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
+                "该目录已不再是登记的 Git Worktree，请刷新库存。"
+            )
+        }
+        guard !entry.isLocked else {
+            throw ManagedWorktreeServiceError.worktreeLocked(entry.lockReason)
+        }
+        let status = try await checkedOutput([
+            "-C", rootURL.path,
+            "status", "--porcelain=v1", "-z",
+            "--untracked-files=all",
+        ])
+        guard status.isEmpty else {
+            throw ManagedWorktreeServiceError.worktreeContainsChanges
+        }
+        let headCommit = try await checkedOutput([
+            "-C", rootURL.path,
+            "rev-parse", "--verify", "HEAD^{commit}",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let protectingReferences = try await checkedOutput([
+            "--git-dir=\(gitDirectoryPath)",
+            "for-each-ref",
+            "--format=%(refname)",
+            "--contains=\(headCommit)",
+            "refs/heads",
+            "refs/tags",
+        ])
+        guard !protectingReferences
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+        else {
+            throw ManagedWorktreeServiceError.worktreeContainsUnprotectedCommits
+        }
+        _ = try await checkedResult([
+            "--git-dir=\(gitDirectoryPath)",
+            "worktree", "remove", rootURL.path,
+        ])
+        try removeEmptyManagedAncestors(startingAt: rootURL)
+    }
+
     private func unavailableInventoryRepositoryError(
         for workspace: Workspace
     ) -> ManagedWorktreeServiceError {
@@ -485,6 +688,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                     ManagedWorktreeInventoryItem(
                         repositoryName: repository.displayName,
                         repositoryPath: repository.repositoryPath,
+                        gitCommonDirectory: gitDirectoryPath,
                         branchName: knownWorktree.branchName,
                         directoryPath: knownWorktree.rootPath,
                         state: validation.state
@@ -539,6 +743,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                     ManagedWorktreeInventoryItem(
                         repositoryName: repository.displayName,
                         repositoryPath: repository.repositoryPath,
+                        gitCommonDirectory: gitDirectoryPath,
                         branchName: branchName,
                         directoryPath: directoryPath,
                         state: state
@@ -598,6 +803,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                     ManagedWorktreeInventoryItem(
                         repositoryName: repository.displayName,
                         repositoryPath: repository.repositoryPath,
+                        gitCommonDirectory: gitDirectoryPath,
                         branchName: branchName,
                         directoryPath: knownWorktree?.rootPath ?? entry.path,
                         state: state
@@ -628,6 +834,8 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                     ManagedWorktreeInventoryItem(
                         repositoryName: workspace?.displayName ?? "",
                         repositoryPath: workspace?.path ?? "",
+                        gitCommonDirectory: knownWorktree?
+                            .gitCommonDirectory,
                         branchName: knownWorktree?.branchName,
                         directoryPath: knownWorktree?.rootPath
                             ?? directoryURL.path,
@@ -656,6 +864,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                 ManagedWorktreeInventoryItem(
                     repositoryName: workspace?.displayName ?? "",
                     repositoryPath: workspace?.path ?? "",
+                    gitCommonDirectory: worktree.gitCommonDirectory,
                     branchName: worktree.branchName,
                     directoryPath: FileManager.default.fileExists(
                         atPath: worktree.rootPath
@@ -1737,6 +1946,31 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             .standardizedFileURL.path
     }
 
+    private func managedPathOwners(
+        for url: URL
+    ) -> (
+        workspaceID: WorkspaceID,
+        workSessionID: WorkSessionID
+    )? {
+        let rootComponents = managedRootURL.standardizedFileURL.pathComponents
+        let components = url.standardizedFileURL.pathComponents
+        guard components.count == rootComponents.count + 2,
+              Array(components.prefix(rootComponents.count)) == rootComponents,
+              let workspaceValue = UUID(
+                  uuidString: components[rootComponents.count]
+              ),
+              let sessionValue = UUID(
+                  uuidString: components[rootComponents.count + 1]
+              )
+        else {
+            return nil
+        }
+        return (
+            WorkspaceID(rawValue: workspaceValue),
+            WorkSessionID(rawValue: sessionValue)
+        )
+    }
+
     private func managedWorkSessionID(
         for branchName: String
     ) -> WorkSessionID? {
@@ -2025,34 +2259,32 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         _ worktree: ManagedWorktree,
         rootURL: URL
     ) async throws {
-        let commonPath = try await checkedOutput([
-            "-C", rootURL.path,
-            "rev-parse", "--git-common-dir",
-        ]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let actualDirectory: URL
-        if commonPath.hasPrefix("/") {
-            actualDirectory = URL(
-                fileURLWithPath: commonPath,
-                isDirectory: true
-            )
-        } else {
-            actualDirectory = URL(
-                fileURLWithPath: commonPath,
-                relativeTo: rootURL
-            )
-        }
-        let actualPath = actualDirectory.resolvingSymlinksInPath()
-            .standardizedFileURL.path
-        let expectedPath = URL(
-            fileURLWithPath: worktree.gitCommonDirectory,
-            isDirectory: true
-        ).resolvingSymlinksInPath().standardizedFileURL.path
+        let actualPath = try await gitCommonDirectory(for: rootURL)
+        let expectedPath = standardizedPath(worktree.gitCommonDirectory)
         guard actualPath == expectedPath else {
             throw ManagedWorktreeServiceError.repositoryIdentityMismatch(
                 expected: expectedPath,
                 actual: actualPath
             )
         }
+    }
+
+    private func gitCommonDirectory(
+        for rootURL: URL
+    ) async throws -> String {
+        let commonPath = try await checkedOutput([
+            "-C", rootURL.path,
+            "rev-parse", "--git-common-dir",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if commonPath.hasPrefix("/") {
+            return standardizedPath(commonPath)
+        }
+        return URL(
+            fileURLWithPath: commonPath,
+            relativeTo: rootURL
+        )
+        .resolvingSymlinksInPath()
+        .standardizedFileURL.path
     }
 
     private func prepareManagedDirectories(
