@@ -67,87 +67,88 @@ mkdir -p "${VENDOR_DIR}"
 rm -rf "${VENDOR_DIR}/GhosttyKit.xcframework"
 ditto "${SOURCE_DIR}/macos/GhosttyKit.xcframework" "${VENDOR_DIR}/GhosttyKit.xcframework"
 
-XCFRAMEWORK="${VENDOR_DIR}/GhosttyKit.xcframework"
-XCFRAMEWORK_PLIST="${XCFRAMEWORK}/Info.plist"
-LIBRARY_INDEX=0
-while library_identifier=$(
-  /usr/libexec/PlistBuddy \
-    -c "Print :AvailableLibraries:${LIBRARY_INDEX}:LibraryIdentifier" \
-    "${XCFRAMEWORK_PLIST}" 2>/dev/null
-); do
-  if [[ "${library_identifier}" == macos-* ]]; then
-    library_path=$(
-      /usr/libexec/PlistBuddy \
-        -c "Print :AvailableLibraries:${LIBRARY_INDEX}:LibraryPath" \
-        "${XCFRAMEWORK_PLIST}"
-    )
-    if [[ "${library_path:t}" != lib* ]]; then
-      swiftpm_library_path="lib${library_path:t}"
-      /bin/mv \
-        "${XCFRAMEWORK}/${library_identifier}/${library_path}" \
-        "${XCFRAMEWORK}/${library_identifier}/${swiftpm_library_path}"
-      /usr/libexec/PlistBuddy \
-        -c "Set :AvailableLibraries:${LIBRARY_INDEX}:BinaryPath ${swiftpm_library_path}" \
-        -c "Set :AvailableLibraries:${LIBRARY_INDEX}:LibraryPath ${swiftpm_library_path}" \
-        "${XCFRAMEWORK_PLIST}"
-    fi
+GHOSTTY_FRAMEWORK="${VENDOR_DIR}/GhosttyKit.xcframework"
+GHOSTTY_INFO_PLIST="${GHOSTTY_FRAMEWORK}/Info.plist"
+MACOS_LIBRARY_INDEX=""
+for INDEX in {0..15}; do
+  PLATFORM=$(
+    /usr/libexec/PlistBuddy \
+      -c "Print :AvailableLibraries:${INDEX}:SupportedPlatform" \
+      "${GHOSTTY_INFO_PLIST}" 2>/dev/null
+  ) || break
+  if [[ "${PLATFORM}" == "macos" ]]; then
+    MACOS_LIBRARY_INDEX="${INDEX}"
+    break
   fi
-  (( LIBRARY_INDEX += 1 ))
 done
-
-GHOSTTY_ARCHIVES=("${VENDOR_DIR}"/GhosttyKit.xcframework/macos-*/*.a(N))
-if (( ${#GHOSTTY_ARCHIVES} != 1 )); then
-  print -u2 "Expected one macOS Ghostty archive; found ${#GHOSTTY_ARCHIVES}"
+if [[ -z "${MACOS_LIBRARY_INDEX}" ]]; then
+  print -u2 "Missing macOS library entry in ${GHOSTTY_INFO_PLIST}"
   exit 1
 fi
 
-normalize_archive_members() {
-  local archive="$1"
-  local ext_object_count
-  ext_object_count=$(
-    /usr/bin/ar -t "${archive}" \
-      | /usr/bin/awk '$0 == "ext.o" { count += 1 } END { print count + 0 }'
-  )
-  if (( ext_object_count == 2 )); then
-    # dsymutil resolves archive members by basename, so Ghostty's two ext.o
-    # members must have unique names even though the linker handles them safely.
-    local normalize_dir
-    normalize_dir=$(mktemp -d "${TMPDIR:-/tmp}/breath-ghostty-archive.XXXXXX")
+GHOSTTY_LIBRARY_IDENTIFIER=$(
+  /usr/libexec/PlistBuddy \
+    -c "Print :AvailableLibraries:${MACOS_LIBRARY_INDEX}:LibraryIdentifier" \
+    "${GHOSTTY_INFO_PLIST}"
+)
+GHOSTTY_LIBRARY_PATH=$(
+  /usr/libexec/PlistBuddy \
+    -c "Print :AvailableLibraries:${MACOS_LIBRARY_INDEX}:LibraryPath" \
+    "${GHOSTTY_INFO_PLIST}"
+)
+GHOSTTY_LIBRARY_DIR="${GHOSTTY_FRAMEWORK}/${GHOSTTY_LIBRARY_IDENTIFIER}"
+GHOSTTY_ARCHIVE="${GHOSTTY_LIBRARY_DIR}/libghostty-internal.a"
+if [[ "${GHOSTTY_LIBRARY_PATH}" != "libghostty-internal.a" ]]; then
+  /bin/mv "${GHOSTTY_LIBRARY_DIR}/${GHOSTTY_LIBRARY_PATH}" "${GHOSTTY_ARCHIVE}"
+  /usr/libexec/PlistBuddy \
+    -c "Set :AvailableLibraries:${MACOS_LIBRARY_INDEX}:BinaryPath libghostty-internal.a" \
+    -c "Set :AvailableLibraries:${MACOS_LIBRARY_INDEX}:LibraryPath libghostty-internal.a" \
+    "${GHOSTTY_INFO_PLIST}"
+fi
+if [[ ! -f "${GHOSTTY_ARCHIVE}" ]]; then
+  print -u2 "Missing macOS Ghostty archive: ${GHOSTTY_ARCHIVE}"
+  exit 1
+fi
+/usr/bin/plutil -lint "${GHOSTTY_INFO_PLIST}" >/dev/null
+
+# dsymutil resolves archive members by basename, so Ghostty's two ext.o
+# members must have unique names even though the linker handles them safely.
+# The macOS XCFramework library is universal, so normalize each architecture
+# independently before combining the slices again.
+NORMALIZE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/breath-ghostty-archive.XXXXXX")
+NORMALIZED_SLICES=()
+for ARCH in arm64 x86_64; do
+  THIN_ARCHIVE="${NORMALIZE_DIR}/ghostty-${ARCH}.a"
+  /usr/bin/lipo "${GHOSTTY_ARCHIVE}" -thin "${ARCH}" -output "${THIN_ARCHIVE}"
+
+  EXT_OBJECT_COUNT=$(/usr/bin/ar -t "${THIN_ARCHIVE}" | /usr/bin/awk '$0 == "ext.o" { count += 1 } END { print count + 0 }')
+  if (( EXT_OBJECT_COUNT == 2 )); then
+    SLICE_DIR="${NORMALIZE_DIR}/${ARCH}"
+    mkdir -p "${SLICE_DIR}"
     (
-      cd "${normalize_dir}"
-      /usr/bin/ar -x "${archive}" ext.o
+      cd "${SLICE_DIR}"
+      /usr/bin/ar -x "${THIN_ARCHIVE}" ext.o
       /bin/chmod u+rw ext.o
       /bin/mv ext.o macos_text_ext.o
-      /usr/bin/ar -d "${archive}" ext.o
-      /usr/bin/ar -q "${archive}" macos_text_ext.o
-      /usr/bin/ranlib "${archive}"
+      /usr/bin/ar -d "${THIN_ARCHIVE}" ext.o
+      /usr/bin/ar -q "${THIN_ARCHIVE}" macos_text_ext.o
+      /usr/bin/ranlib "${THIN_ARCHIVE}"
     )
-    rm -rf "${normalize_dir}"
-  elif (( ext_object_count != 1 )); then
-    print -u2 "Unexpected ext.o member count in Ghostty archive: ${ext_object_count}"
+  elif (( EXT_OBJECT_COUNT != 1 )); then
+    print -u2 "Unexpected ext.o member count in Ghostty ${ARCH} archive: ${EXT_OBJECT_COUNT}"
+    rm -rf "${NORMALIZE_DIR}"
     exit 1
   fi
-}
 
-GHOSTTY_ARCHIVE="${GHOSTTY_ARCHIVES[1]}"
-ARCHITECTURES=("${(@s: :)$(/usr/bin/lipo -archs "${GHOSTTY_ARCHIVE}")}")
-if (( ${#ARCHITECTURES} == 1 )); then
-  normalize_archive_members "${GHOSTTY_ARCHIVE}"
-else
-  FAT_NORMALIZE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/breath-ghostty-fat-archive.XXXXXX")
-  THIN_ARCHIVES=()
-  for architecture in "${ARCHITECTURES[@]}"; do
-    thin_archive="${FAT_NORMALIZE_DIR}/${architecture}.a"
-    /usr/bin/lipo "${GHOSTTY_ARCHIVE}" \
-      -thin "${architecture}" \
-      -output "${thin_archive}"
-    normalize_archive_members "${thin_archive}"
-    THIN_ARCHIVES+=("${thin_archive}")
-  done
-  /usr/bin/lipo -create "${THIN_ARCHIVES[@]}" \
-    -output "${FAT_NORMALIZE_DIR}/ghostty-internal.a"
-  /bin/mv -f "${FAT_NORMALIZE_DIR}/ghostty-internal.a" "${GHOSTTY_ARCHIVE}"
-  rm -rf "${FAT_NORMALIZE_DIR}"
-fi
+  NORMALIZED_SLICES+=("${THIN_ARCHIVE}")
+done
+
+/usr/bin/lipo -create "${NORMALIZED_SLICES[@]}" -output "${NORMALIZE_DIR}/ghostty-internal.a"
+/bin/mv "${NORMALIZE_DIR}/ghostty-internal.a" "${GHOSTTY_ARCHIVE}"
+rm -rf "${NORMALIZE_DIR}"
+
+# SwiftPM caches the evaluated manifest without tracking the framework path.
+# Invalidate that cache after the ignored local artifact appears.
+/usr/bin/touch "${ROOT}/Package.swift"
 
 print "Built GhosttyKit.xcframework from ${REVISION}"

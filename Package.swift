@@ -5,6 +5,8 @@ import Foundation
 
 let ghosttyFrameworkPath = "Vendor/GhosttyKit.xcframework"
 let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+// build-libghostty.sh touches this manifest after generating the framework so
+// SwiftPM re-evaluates this file-existence-dependent target graph.
 let hasGhosttyFramework = FileManager.default.fileExists(
     atPath: packageRoot.appendingPathComponent(ghosttyFrameworkPath).path
 )

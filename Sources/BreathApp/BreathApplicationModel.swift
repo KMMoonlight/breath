@@ -38,6 +38,7 @@ final class BreathApplicationModel: ObservableObject {
     private let homeDirectory: URL
     private var started = false
     private var startupSucceeded = false
+    private var startupError: String?
     private var startupTask: Task<Void, Never>?
     private var resolvedAppearance: ResolvedApplicationAppearance = .dark
 
@@ -208,8 +209,10 @@ final class BreathApplicationModel: ObservableObject {
                 try await workbench.materializeSelectedWorkSession()
                 await refreshSnapshot()
                 startupSucceeded = true
+                startupError = nil
             } catch {
-                lastError = error.localizedDescription
+                startupError = error.localizedDescription
+                lastError = startupError
             }
         }
     }
@@ -605,7 +608,8 @@ final class BreathApplicationModel: ObservableObject {
                 await startupTask?.value
             }
             guard startupSucceeded else {
-                lastError = "启动恢复未完成。请退出 Breath 后重试；现有会话数据不会被覆盖。"
+                lastError = startupError
+                    ?? "启动恢复未完成。请退出 Breath 后重试；现有会话数据不会被覆盖。"
                 completion?(false)
                 return
             }

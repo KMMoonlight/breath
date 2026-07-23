@@ -1252,7 +1252,7 @@ struct WindowLayoutSourceTests {
         #expect(settingsSource.contains(
             ".frame(width: controlWidth, alignment: .trailing)"
         ))
-        #expect(settingsSource.components(separatedBy: "settingsMenuPicker(").count == 8)
+        #expect(settingsSource.components(separatedBy: "settingsMenuPicker(").count == 7)
         #expect(settingsSource.contains("TerminalShortcutPolicy.breathFirst"))
         #expect(settingsSource.contains("TerminalShortcutPolicy.terminalFirst"))
         #expect(settingsSource.contains(".menuStyle(.button)"))

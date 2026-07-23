@@ -61,6 +61,38 @@ struct SettingsTests {
         #expect(settings.terminalShortcutPolicy == .breathFirst)
     }
 
+    @Test("settings restore the exact theme written by the Ghostty catalog")
+    func ghosttyCatalogThemeCompatibility() throws {
+        let payload = Data(
+            """
+            {
+              "application": {
+                "appearance": "system",
+                "sidebarDensity": "comfortable",
+                "fontSize": 12,
+                "language": "system"
+              },
+              "terminal": {
+                "fontFamily": "JetBrainsMonoNL Nerd Font Mono",
+                "fontSize": 16,
+                "colorTheme": "ghostty:Dracula+",
+                "cursorStyle": "block"
+              },
+              "terminalShortcutPolicy": "breath-first"
+            }
+            """.utf8
+        )
+
+        let settings = try JSONDecoder().decode(SettingsSnapshot.self, from: payload)
+
+        #expect(
+            settings.terminal.colorTheme
+                == TerminalColorTheme(rawValue: "ghostty:Dracula+")
+        )
+        #expect(settings.terminal.fontFamily == "JetBrainsMonoNL Nerd Font Mono")
+        #expect(settings.terminal.fontSize == 16)
+    }
+
     @Test("application and terminal styles are separate value objects")
     func separateStyleDomains() throws {
         var settings = SettingsSnapshot.default
