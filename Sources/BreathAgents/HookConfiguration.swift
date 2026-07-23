@@ -27,14 +27,30 @@ public struct JSONHookConfigurationEditor: Sendable {
     ) throws -> Data {
         var root = try rootObject(from: data)
         var hooks = root["hooks"] as? [String: Any] ?? [:]
+        var changed = false
 
         for registration in registrations {
             var entries = hooks[registration.eventName] as? [[String: Any]] ?? []
             let command = "\(shellQuote(hookExecutable)) --agent-hook \(agent.rawValue) \(registration.lifecycle.rawValue)"
-            let exists = entries.contains { entry in
-                isBreathEntry(entry, lifecycle: registration.lifecycle)
+            var found = false
+            for entryIndex in entries.indices {
+                guard var handlers = entries[entryIndex]["hooks"] as? [[String: Any]] else {
+                    continue
+                }
+                for handlerIndex in handlers.indices where isBreathHandler(
+                    handlers[handlerIndex],
+                    lifecycle: registration.lifecycle,
+                    agent: agent
+                ) {
+                    if handlers[handlerIndex]["command"] as? String != command {
+                        handlers[handlerIndex]["command"] = command
+                        changed = true
+                    }
+                    found = true
+                }
+                entries[entryIndex]["hooks"] = handlers
             }
-            if !exists {
+            if !found {
                 entries.append([
                     "matcher": "",
                     "hooks": [[
@@ -43,9 +59,11 @@ public struct JSONHookConfigurationEditor: Sendable {
                         "command": command,
                     ]],
                 ])
+                changed = true
             }
             hooks[registration.eventName] = entries
         }
+        guard changed else { return data }
         root["hooks"] = hooks
         return try JSONSerialization.data(
             withJSONObject: root,
@@ -112,23 +130,19 @@ public struct JSONHookConfigurationEditor: Sendable {
         "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
     }
 
-    private func isBreathEntry(
-        _ entry: [String: Any],
-        lifecycle: AgentLifecycle?
-    ) -> Bool {
-        guard let commands = entry["hooks"] as? [[String: Any]] else { return false }
-        return commands.contains { isBreathHandler($0, lifecycle: lifecycle) }
-    }
-
     private func isBreathHandler(
         _ command: [String: Any],
-        lifecycle: AgentLifecycle?
+        lifecycle: AgentLifecycle?,
+        agent: AgentKind? = nil
     ) -> Bool {
         guard command["type"] as? String == "command",
               command["name"] as? String == "Breath",
               let value = command["command"] as? String,
               value.contains(" --agent-hook ")
         else {
+            return false
+        }
+        if let agent, !value.contains(" --agent-hook \(agent.rawValue) ") {
             return false
         }
         guard let lifecycle else { return true }
@@ -155,18 +169,40 @@ public struct FlatJSONHookConfigurationEditor: Sendable {
         agent: AgentKind
     ) throws -> Data {
         var root = try rootObject(from: data)
-        root["version"] = 1
+        var changed = false
+        if root["version"] as? Int != 1 {
+            root["version"] = 1
+            changed = true
+        }
         var hooks = root["hooks"] as? [String: Any] ?? [:]
 
         for registration in registrations {
             var entries = hooks[registration.eventName] as? [[String: Any]] ?? []
             let command = "\(shellQuote(hookExecutable)) --agent-hook \(agent.rawValue) \(registration.lifecycle.rawValue)"
-            if !entries.contains(where: isBreathEntry) {
+            var found = false
+            for entryIndex in entries.indices where isBreathEntry(entries[entryIndex]) {
+                switch style {
+                case .copilotCLI:
+                    if entries[entryIndex]["bash"] as? String != command {
+                        entries[entryIndex]["bash"] = command
+                        changed = true
+                    }
+                case .cursor:
+                    if entries[entryIndex]["command"] as? String != command {
+                        entries[entryIndex]["command"] = command
+                        changed = true
+                    }
+                }
+                found = true
+            }
+            if !found {
                 entries.append(entry(command: command))
+                changed = true
             }
             hooks[registration.eventName] = entries
         }
 
+        guard changed else { return data }
         root["hooks"] = hooks
         return try JSONSerialization.data(
             withJSONObject: root,
@@ -279,7 +315,9 @@ public struct UserHookIntegrationInstaller: Sendable {
             adapter: adapter,
             hookExecutable: hookExecutable
         )
-        try installed.write(to: configURL, options: .atomic)
+        if installed != original {
+            try installed.write(to: configURL, options: .atomic)
+        }
         try setPrivatePermissions(on: configURL)
     }
 
@@ -374,6 +412,12 @@ public struct UserHookIntegrationInstaller: Sendable {
     }
 
     private func setPrivatePermissions(on url: URL) throws {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        if let permissions = attributes[.posixPermissions] as? NSNumber,
+           permissions.intValue & 0o777 == 0o600
+        {
+            return
+        }
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600],
             ofItemAtPath: url.path

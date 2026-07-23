@@ -243,6 +243,80 @@ struct AgentAdapterRegistryTests {
         #expect(hooks["UserPromptSubmit"] == nil)
     }
 
+    @Test("hook installation refreshes Breath's executable path in place")
+    func hookInstallationRefreshesBreathExecutable() throws {
+        let original = Data(
+            """
+            {"hooks":{"Stop":[{"matcher":"","hooks":[
+              {"type":"command","name":"Breath","command":"'/tmp/old/Breath' --agent-hook codex turnCompleted"},
+              {"type":"command","name":"User Tool","command":"user-tool"}
+            ]}]}}
+            """.utf8
+        )
+        let editor = JSONHookConfigurationEditor()
+
+        let installed = try editor.install(
+            in: original,
+            registrations: [
+                AgentHookRegistration(eventName: "Stop", lifecycle: .turnCompleted),
+            ],
+            hookExecutable: "/Applications/Breath.app/Contents/MacOS/Breath",
+            agent: .codex
+        )
+
+        let root = try #require(
+            JSONSerialization.jsonObject(with: installed) as? [String: Any]
+        )
+        let hooks = try #require(root["hooks"] as? [String: Any])
+        let entries = try #require(hooks["Stop"] as? [[String: Any]])
+        #expect(entries.count == 1)
+        let handlers = try #require(entries[0]["hooks"] as? [[String: Any]])
+        #expect(handlers.count == 2)
+        #expect(
+            handlers[0]["command"] as? String
+                == "'/Applications/Breath.app/Contents/MacOS/Breath' --agent-hook codex turnCompleted"
+        )
+        #expect(handlers[1]["command"] as? String == "user-tool")
+    }
+
+    @Test("reinstalling unchanged user hooks does not rewrite the live config")
+    func unchangedUserHookInstallationPreservesModificationDate() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("breath-idempotent-hook-home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let configURL = home.appendingPathComponent(".codex/hooks.json")
+        let adapter = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first(where: { $0.kind == .codex })
+        )
+        let installer = UserHookIntegrationInstaller()
+        let executable = "/Applications/Breath.app/Contents/MacOS/Breath"
+
+        try installer.install(
+            adapter: adapter,
+            hookExecutable: executable,
+            homeDirectory: home
+        )
+        let installedObject = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: configURL)
+        )
+        let compactFormatting = try JSONSerialization.data(withJSONObject: installedObject)
+        try compactFormatting.write(to: configURL)
+        let preservedDate = Date(timeIntervalSince1970: 1_000_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: preservedDate],
+            ofItemAtPath: configURL.path
+        )
+
+        try installer.install(
+            adapter: adapter,
+            hookExecutable: executable,
+            homeDirectory: home
+        )
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: configURL.path)
+        #expect(attributes[.modificationDate] as? Date == preservedDate)
+    }
+
     @Test("uninstall removes only Breath's nested hook handler")
     func uninstallPreservesSharedMatcherHandlers() throws {
         let source = Data(
