@@ -954,8 +954,15 @@ private struct ManagedWorktreeCreationSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(localizer.string("起始分支"))
-                    .font(.subheadline.weight(.medium))
+                HStack(spacing: 5) {
+                    Text(localizer.string("起始分支"))
+                        .font(.subheadline.weight(.medium))
+                    Image(systemName: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help(startBranchHelp)
+                        .accessibilityLabel(startBranchHelp)
+                }
                 if isLoadingStartBranches {
                     HStack(spacing: 8) {
                         ProgressView()
@@ -981,14 +988,6 @@ private struct ManagedWorktreeCreationSheet: View {
                     )
                     .disabled(isCreating)
                 }
-                Text(
-                    localizer.string(
-                        "Breath 会从所选分支的当前提交创建独立会话分支。原检出的未提交修改不会复制；删除 Worktree 时会保留会话分支。"
-                    )
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
                 if let errorMessage {
                     Text(errorMessage)
                         .font(.caption)
@@ -1064,6 +1063,12 @@ private struct ManagedWorktreeCreationSheet: View {
 
     private var localizer: ApplicationLocalizer {
         ApplicationLocalizer(language: applicationLanguage)
+    }
+
+    private var startBranchHelp: String {
+        localizer.string(
+            "Breath 会从所选分支的当前提交创建独立会话分支。原检出的未提交修改不会复制；删除 Worktree 时会保留会话分支。"
+        )
     }
 }
 
