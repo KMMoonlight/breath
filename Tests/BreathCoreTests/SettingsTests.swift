@@ -92,9 +92,10 @@ struct SettingsTests {
         )
     }
 
-    @Test("terminal themes expose one shared palette")
+    @Test("terminal themes expose the complete Ghostty catalog through shared palettes")
     func terminalThemePalettes() {
-        #expect(TerminalColorTheme.allCases.count == 14)
+        #expect(TerminalColorTheme.allCases.count == 576)
+        #expect(Set(TerminalColorTheme.allCases.map(\.rawValue)).count == 576)
         #expect(
             TerminalColorTheme.dark.palette.background
                 == TerminalRGBColor(red: 0x10, green: 0x12, blue: 0x18)
@@ -122,7 +123,7 @@ struct SettingsTests {
                 == TerminalRGBColor(hex: 0xEFF1F5)
         )
         #expect(TerminalColorTheme.tokyoNightDay.palette.background == TerminalRGBColor(hex: 0xE1E2E7))
-        #expect(TerminalColorTheme.atomOneLight.palette.background == TerminalRGBColor(hex: 0xFAFAFA))
+        #expect(TerminalColorTheme.atomOneLight.palette.background == TerminalRGBColor(hex: 0xF9F9F9))
         for theme in TerminalColorTheme.allCases {
             #expect(theme.palette.ansiColors.count == 16)
         }
@@ -130,19 +131,18 @@ struct SettingsTests {
 
     @Test("terminal themes resolve to the application appearance")
     func terminalThemesFollowApplicationAppearance() {
-        #expect(
-            TerminalColorTheme.compatible(with: .light)
-                == [
-                    .light,
-                    .solarizedLight,
-                    .gruvboxLight,
-                    .catppuccinLatte,
-                    .tokyoNightDay,
-                    .atomOneLight,
-                ]
-        )
-        #expect(!TerminalColorTheme.compatible(with: .dark).contains(.light))
-        #expect(!TerminalColorTheme.compatible(with: .dark).contains(.solarizedLight))
+        let lightThemes = TerminalColorTheme.compatible(with: .light)
+        let darkThemes = TerminalColorTheme.compatible(with: .dark)
+
+        #expect(lightThemes.contains(.light))
+        #expect(lightThemes.contains(.solarizedLight))
+        #expect(lightThemes.contains(.catppuccinLatte))
+        #expect(darkThemes.contains(.dark))
+        #expect(darkThemes.contains(.dracula))
+        #expect(!darkThemes.contains(.light))
+        #expect(!darkThemes.contains(.solarizedLight))
+        #expect(Set(lightThemes).isDisjoint(with: Set(darkThemes)))
+        #expect(lightThemes.count + darkThemes.count == TerminalColorTheme.allCases.count)
         #expect(TerminalColorTheme.dracula.resolved(for: .dark) == .dracula)
         #expect(TerminalColorTheme.dracula.resolved(for: .light) == .light)
         #expect(TerminalColorTheme.solarizedDark.resolved(for: .light) == .solarizedLight)
@@ -151,5 +151,17 @@ struct SettingsTests {
         #expect(TerminalColorTheme.catppuccinLatte.resolved(for: .dark) == .catppuccinMocha)
         #expect(TerminalColorTheme.tokyoNight.resolved(for: .light) == .tokyoNightDay)
         #expect(TerminalColorTheme.atomOneLight.resolved(for: .dark) == .atomOneDark)
+    }
+
+    @Test("legacy terminal theme identifiers migrate to Ghostty catalog entries")
+    func legacyTerminalThemeIdentifiers() throws {
+        let decoded = try JSONDecoder().decode(
+            TerminalColorTheme.self,
+            from: Data(#""catppuccinMocha""#.utf8)
+        )
+        let encoded = try JSONEncoder().encode(decoded)
+
+        #expect(decoded == .catppuccinMocha)
+        #expect(String(decoding: encoded, as: UTF8.self) == #""ghostty:Catppuccin Mocha""#)
     }
 }

@@ -161,6 +161,10 @@ public protocol ManagedWorktreeManaging: Sendable {
     ) async throws -> ManagedWorktree
 
     func isAvailable(_ worktree: ManagedWorktree) async -> Bool
+    func merge(
+        _ worktree: ManagedWorktree,
+        into targetBranch: ManagedWorktreeStartBranch
+    ) async throws
     func validateRemoval(_ worktree: ManagedWorktree) async throws
     func remove(_ worktree: ManagedWorktree) async throws
     func rollbackCreation(_ worktree: ManagedWorktree) async throws

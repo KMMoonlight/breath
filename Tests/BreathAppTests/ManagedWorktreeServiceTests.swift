@@ -325,6 +325,201 @@ struct ManagedWorktreeServiceTests {
         )
     }
 
+    @Test("merges a clean session branch into the checked-out target branch")
+    func mergesIntoCheckedOutTargetBranch() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let targetBranchName = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "branch", "--show-current",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: fixture.workspaceURL.path,
+                displayName: "client"
+            ),
+            workSessionID: WorkSessionID(rawValue: UUID()),
+            branchName: "task/merge-checked-out"
+        )
+        let mergedFile = URL(fileURLWithPath: worktree.workingDirectory)
+            .appendingPathComponent("merged.txt")
+        try Data("merged".utf8).write(to: mergedFile)
+        _ = try fixture.git(["-C", worktree.rootPath, "add", "."])
+        _ = try fixture.git([
+            "-C", worktree.rootPath,
+            "-c", "user.name=Breath Tests",
+            "-c", "user.email=breath@example.invalid",
+            "commit", "-m", "worktree change",
+        ])
+
+        try await service.merge(
+            worktree,
+            into: ManagedWorktreeStartBranch(
+                reference: "refs/heads/\(targetBranchName)",
+                name: targetBranchName,
+                kind: .localBranch,
+                isCurrent: true
+            )
+        )
+
+        #expect(
+            FileManager.default.fileExists(
+                atPath: fixture.workspaceURL
+                    .appendingPathComponent("merged.txt").path
+            )
+        )
+        #expect(
+            try fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "merge-base", "--is-ancestor",
+                "task/merge-checked-out", targetBranchName,
+            ]).isEmpty
+        )
+        #expect(
+            try fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "status", "--porcelain",
+            ]).isEmpty
+        )
+        #expect(FileManager.default.fileExists(atPath: worktree.rootPath))
+    }
+
+    @Test("merges into an unchecked local branch using a temporary worktree")
+    func mergesIntoUncheckedTargetBranch() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        _ = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "branch", "release",
+        ])
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: fixture.workspaceURL.path,
+                displayName: "client"
+            ),
+            workSessionID: WorkSessionID(rawValue: UUID()),
+            branchName: "task/merge-unchecked"
+        )
+        let mergedFile = URL(fileURLWithPath: worktree.workingDirectory)
+            .appendingPathComponent("release.txt")
+        try Data("release".utf8).write(to: mergedFile)
+        _ = try fixture.git(["-C", worktree.rootPath, "add", "."])
+        _ = try fixture.git([
+            "-C", worktree.rootPath,
+            "-c", "user.name=Breath Tests",
+            "-c", "user.email=breath@example.invalid",
+            "commit", "-m", "release change",
+        ])
+
+        try await service.merge(
+            worktree,
+            into: ManagedWorktreeStartBranch(
+                reference: "refs/heads/release",
+                name: "release",
+                kind: .localBranch,
+                isCurrent: false
+            )
+        )
+
+        #expect(
+            try fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "merge-base", "--is-ancestor",
+                "task/merge-unchecked", "release",
+            ]).isEmpty
+        )
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: fixture.managedRootURL
+                    .appendingPathComponent(".merge").path
+            )
+        )
+    }
+
+    @Test("a conflicting merge is aborted and leaves the target clean")
+    func conflictingMergeIsAborted() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let targetBranchName = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "branch", "--show-current",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: fixture.workspaceURL.path,
+                displayName: "client"
+            ),
+            workSessionID: WorkSessionID(rawValue: UUID()),
+            branchName: "task/conflict"
+        )
+        try Data("source".utf8).write(
+            to: URL(fileURLWithPath: worktree.workingDirectory)
+                .appendingPathComponent("tracked.txt")
+        )
+        _ = try fixture.git(["-C", worktree.rootPath, "add", "."])
+        _ = try fixture.git([
+            "-C", worktree.rootPath,
+            "-c", "user.name=Breath Tests",
+            "-c", "user.email=breath@example.invalid",
+            "commit", "-m", "source conflict",
+        ])
+        try Data("target".utf8).write(
+            to: fixture.workspaceURL.appendingPathComponent("tracked.txt")
+        )
+        _ = try fixture.git(["-C", fixture.repositoryURL.path, "add", "."])
+        _ = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "-c", "user.name=Breath Tests",
+            "-c", "user.email=breath@example.invalid",
+            "commit", "-m", "target conflict",
+        ])
+
+        await #expect(throws: ManagedWorktreeServiceError.self) {
+            try await service.merge(
+                worktree,
+                into: ManagedWorktreeStartBranch(
+                    reference: "refs/heads/\(targetBranchName)",
+                    name: targetBranchName,
+                    kind: .localBranch,
+                    isCurrent: true
+                )
+            )
+        }
+
+        #expect(
+            try fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "status", "--porcelain",
+            ]).isEmpty
+        )
+        #expect(
+            try Data(
+                contentsOf: fixture.workspaceURL
+                    .appendingPathComponent("tracked.txt")
+            ) == Data("target".utf8)
+        )
+        #expect(
+            throws: GitWorktreeFixtureError.self
+        ) {
+            try fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "rev-parse", "--verify", "MERGE_HEAD",
+            ])
+        }
+    }
+
     @Test("removing a clean worktree preserves its task branch")
     func cleanRemovalPreservesTaskBranch() async throws {
         let fixture = try GitWorktreeFixture()

@@ -39,6 +39,13 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
     case worktreeContainsChanges
     case worktreeContainsUnprotectedCommits
     case worktreeLocked(String?)
+    case mergeTargetMustBeLocal(String)
+    case mergeTargetMatchesSource(String)
+    case mergeTargetContainsChanges(String)
+    case mergeTargetLocked(branch: String, reason: String?)
+    case mergeFailed(branch: String, output: String)
+    case mergeAbortFailed(branch: String, output: String)
+    case mergeCleanupFailed(path: String, output: String)
     case creationRollbackFailed(
         path: String,
         creationError: String,
@@ -87,6 +94,26 @@ enum ManagedWorktreeServiceError: LocalizedError, Equatable {
                 return "Worktree 已锁定：\(reason)"
             }
             return "Worktree 已锁定，无法删除。"
+        case .mergeTargetMustBeLocal(let branch):
+            return "合并目标必须是本地分支：\(branch)"
+        case .mergeTargetMatchesSource(let branch):
+            return "不能将 Worktree 分支合并到自身：\(branch)"
+        case .mergeTargetContainsChanges(let branch):
+            return "目标分支 \(branch) 的检出目录存在未提交修改，请先处理后再合并。"
+        case .mergeTargetLocked(let branch, let reason):
+            if let reason, !reason.isEmpty {
+                return "目标分支 \(branch) 的 Worktree 已锁定：\(reason)"
+            }
+            return "目标分支 \(branch) 的 Worktree 已锁定，无法合并。"
+        case .mergeFailed(let branch, let output):
+            let detail = output.isEmpty ? "Git 没有返回详细信息。" : output
+            return "合并到 \(branch) 失败，已自动中止合并：\(detail)"
+        case .mergeAbortFailed(let branch, let output):
+            let detail = output.isEmpty ? "Git 没有返回详细信息。" : output
+            return "合并到 \(branch) 失败，且无法自动中止合并：\(detail)"
+        case .mergeCleanupFailed(let path, let output):
+            let detail = output.isEmpty ? "Git 没有返回详细信息。" : output
+            return "分支已经合并，但临时 Worktree 清理失败：\(path)\n\(detail)"
         case .creationRollbackFailed(
             let path,
             let creationError,
@@ -115,6 +142,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
 
     private struct GitWorktreeListEntry: Sendable {
         let path: String
+        let branchReference: String?
         let isLocked: Bool
         let lockReason: String?
     }
@@ -426,6 +454,266 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         ) != nil
     }
 
+    func merge(
+        _ worktree: ManagedWorktree,
+        into targetBranch: ManagedWorktreeStartBranch
+    ) async throws {
+        await operationGate.acquire()
+        do {
+            try await mergeWithoutAcquiringGate(
+                worktree,
+                into: targetBranch
+            )
+            await operationGate.release()
+        } catch {
+            await operationGate.release()
+            throw error
+        }
+    }
+
+    private func mergeWithoutAcquiringGate(
+        _ worktree: ManagedWorktree,
+        into targetBranch: ManagedWorktreeStartBranch
+    ) async throws {
+        guard targetBranch.kind == .localBranch,
+              targetBranch.reference == "refs/heads/\(targetBranch.name)"
+        else {
+            throw ManagedWorktreeServiceError.mergeTargetMustBeLocal(
+                targetBranch.name
+            )
+        }
+        guard targetBranch.name != worktree.branchName else {
+            throw ManagedWorktreeServiceError.mergeTargetMatchesSource(
+                targetBranch.name
+            )
+        }
+        try await validateBranchName(targetBranch.name)
+        let rootURL = URL(
+            fileURLWithPath: worktree.rootPath,
+            isDirectory: true
+        ).standardizedFileURL
+        guard isManagedPath(
+            rootURL,
+            workspaceID: worktree.workspaceID,
+            workSessionID: worktree.workSessionID
+        ) else {
+            throw ManagedWorktreeServiceError.unsafeManagedPath(rootURL.path)
+        }
+        try await validateRepositoryIdentity(worktree, rootURL: rootURL)
+        try validateSessionWorkingDirectory(worktree)
+
+        let sourceStatus = try await checkedOutput([
+            "-C", rootURL.path,
+            "status", "--porcelain=v1", "-z",
+            "--untracked-files=all",
+        ])
+        guard sourceStatus.isEmpty else {
+            throw ManagedWorktreeServiceError.worktreeContainsChanges
+        }
+        let sourceReference = "refs/heads/\(worktree.branchName)"
+        let sourceCommit = try await checkedOutput([
+            "-C", rootURL.path,
+            "rev-parse", "--verify", "HEAD^{commit}",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let branchCommit = try await checkedOutput([
+            "--git-dir=\(worktree.gitCommonDirectory)",
+            "rev-parse", "--verify", "\(sourceReference)^{commit}",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard sourceCommit == branchCommit else {
+            throw ManagedWorktreeServiceError.checkoutCommitMismatch(
+                expected: branchCommit,
+                actual: sourceCommit
+            )
+        }
+        try await validateStartBranchReference(
+            targetBranch.reference,
+            gitCommonDirectory: worktree.gitCommonDirectory
+        )
+
+        let entries = parseWorktreeList(
+            try await checkedOutput([
+                "--git-dir=\(worktree.gitCommonDirectory)",
+                "worktree", "list", "--porcelain",
+            ])
+        )
+        if let targetEntry = entries.first(where: {
+            $0.branchReference == targetBranch.reference
+        }) {
+            if targetEntry.isLocked {
+                throw ManagedWorktreeServiceError.mergeTargetLocked(
+                    branch: targetBranch.name,
+                    reason: targetEntry.lockReason
+                )
+            }
+            try await merge(
+                sourceReference: sourceReference,
+                into: targetBranch,
+                checkoutURL: URL(
+                    fileURLWithPath: targetEntry.path,
+                    isDirectory: true
+                ).standardizedFileURL
+            )
+            return
+        }
+
+        try await mergeUsingTemporaryWorktree(
+            sourceReference: sourceReference,
+            targetBranch: targetBranch,
+            gitCommonDirectory: worktree.gitCommonDirectory
+        )
+    }
+
+    private func mergeUsingTemporaryWorktree(
+        sourceReference: String,
+        targetBranch: ManagedWorktreeStartBranch,
+        gitCommonDirectory: String
+    ) async throws {
+        let temporaryParent = managedRootURL.appendingPathComponent(
+            ".merge",
+            isDirectory: true
+        ).standardizedFileURL
+        let temporaryURL = temporaryParent.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true
+        ).standardizedFileURL
+        guard temporaryURL.deletingLastPathComponent() == temporaryParent,
+              !isSymbolicLink(managedRootURL),
+              !isSymbolicLink(temporaryParent),
+              !FileManager.default.fileExists(atPath: temporaryURL.path)
+        else {
+            throw ManagedWorktreeServiceError.unsafeManagedPath(
+                temporaryURL.path
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: temporaryParent,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let addResult = try await runner.run(arguments: [
+            "--git-dir=\(gitCommonDirectory)",
+            "worktree", "add", "--quiet",
+            temporaryURL.path,
+            targetBranch.name,
+        ])
+        guard addResult.exitCode == 0 else {
+            try? removeEmptyMergeDirectory(temporaryParent)
+            throw gitFailure(addResult)
+        }
+
+        do {
+            try await merge(
+                sourceReference: sourceReference,
+                into: targetBranch,
+                checkoutURL: temporaryURL
+            )
+        } catch {
+            let cleanupResult = try await runner.run(arguments: [
+                "--git-dir=\(gitCommonDirectory)",
+                "worktree", "remove", "--force",
+                temporaryURL.path,
+            ])
+            try? removeEmptyMergeDirectory(temporaryParent)
+            guard cleanupResult.exitCode == 0 else {
+                throw ManagedWorktreeServiceError.mergeAbortFailed(
+                    branch: targetBranch.name,
+                    output: [
+                        error.localizedDescription,
+                        cleanupResult.combinedOutput,
+                    ].filter { !$0.isEmpty }.joined(separator: "\n")
+                )
+            }
+            throw error
+        }
+
+        let cleanupResult = try await runner.run(arguments: [
+            "--git-dir=\(gitCommonDirectory)",
+            "worktree", "remove", temporaryURL.path,
+        ])
+        try? removeEmptyMergeDirectory(temporaryParent)
+        guard cleanupResult.exitCode == 0 else {
+            throw ManagedWorktreeServiceError.mergeCleanupFailed(
+                path: temporaryURL.path,
+                output: cleanupResult.combinedOutput
+            )
+        }
+    }
+
+    private func merge(
+        sourceReference: String,
+        into targetBranch: ManagedWorktreeStartBranch,
+        checkoutURL: URL
+    ) async throws {
+        let status = try await checkedOutput([
+            "-C", checkoutURL.path,
+            "status", "--porcelain=v1", "-z",
+            "--untracked-files=all",
+        ])
+        guard status.isEmpty else {
+            throw ManagedWorktreeServiceError.mergeTargetContainsChanges(
+                targetBranch.name
+            )
+        }
+        let checkedOutReference = try await checkedOutput([
+            "-C", checkoutURL.path,
+            "symbolic-ref", "--quiet", "HEAD",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard checkedOutReference == targetBranch.reference else {
+            throw ManagedWorktreeServiceError.mergeTargetMustBeLocal(
+                targetBranch.name
+            )
+        }
+        let mergeResult = try await runner.run(arguments: [
+            "-C", checkoutURL.path,
+            "merge", "--no-edit", sourceReference,
+        ])
+        guard mergeResult.exitCode == 0 else {
+            let mergeHead = try await runner.run(arguments: [
+                "-C", checkoutURL.path,
+                "rev-parse", "--verify", "--quiet", "MERGE_HEAD",
+            ])
+            if mergeHead.exitCode == 0 {
+                let abortResult = try await runner.run(arguments: [
+                    "-C", checkoutURL.path,
+                    "merge", "--abort",
+                ])
+                guard abortResult.exitCode == 0 else {
+                    throw ManagedWorktreeServiceError.mergeAbortFailed(
+                        branch: targetBranch.name,
+                        output: [
+                            mergeResult.combinedOutput,
+                            abortResult.combinedOutput,
+                        ].filter { !$0.isEmpty }.joined(separator: "\n")
+                    )
+                }
+            }
+            throw ManagedWorktreeServiceError.mergeFailed(
+                branch: targetBranch.name,
+                output: mergeResult.combinedOutput
+            )
+        }
+    }
+
+    private func removeEmptyMergeDirectory(_ directory: URL) throws {
+        guard directory.deletingLastPathComponent().standardizedFileURL
+                == managedRootURL.standardizedFileURL,
+              directory.lastPathComponent == ".merge",
+              !isSymbolicLink(directory)
+        else {
+            throw ManagedWorktreeServiceError.unsafeManagedPath(
+                directory.path
+            )
+        }
+        guard FileManager.default.fileExists(atPath: directory.path),
+              try FileManager.default.contentsOfDirectory(
+                  atPath: directory.path
+              ).isEmpty
+        else {
+            return
+        }
+        try FileManager.default.removeItem(at: directory)
+    }
+
     func remove(_ worktree: ManagedWorktree) async throws {
         await operationGate.acquire()
         do {
@@ -635,6 +923,31 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         }
         let result = try await runner.run(arguments: [
             "-C", repositoryRoot.path,
+            "show-ref", "--verify", "--quiet", reference,
+        ])
+        switch result.exitCode {
+        case 0:
+            return
+        case 1:
+            throw ManagedWorktreeServiceError.invalidStartBranch(reference)
+        default:
+            throw gitFailure(result)
+        }
+    }
+
+    private func validateStartBranchReference(
+        _ reference: String,
+        gitCommonDirectory: String
+    ) async throws {
+        guard reference.hasPrefix("refs/heads/"),
+              await commandSucceeds([
+                  "check-ref-format", reference,
+              ])
+        else {
+            throw ManagedWorktreeServiceError.invalidStartBranch(reference)
+        }
+        let result = try await runner.run(arguments: [
+            "--git-dir=\(gitCommonDirectory)",
             "show-ref", "--verify", "--quiet", reference,
         ])
         switch result.exitCode {
@@ -877,6 +1190,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
     ) -> [GitWorktreeListEntry] {
         var entries: [GitWorktreeListEntry] = []
         var path: String?
+        var branchReference: String?
         var isLocked = false
         var lockReason: String?
 
@@ -885,6 +1199,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             entries.append(
                 GitWorktreeListEntry(
                     path: path,
+                    branchReference: branchReference,
                     isLocked: isLocked,
                     lockReason: lockReason
                 )
@@ -898,8 +1213,11 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             if line.hasPrefix("worktree ") {
                 appendCurrentEntry()
                 path = String(line.dropFirst("worktree ".count))
+                branchReference = nil
                 isLocked = false
                 lockReason = nil
+            } else if line.hasPrefix("branch ") {
+                branchReference = String(line.dropFirst("branch ".count))
             } else if line == "locked" {
                 isLocked = true
                 lockReason = nil
@@ -909,6 +1227,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             } else if line.isEmpty {
                 appendCurrentEntry()
                 path = nil
+                branchReference = nil
                 isLocked = false
                 lockReason = nil
             }

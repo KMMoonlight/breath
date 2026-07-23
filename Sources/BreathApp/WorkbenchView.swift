@@ -28,7 +28,12 @@ struct WorkbenchView: View {
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var pendingWorkspaceRemoval: Workspace?
     @State private var pendingWorktreeWorkspace: Workspace?
+    @State private var pendingWorktreeMergeSession: WorkSession?
+    @State private var pendingWorktreeDeletion: WorkSession?
     @State private var worktreeCreationError: String?
+    @State private var worktreeMergeError: String?
+    @State private var mergingWorktreeSessionID: WorkSessionID?
+    @State private var worktreeMergeSuccessMessage: String?
     @State private var dismissedUnavailableWorkspaces: Set<WorkspaceID> = []
     @State private var expandedWorkspaceIDs: Set<WorkspaceID> = []
     @State private var expandedSessionIDs: Set<WorkSessionID> = []
@@ -39,6 +44,10 @@ struct WorkbenchView: View {
     @StateObject private var gitCoordinator = GitWorkbenchCoordinator()
 
     var body: some View {
+        workbenchSheets
+    }
+
+    private var workbenchLifecycle: some View {
         workbenchRoot
             .ignoresSafeArea(.container, edges: .top)
             .frame(minWidth: 900, minHeight: 600)
@@ -111,6 +120,10 @@ struct WorkbenchView: View {
                 detailMode = .gitWorkbench(workspaceID)
                 gitCoordinator.model(for: workspace).shouldPresentPushReview = true
             }
+    }
+
+    private var workbenchAlerts: some View {
+        workbenchLifecycle
             .alert(
                 localizer.string("移除工作区？"),
                 isPresented: workspaceAlertPresented,
@@ -138,11 +151,51 @@ struct WorkbenchView: View {
                     Text(localizer.format("移除工作区说明 %@", workspace.path))
                 }
             }
+            .alert(
+                localizer.string("删除 Worktree 及目录？"),
+                isPresented: worktreeDeletionAlertPresented,
+                presenting: pendingWorktreeDeletion
+            ) { session in
+                Button(localizer.string("取消"), role: .cancel) {
+                    pendingWorktreeDeletion = nil
+                }
+                Button(
+                    localizer.string("删除"),
+                    role: .destructive
+                ) {
+                    deleteManagedWorktreeSession(session)
+                    pendingWorktreeDeletion = nil
+                }
+            } message: { session in
+                if let worktree = session.managedWorktree {
+                    Text(
+                        localizer.format(
+                            "删除 Worktree 及目录说明 %@ %@",
+                            worktree.rootPath,
+                            worktree.branchName
+                        )
+                    )
+                }
+            }
+            .alert(
+                localizer.string("合并完成"),
+                isPresented: worktreeMergeSuccessAlertPresented
+            ) {
+                Button(localizer.string("好")) {
+                    worktreeMergeSuccessMessage = nil
+                }
+            } message: {
+                Text(worktreeMergeSuccessMessage ?? "")
+            }
             .alert("Breath", isPresented: errorAlertPresented) {
                 Button(localizer.string("好")) { model.lastError = nil }
             } message: {
                 Text(model.lastError ?? localizer.string("未知错误"))
             }
+    }
+
+    private var workbenchSheets: some View {
+        workbenchAlerts
             .sheet(item: $pendingWorktreeWorkspace) { workspace in
                 ManagedWorktreeCreationSheet(
                     workspace: workspace,
@@ -176,6 +229,31 @@ struct WorkbenchView: View {
                         }
                     }
                 )
+            }
+            .sheet(item: $pendingWorktreeMergeSession) { session in
+                if let managedWorktree = session.managedWorktree {
+                    ManagedWorktreeMergeSheet(
+                        session: session,
+                        worktree: managedWorktree,
+                        isMerging: mergingWorktreeSessionID == session.id,
+                        errorMessage: worktreeMergeError,
+                        loadTargetBranches: {
+                            try await model.managedWorktreeMergeTargets(
+                                for: session.id
+                            )
+                        },
+                        onCancel: {
+                            worktreeMergeError = nil
+                            pendingWorktreeMergeSession = nil
+                        },
+                        onMerge: { targetBranch in
+                            mergeManagedWorktreeSession(
+                                session,
+                                into: targetBranch
+                            )
+                        }
+                    )
+                }
             }
     }
 
@@ -721,7 +799,7 @@ struct WorkbenchView: View {
             }
         }
         .contextMenu {
-            if session.managedWorktree != nil {
+            if let managedWorktree = session.managedWorktree {
                 let workingDirectory = model.workingDirectory(for: session)
                 Button(localizer.string("在 Finder 中显示")) {
                     NSWorkspace.shared.activateFileViewerSelecting([
@@ -740,6 +818,25 @@ struct WorkbenchView: View {
                     )
                 }
                 Divider()
+                Button {
+                    worktreeMergeError = nil
+                    pendingWorktreeMergeSession = session
+                } label: {
+                    Label(
+                        localizer.string("合并到目标分支…"),
+                        systemImage: "arrow.triangle.merge"
+                    )
+                }
+                .disabled(managedWorktree.state != .available)
+                Button(role: .destructive) {
+                    pendingWorktreeDeletion = session
+                } label: {
+                    Label(
+                        localizer.string("删除 Worktree 及目录…"),
+                        systemImage: "trash"
+                    )
+                }
+                Divider()
             }
             Button(
                 localizer.string("归档并停止该会话的所有终端进程"),
@@ -752,6 +849,47 @@ struct WorkbenchView: View {
 
     private func archive(_ session: WorkSession) {
         model.archive(
+            session.id,
+            selecting: model.snapshot.archiveFallbackWorkSessionID(
+                for: session.id
+            )
+        )
+    }
+
+    private func mergeManagedWorktreeSession(
+        _ session: WorkSession,
+        into targetBranch: ManagedWorktreeStartBranch
+    ) {
+        guard mergingWorktreeSessionID == nil,
+              let worktree = session.managedWorktree
+        else {
+            return
+        }
+        mergingWorktreeSessionID = session.id
+        worktreeMergeError = nil
+        model.lastError = nil
+        model.mergeManagedWorktreeSession(
+            session.id,
+            into: targetBranch
+        ) { succeeded in
+            mergingWorktreeSessionID = nil
+            if succeeded {
+                pendingWorktreeMergeSession = nil
+                worktreeMergeSuccessMessage = localizer.format(
+                    "已将 %@ 合并到 %@。",
+                    worktree.branchName,
+                    targetBranch.name
+                )
+            } else {
+                worktreeMergeError = model.lastError
+                    ?? localizer.string("合并 Worktree 失败。")
+                model.lastError = nil
+            }
+        }
+    }
+
+    private func deleteManagedWorktreeSession(_ session: WorkSession) {
+        model.deleteManagedWorktreeSession(
             session.id,
             selecting: model.snapshot.archiveFallbackWorkSessionID(
                 for: session.id
@@ -955,6 +1093,185 @@ struct WorkbenchView: View {
             get: { model.lastError != nil },
             set: { if !$0 { model.lastError = nil } }
         )
+    }
+
+    private var worktreeDeletionAlertPresented: Binding<Bool> {
+        Binding(
+            get: { pendingWorktreeDeletion != nil },
+            set: { if !$0 { pendingWorktreeDeletion = nil } }
+        )
+    }
+
+    private var worktreeMergeSuccessAlertPresented: Binding<Bool> {
+        Binding(
+            get: { worktreeMergeSuccessMessage != nil },
+            set: { if !$0 { worktreeMergeSuccessMessage = nil } }
+        )
+    }
+}
+
+private struct ManagedWorktreeMergeSheet: View {
+    let session: WorkSession
+    let worktree: ManagedWorktree
+    let isMerging: Bool
+    let errorMessage: String?
+    let loadTargetBranches: () async throws -> [ManagedWorktreeStartBranch]
+    let onCancel: () -> Void
+    let onMerge: (ManagedWorktreeStartBranch) -> Void
+
+    @Environment(\.applicationLanguage) private var applicationLanguage
+    @State private var targetBranches: [ManagedWorktreeStartBranch] = []
+    @State private var selectedTargetBranch: ManagedWorktreeStartBranch?
+    @State private var isLoadingTargetBranches = true
+    @State private var targetBranchError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(localizer.string("合并 Worktree 分支"))
+                    .font(.headline)
+                Text(session.title)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(alignment: .bottom, spacing: 10) {
+                branchBadge(worktree.branchName)
+                Image(systemName: "arrow.right")
+                    .foregroundStyle(.secondary)
+                    .frame(height: 28)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(localizer.string("目标分支"))
+                        .font(.subheadline.weight(.medium))
+                    if isLoadingTargetBranches {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(localizer.string("正在加载分支…"))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(
+                            maxWidth: .infinity,
+                            minHeight: 28,
+                            alignment: .leading
+                        )
+                    } else if let targetBranchError {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(targetBranchError)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .textSelection(.enabled)
+                            Button(localizer.string("重新加载")) {
+                                Task { await reloadTargetBranches() }
+                            }
+                        }
+                    } else {
+                        ManagedWorktreeStartBranchPicker(
+                            startBranches: targetBranches,
+                            selectedStartBranch: $selectedTargetBranch
+                        )
+                        .disabled(isMerging)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Text(
+                localizer.string(
+                    "将 Worktree 分支合并到所选本地分支。只会合并已提交内容；不会删除源 Worktree。若发生冲突，Breath 会自动中止合并。"
+                )
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button(localizer.string("取消"), action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isMerging)
+                Button {
+                    if let selectedTargetBranch {
+                        onMerge(selectedTargetBranch)
+                    }
+                } label: {
+                    if isMerging {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text(localizer.string("合并"))
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canMerge || isMerging)
+            }
+        }
+        .padding(20)
+        .frame(width: 500)
+        .interactiveDismissDisabled(isMerging)
+        .task(id: session.id) {
+            await reloadTargetBranches()
+        }
+    }
+
+    private func branchBadge(_ branchName: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.triangle.branch")
+                .foregroundStyle(.secondary)
+            Text(branchName)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 28)
+        .background(
+            Color.primary.opacity(0.07),
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
+    }
+
+    private var canMerge: Bool {
+        selectedTargetBranch != nil && targetBranchError == nil
+    }
+
+    @MainActor
+    private func reloadTargetBranches() async {
+        isLoadingTargetBranches = true
+        targetBranchError = nil
+        do {
+            let loadedBranches = try await loadTargetBranches()
+            targetBranches = loadedBranches
+            selectedTargetBranch = selectedTargetBranch.flatMap {
+                selectedBranch in
+                loadedBranches.first {
+                    $0.reference == selectedBranch.reference
+                }
+            } ?? loadedBranches.first(where: \.isCurrent)
+                ?? loadedBranches.first
+            if loadedBranches.isEmpty {
+                targetBranchError = localizer.string(
+                    "没有可用的本地目标分支"
+                )
+            }
+        } catch {
+            targetBranches = []
+            selectedTargetBranch = nil
+            targetBranchError = localizer.format(
+                "加载分支失败：%@",
+                error.localizedDescription
+            )
+        }
+        isLoadingTargetBranches = false
+    }
+
+    private var localizer: ApplicationLocalizer {
+        ApplicationLocalizer(language: applicationLanguage)
     }
 }
 

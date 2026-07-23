@@ -1155,6 +1155,30 @@ struct WindowLayoutSourceTests {
         #expect(!workbenchSource.contains("settings.application.sidebarDensity"))
     }
 
+    @Test("terminal theme settings include a live syntax preview")
+    func terminalThemeSettingsIncludePreview() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let settingsSource = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/BreathSettingsView.swift"
+            ),
+            encoding: .utf8
+        )
+
+        #expect(settingsSource.contains("TerminalThemeCodePreview("))
+        #expect(settingsSource.contains("theme: terminalColorTheme.wrappedValue"))
+        #expect(settingsSource.contains("palette.ansiColors[5]"))
+        #expect(settingsSource.contains("Ready to build"))
+        #expect(settingsSource.contains("git status --short"))
+        #expect(settingsSource.contains("swift build --product Breath"))
+        #expect(settingsSource.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
+        #expect(!settingsSource.contains("Text(\"preview.swift\")"))
+        #expect(!settingsSource.contains("themePreviewWidth"))
+    }
+
     @Test("settings open as a main-window detail page")
     func settingsUseMainWindowDetailMode() throws {
         let root = URL(
@@ -1860,5 +1884,32 @@ struct WindowLayoutSourceTests {
         #expect(!workbenchSource.contains("private struct WorkSessionBottomBar"))
         #expect(launcherSource.contains("urlForApplication(withBundleIdentifier:"))
         #expect(launcherSource.contains("withApplicationAt: editor.applicationURL"))
+    }
+
+    @Test("worktree session menu offers merge and safe direct deletion")
+    func worktreeSessionMenuIncludesLifecycleActions() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/WorkbenchView.swift"
+            ),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("localizer.string(\"合并到目标分支…\")"))
+        #expect(source.contains("localizer.string(\"删除 Worktree 及目录…\")"))
+        #expect(source.contains("ManagedWorktreeMergeSheet("))
+        #expect(source.contains("model.mergeManagedWorktreeSession("))
+        #expect(source.contains("model.deleteManagedWorktreeSession("))
+        #expect(source.contains("HStack(alignment: .bottom, spacing: 10)"))
+        #expect(source.contains(
+            "Image(systemName: \"arrow.right\")\n"
+                + "                    .foregroundStyle(.secondary)\n"
+                + "                    .frame(height: 28)"
+        ))
+        #expect(source.contains("role: .destructive"))
     }
 }

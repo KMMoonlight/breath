@@ -54,33 +54,100 @@ git -C "${SOURCE_DIR}" checkout --detach "${REVISION}"
     -Di18n=false \
     -Demit-docs=false \
     -Demit-terminfo=false \
-    -Demit-themes=false \
+    -Demit-themes=true \
     -Doptimize=ReleaseFast
 )
+
+/usr/bin/env swift \
+  "${ROOT}/scripts/generate-ghostty-theme-catalog.swift" \
+  "${SOURCE_DIR}/zig-out/share/ghostty/themes" \
+  "${ROOT}/Sources/BreathCore/GhosttyThemeCatalog.swift"
 
 mkdir -p "${VENDOR_DIR}"
 rm -rf "${VENDOR_DIR}/GhosttyKit.xcframework"
 ditto "${SOURCE_DIR}/macos/GhosttyKit.xcframework" "${VENDOR_DIR}/GhosttyKit.xcframework"
 
-GHOSTTY_ARCHIVE="${VENDOR_DIR}/GhosttyKit.xcframework/macos-arm64/libghostty-internal-fat.a"
-EXT_OBJECT_COUNT=$(/usr/bin/ar -t "${GHOSTTY_ARCHIVE}" | /usr/bin/awk '$0 == "ext.o" { count += 1 } END { print count + 0 }')
-if (( EXT_OBJECT_COUNT == 2 )); then
-  # dsymutil resolves archive members by basename, so Ghostty's two ext.o
-  # members must have unique names even though the linker handles them safely.
-  NORMALIZE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/breath-ghostty-archive.XXXXXX")
-  (
-    cd "${NORMALIZE_DIR}"
-    /usr/bin/ar -x "${GHOSTTY_ARCHIVE}" ext.o
-    /bin/chmod u+rw ext.o
-    /bin/mv ext.o macos_text_ext.o
-    /usr/bin/ar -d "${GHOSTTY_ARCHIVE}" ext.o
-    /usr/bin/ar -q "${GHOSTTY_ARCHIVE}" macos_text_ext.o
-    /usr/bin/ranlib "${GHOSTTY_ARCHIVE}"
-  )
-  rm -rf "${NORMALIZE_DIR}"
-elif (( EXT_OBJECT_COUNT != 1 )); then
-  print -u2 "Unexpected ext.o member count in Ghostty archive: ${EXT_OBJECT_COUNT}"
+XCFRAMEWORK="${VENDOR_DIR}/GhosttyKit.xcframework"
+XCFRAMEWORK_PLIST="${XCFRAMEWORK}/Info.plist"
+LIBRARY_INDEX=0
+while library_identifier=$(
+  /usr/libexec/PlistBuddy \
+    -c "Print :AvailableLibraries:${LIBRARY_INDEX}:LibraryIdentifier" \
+    "${XCFRAMEWORK_PLIST}" 2>/dev/null
+); do
+  if [[ "${library_identifier}" == macos-* ]]; then
+    library_path=$(
+      /usr/libexec/PlistBuddy \
+        -c "Print :AvailableLibraries:${LIBRARY_INDEX}:LibraryPath" \
+        "${XCFRAMEWORK_PLIST}"
+    )
+    if [[ "${library_path:t}" != lib* ]]; then
+      swiftpm_library_path="lib${library_path:t}"
+      /bin/mv \
+        "${XCFRAMEWORK}/${library_identifier}/${library_path}" \
+        "${XCFRAMEWORK}/${library_identifier}/${swiftpm_library_path}"
+      /usr/libexec/PlistBuddy \
+        -c "Set :AvailableLibraries:${LIBRARY_INDEX}:BinaryPath ${swiftpm_library_path}" \
+        -c "Set :AvailableLibraries:${LIBRARY_INDEX}:LibraryPath ${swiftpm_library_path}" \
+        "${XCFRAMEWORK_PLIST}"
+    fi
+  fi
+  (( LIBRARY_INDEX += 1 ))
+done
+
+GHOSTTY_ARCHIVES=("${VENDOR_DIR}"/GhosttyKit.xcframework/macos-*/*.a(N))
+if (( ${#GHOSTTY_ARCHIVES} != 1 )); then
+  print -u2 "Expected one macOS Ghostty archive; found ${#GHOSTTY_ARCHIVES}"
   exit 1
+fi
+
+normalize_archive_members() {
+  local archive="$1"
+  local ext_object_count
+  ext_object_count=$(
+    /usr/bin/ar -t "${archive}" \
+      | /usr/bin/awk '$0 == "ext.o" { count += 1 } END { print count + 0 }'
+  )
+  if (( ext_object_count == 2 )); then
+    # dsymutil resolves archive members by basename, so Ghostty's two ext.o
+    # members must have unique names even though the linker handles them safely.
+    local normalize_dir
+    normalize_dir=$(mktemp -d "${TMPDIR:-/tmp}/breath-ghostty-archive.XXXXXX")
+    (
+      cd "${normalize_dir}"
+      /usr/bin/ar -x "${archive}" ext.o
+      /bin/chmod u+rw ext.o
+      /bin/mv ext.o macos_text_ext.o
+      /usr/bin/ar -d "${archive}" ext.o
+      /usr/bin/ar -q "${archive}" macos_text_ext.o
+      /usr/bin/ranlib "${archive}"
+    )
+    rm -rf "${normalize_dir}"
+  elif (( ext_object_count != 1 )); then
+    print -u2 "Unexpected ext.o member count in Ghostty archive: ${ext_object_count}"
+    exit 1
+  fi
+}
+
+GHOSTTY_ARCHIVE="${GHOSTTY_ARCHIVES[1]}"
+ARCHITECTURES=("${(@s: :)$(/usr/bin/lipo -archs "${GHOSTTY_ARCHIVE}")}")
+if (( ${#ARCHITECTURES} == 1 )); then
+  normalize_archive_members "${GHOSTTY_ARCHIVE}"
+else
+  FAT_NORMALIZE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/breath-ghostty-fat-archive.XXXXXX")
+  THIN_ARCHIVES=()
+  for architecture in "${ARCHITECTURES[@]}"; do
+    thin_archive="${FAT_NORMALIZE_DIR}/${architecture}.a"
+    /usr/bin/lipo "${GHOSTTY_ARCHIVE}" \
+      -thin "${architecture}" \
+      -output "${thin_archive}"
+    normalize_archive_members "${thin_archive}"
+    THIN_ARCHIVES+=("${thin_archive}")
+  done
+  /usr/bin/lipo -create "${THIN_ARCHIVES[@]}" \
+    -output "${FAT_NORMALIZE_DIR}/ghostty-internal.a"
+  /bin/mv -f "${FAT_NORMALIZE_DIR}/ghostty-internal.a" "${GHOSTTY_ARCHIVE}"
+  rm -rf "${FAT_NORMALIZE_DIR}"
 fi
 
 print "Built GhosttyKit.xcframework from ${REVISION}"

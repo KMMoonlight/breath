@@ -278,6 +278,40 @@ final class BreathApplicationModel: ObservableObject {
         try await workbench.managedWorktreeStartBranches(in: workspaceID)
     }
 
+    func managedWorktreeMergeTargets(
+        for workSessionID: WorkSessionID
+    ) async throws -> [ManagedWorktreeStartBranch] {
+        try await workbench.managedWorktreeMergeTargets(
+            for: workSessionID
+        )
+    }
+
+    func mergeManagedWorktreeSession(
+        _ workSessionID: WorkSessionID,
+        into targetBranch: ManagedWorktreeStartBranch,
+        completion: @escaping @MainActor @Sendable (Bool) -> Void
+    ) {
+        perform(completion: completion) {
+            try await self.workbench.mergeManagedWorktreeSession(
+                workSessionID,
+                into: targetBranch
+            )
+        }
+    }
+
+    func deleteManagedWorktreeSession(
+        _ workSessionID: WorkSessionID,
+        selecting fallbackID: WorkSessionID?,
+        completion: @escaping @MainActor @Sendable (Bool) -> Void = { _ in }
+    ) {
+        perform(completion: completion) {
+            try await self.workbench.deleteManagedWorktreeSession(
+                workSessionID,
+                selecting: fallbackID
+            )
+        }
+    }
+
     func selectWorkSession(_ id: WorkSessionID?) {
         guard let id else { return }
         perform { try await self.workbench.selectWorkSession(id) }

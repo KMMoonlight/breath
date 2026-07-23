@@ -271,14 +271,24 @@ struct BreathSettingsView: View {
                 .frame(width: SettingsLayout.controlColumnWidth)
                 .accessibilityLabel(localizer.string("字号"))
             }
-            settingsControlRow("颜色主题") {
-                settingsMenuPicker(
-                    selection: terminalColorTheme,
-                    options: TerminalColorTheme.compatible(with: resolvedAppearance).map {
-                        (localizer.string($0.displayName), $0)
-                    },
-                    accessibilityLabel: localizer.string("颜色主题")
+            VStack(spacing: 8) {
+                settingsControlRow("颜色主题") {
+                    TerminalThemePicker(
+                        selection: terminalColorTheme,
+                        options: TerminalColorTheme.compatible(with: resolvedAppearance).map {
+                            (localizer.string($0.displayName), $0)
+                        },
+                        accessibilityLabel: localizer.string("颜色主题"),
+                        searchPlaceholder: localizer.string("搜索主题"),
+                        noResultsTitle: localizer.string("没有匹配的主题")
+                    )
+                }
+                TerminalThemeCodePreview(
+                    theme: terminalColorTheme.wrappedValue,
+                    accessibilityLabel: localizer.string("主题预览")
                 )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 8)
             }
             settingsControlRow("光标") {
                 settingsMenuPicker(
@@ -1000,23 +1010,234 @@ struct BreathSettingsView: View {
     }
 }
 
-private extension TerminalColorTheme {
-    var displayName: String {
-        switch self {
-        case .dark: "Breath 深色"
-        case .light: "Breath 浅色"
-        case .solarizedDark: "Solarized Dark"
-        case .solarizedLight: "Solarized Light"
-        case .dracula: "Dracula"
-        case .nord: "Nord"
-        case .gruvboxDark: "Gruvbox Dark"
-        case .gruvboxLight: "Gruvbox Light"
-        case .catppuccinMocha: "Catppuccin Mocha"
-        case .catppuccinLatte: "Catppuccin Latte"
-        case .tokyoNight: "Tokyo Night"
-        case .tokyoNightDay: "Tokyo Night Day"
-        case .atomOneDark: "Atom One Dark"
-        case .atomOneLight: "Atom One Light"
+private struct TerminalThemePicker: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Binding var selection: TerminalColorTheme
+    let options: [(title: String, value: TerminalColorTheme)]
+    let accessibilityLabel: String
+    let searchPlaceholder: String
+    let noResultsTitle: String
+
+    @State private var isPresented = false
+    @State private var query = ""
+
+    private var selectedTitle: String {
+        options.first(where: { $0.value == selection })?.title
+            ?? selection.displayName
+    }
+
+    private var filteredOptions: [(title: String, value: TerminalColorTheme)] {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else { return options }
+        return options.filter {
+            $0.title.localizedCaseInsensitiveContains(trimmedQuery)
         }
+    }
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                themePreview(selection)
+                Text(selectedTitle)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(
+                width: SettingsLayout.controlColumnWidth,
+                height: SettingsLayout.controlHeight
+            )
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.08))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+        .popover(isPresented: $isPresented, arrowEdge: .trailing) {
+            VStack(spacing: 10) {
+                TextField(searchPlaceholder, text: $query)
+                    .textFieldStyle(.roundedBorder)
+
+                if filteredOptions.isEmpty {
+                    ContentUnavailableView.search(text: query)
+                        .accessibilityLabel(noResultsTitle)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 2) {
+                            ForEach(filteredOptions, id: \.value) { option in
+                                Button {
+                                    selection = option.value
+                                    isPresented = false
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        themePreview(option.value)
+                                        Text(option.title)
+                                            .lineLimit(1)
+                                        Spacer(minLength: 8)
+                                        if option.value == selection {
+                                            Image(systemName: "checkmark")
+                                                .foregroundStyle(.tint)
+                                        }
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .frame(maxWidth: .infinity, minHeight: 30)
+                                    .contentShape(Rectangle())
+                                    .background(
+                                        option.value == selection
+                                            ? Color.accentColor.opacity(0.12)
+                                            : Color.clear,
+                                        in: RoundedRectangle(
+                                            cornerRadius: 6,
+                                            style: .continuous
+                                        )
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(12)
+            .frame(width: 320, height: 420)
+        }
+        .onChange(of: isPresented) { _, presented in
+            if !presented {
+                query = ""
+            }
+        }
+    }
+
+    private func themePreview(_ theme: TerminalColorTheme) -> some View {
+        let palette = theme.palette
+        return HStack(spacing: 0) {
+            Rectangle().fill(palette.background.swiftUIColor)
+            Rectangle().fill(palette.ansiColors[1].swiftUIColor)
+            Rectangle().fill(palette.ansiColors[2].swiftUIColor)
+            Rectangle().fill(palette.foreground.swiftUIColor)
+        }
+        .frame(width: 34, height: 14)
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .stroke(Color.primary.opacity(0.16), lineWidth: 0.5)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct TerminalThemeCodePreview: View {
+    let theme: TerminalColorTheme
+    let accessibilityLabel: String
+
+    private var palette: TerminalColorPalette {
+        theme.palette
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                codeLine(1, content: lineOne)
+                codeLine(2, content: lineTwo)
+                codeLine(3, content: lineThree)
+                codeLine(4, content: lineFour)
+            }
+
+            Rectangle()
+                .fill(palette.foreground.swiftUIColor.opacity(0.14))
+                .frame(height: 0.5)
+
+            VStack(alignment: .leading, spacing: 4) {
+                shellLine(
+                    prompt: "❯ ",
+                    command: "git status --short"
+                )
+                token(" M ", color: palette.ansiColors[3])
+                    + token("Sources/BreathApp/BreathSettingsView.swift", color: palette.foreground)
+                shellLine(
+                    prompt: "❯ ",
+                    command: "swift build --product Breath"
+                )
+                token("Build complete! ", color: palette.ansiColors[2])
+                    + token("(1.24s)", color: palette.foreground, opacity: 0.55)
+            }
+        }
+        .font(.system(size: 11, weight: .medium, design: .monospaced))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.background.swiftUIColor)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(palette.foreground.swiftUIColor.opacity(0.18), lineWidth: 0.5)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(theme.displayName)
+    }
+
+    private func codeLine(_ number: Int, content: Text) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("\(number)")
+                .foregroundStyle(palette.foreground.swiftUIColor.opacity(0.32))
+                .frame(width: 14, alignment: .trailing)
+            content
+        }
+    }
+
+    private func shellLine(prompt: String, command: String) -> Text {
+        token(prompt, color: palette.ansiColors[6])
+            + token(command, color: palette.foreground)
+    }
+
+    private var lineOne: Text {
+        token("let ", color: palette.ansiColors[5])
+            + token("workspace ", color: palette.foreground)
+            + token("= ", color: palette.ansiColors[8])
+            + token(#""Breath""#, color: palette.ansiColors[2])
+    }
+
+    private var lineTwo: Text {
+        token("if ", color: palette.ansiColors[5])
+            + token("workspace", color: palette.foreground)
+            + token(".isReady ", color: palette.ansiColors[6])
+            + token("{", color: palette.foreground)
+    }
+
+    private var lineThree: Text {
+        token("    print", color: palette.ansiColors[4])
+            + token("(", color: palette.foreground)
+            + token(#""Ready to build""#, color: palette.ansiColors[2])
+            + token(")", color: palette.foreground)
+    }
+
+    private var lineFour: Text {
+        token("}", color: palette.foreground)
+    }
+
+    private func token(
+        _ value: String,
+        color: TerminalRGBColor,
+        opacity: Double = 1
+    ) -> Text {
+        Text(value).foregroundColor(color.swiftUIColor.opacity(opacity))
+    }
+}
+
+private extension TerminalRGBColor {
+    var swiftUIColor: Color {
+        Color(
+            red: Double(red) / 255,
+            green: Double(green) / 255,
+            blue: Double(blue) / 255
+        )
     }
 }

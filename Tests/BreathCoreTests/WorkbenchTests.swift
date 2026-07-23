@@ -406,6 +406,75 @@ struct WorkbenchTests {
         ])
     }
 
+    @Test("a worktree session lists local targets and merges through its manager")
+    func managedWorktreeSessionMergesIntoTargetBranch() async throws {
+        let worktreeManager = RecordingManagedWorktreeManager()
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(),
+            terminalRuntime: RecordingTerminalRuntime(),
+            managedWorktreeManager: worktreeManager,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+        let sessionID = try await workbench.createManagedWorktreeSession(
+            in: workspaceID,
+            branchName: "task/123"
+        )
+
+        let targets = try await workbench.managedWorktreeMergeTargets(
+            for: sessionID
+        )
+        let target = try #require(targets.first)
+        try await workbench.mergeManagedWorktreeSession(
+            sessionID,
+            into: target
+        )
+
+        #expect(target.name == "main")
+        #expect(await worktreeManager.mergedTargetBranchNames == ["main"])
+    }
+
+    @Test("deleting an active worktree session stops it and selects its fallback")
+    func deletingActiveWorktreeSessionRemovesCheckout() async throws {
+        let worktreeManager = RecordingManagedWorktreeManager()
+        let runtime = RecordingTerminalRuntime()
+        let workbench = Workbench(
+            repository: InMemoryWorkbenchRepository(),
+            terminalRuntime: runtime,
+            managedWorktreeManager: worktreeManager,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+        let fallbackID = try await workbench.createWorkSession(
+            in: workspaceID
+        )
+        let sessionID = try await workbench.createManagedWorktreeSession(
+            in: workspaceID,
+            branchName: "task/delete"
+        )
+        let deletedPaneID = try #require(
+            await workbench.snapshot().workSessions.first(where: {
+                $0.id == sessionID
+            })?.layout.paneIDs.first
+        )
+
+        try await workbench.deleteManagedWorktreeSession(
+            sessionID,
+            selecting: fallbackID
+        )
+
+        let snapshot = await workbench.snapshot()
+        #expect(snapshot.workSessions.map(\.id) == [fallbackID])
+        #expect(snapshot.selectedWorkSessionID == fallbackID)
+        #expect(await runtime.stoppedPaneIDs.contains(deletedPaneID))
+        #expect(await worktreeManager.validatedBranchNames == ["task/delete"])
+        #expect(await worktreeManager.removedBranchNames == ["task/delete"])
+    }
+
     @Test("permanently deleting an archived worktree session removes its checkout")
     func deletingArchivedWorktreeSessionRemovesCheckout() async throws {
         let worktreeManager = RecordingManagedWorktreeManager()
@@ -2012,6 +2081,7 @@ private actor RecordingManagedWorktreeManager: ManagedWorktreeManaging {
     private(set) var createdStartBranchReferences: [String] = []
     private(set) var validatedBranchNames: [String] = []
     private(set) var removedBranchNames: [String] = []
+    private(set) var mergedTargetBranchNames: [String] = []
 
     init(
         isAvailable: Bool = true,
@@ -2061,6 +2131,13 @@ private actor RecordingManagedWorktreeManager: ManagedWorktreeManaging {
 
     func isAvailable(_ worktree: ManagedWorktree) async -> Bool {
         available
+    }
+
+    func merge(
+        _ worktree: ManagedWorktree,
+        into targetBranch: ManagedWorktreeStartBranch
+    ) async throws {
+        mergedTargetBranchNames.append(targetBranch.name)
     }
 
     func validateRemoval(_ worktree: ManagedWorktree) async throws {

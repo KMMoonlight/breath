@@ -12,6 +12,9 @@
 "字体" = "Font";
 "字号" = "Font Size";
 "颜色主题" = "Color Theme";
+"搜索主题" = "Search themes";
+"没有匹配的主题" = "No matching themes";
+"主题预览" = "Theme preview";
 "光标" = "Cursor";
 "方块" = "Block";
 "竖线" = "Bar";
@@ -647,3 +650,15 @@
 "创建 Worktree 失败。" = "Could not create the Worktree.";
 "复制路径" = "Copy Path";
 "将删除托管 Worktree 目录，但保留绑定分支 %@。存在未提交修改或未受分支保护的提交时会拒绝删除。" = "The managed Worktree directory will be removed, while bound branch %@ is preserved. Removal is refused when uncommitted changes or commits unprotected by a branch are present.";
+"合并到目标分支…" = "Merge into Target Branch…";
+"删除 Worktree 及目录…" = "Delete Worktree and Directory…";
+"删除 Worktree 及目录？" = "Delete Worktree and Directory?";
+"删除 Worktree 及目录说明 %@ %@" = "Breath will stop every terminal in this session and delete %@. The session record will also be removed, but branch %@ will be preserved. Deletion is refused if the Worktree contains uncommitted changes.";
+"合并 Worktree 分支" = "Merge Worktree Branch";
+"目标分支" = "Target Branch";
+"将 Worktree 分支合并到所选本地分支。只会合并已提交内容；不会删除源 Worktree。若发生冲突，Breath 会自动中止合并。" = "Merge the Worktree branch into the selected local branch. Only committed changes are merged, and the source Worktree is kept. Breath automatically aborts the merge if conflicts occur.";
+"没有可用的本地目标分支" = "No local target branches are available";
+"合并" = "Merge";
+"合并完成" = "Merge Complete";
+"已将 %@ 合并到 %@。" = "Merged %@ into %@.";
+"合并 Worktree 失败。" = "Could not merge the Worktree.";
