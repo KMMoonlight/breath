@@ -1264,8 +1264,8 @@ struct WindowLayoutSourceTests {
         #expect(source.contains("sidebarWorkspaceDisclosureSpacing: CGFloat = 6"))
     }
 
-    @Test("terminal bottom bar keeps the workspace editor without Git status")
-    func terminalBottomBarOmitsGitStatus() throws {
+    @Test("the session creator scrolls with tabs while the editor action stays trailing")
+    func tabBarKeepsCreateAndEditorActionsInTheirOwnRegions() throws {
         let root = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
             isDirectory: true
@@ -1274,43 +1274,71 @@ struct WindowLayoutSourceTests {
             contentsOf: root.appendingPathComponent("Sources/BreathApp/WorkbenchView.swift"),
             encoding: .utf8
         )
-        let workspaceLayoutStart = try #require(
+        let tabBarStart = try #require(
+            source.range(of: "private struct WorkSessionTabBar: View")
+        )
+        let terminalLayoutStart = try #require(
+            source.range(
+                of: "private struct WorkSessionTerminalLayoutView",
+                range: tabBarStart.upperBound..<source.endIndex
+            )
+        )
+        let tabBar = source[
+            tabBarStart.lowerBound..<terminalLayoutStart.lowerBound
+        ]
+        let scrollStart = try #require(
+            tabBar.range(of: "ScrollView(.horizontal, showsIndicators: false)")
+        )
+        let trailingDivider = try #require(
+            tabBar.range(
+                of: "\n            Divider()",
+                range: scrollStart.upperBound..<tabBar.endIndex
+            )
+        )
+        let scrollingRegion = tabBar[
+            scrollStart.lowerBound..<trailingDivider.lowerBound
+        ]
+        let trailingRegion = tabBar[
+            trailingDivider.upperBound..<tabBar.endIndex
+        ]
+
+        #expect(scrollingRegion.contains("Button(action: onCreate)"))
+        #expect(!scrollingRegion.contains("WorkspaceEditorLauncher("))
+        #expect(trailingRegion.contains("WorkspaceEditorLauncher("))
+        #expect(trailingRegion.contains("workspacePath: workspacePath"))
+    }
+
+    @Test("terminal content has no bottom bar")
+    func terminalContentOmitsBottomBar() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/BreathApp/WorkbenchView.swift"),
+            encoding: .utf8
+        )
+        let terminalLayoutStart = try #require(
             source.range(of: "private struct WorkSessionTerminalLayoutView")
         )
         let paneLayoutStart = try #require(
             source.range(
                 of: "private struct PaneLayoutView",
-                range: workspaceLayoutStart.upperBound..<source.endIndex
+                range: terminalLayoutStart.upperBound..<source.endIndex
             )
         )
-        let bottomBarStart = try #require(
-            source.range(
-                of: "private struct WorkSessionBottomBar",
-                range: paneLayoutStart.upperBound..<source.endIndex
-            )
-        )
-        let agentLabelStart = try #require(
-            source.range(
-                of: "private struct AgentTypeLabel",
-                range: bottomBarStart.upperBound..<source.endIndex
-            )
-        )
-        let workspaceLayout = source[
-            workspaceLayoutStart.lowerBound..<paneLayoutStart.lowerBound
-        ]
-        let bottomBar = source[
-            bottomBarStart.lowerBound..<agentLabelStart.lowerBound
+        let terminalLayout = source[
+            terminalLayoutStart.lowerBound..<paneLayoutStart.lowerBound
         ]
 
-        #expect(workspaceLayout.contains("WorkSessionBottomBar(workspacePath: workspacePath)"))
-        #expect(bottomBar.contains("WorkspaceEditorLauncher("))
-        #expect(!bottomBar.contains("Git"))
+        #expect(!terminalLayout.contains("WorkSessionBottomBar"))
+        #expect(!source.contains("private struct WorkSessionBottomBar"))
         #expect(!source.contains("GitWorkingTreeStatusReader"))
         #expect(!source.contains("onOpenGitDiff"))
     }
 
-    @Test("editor and Git console bars share one height")
-    func bottomBarsShareOneHeight() throws {
+    @Test("the Git console keeps its compact bottom bar height")
+    func gitConsoleKeepsCompactBottomBarHeight() throws {
         let root = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
             isDirectory: true
@@ -1810,7 +1838,7 @@ struct WindowLayoutSourceTests {
         #expect(!rootPickerSource.contains(".frame(maxWidth: 190)"))
     }
 
-    @Test("workspace editor launcher is attached to the workspace status bar")
+    @Test("workspace editor launcher is attached to the Work Session Tab Bar")
     func editorLauncherIsWorkspaceWide() throws {
         let root = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
@@ -1829,6 +1857,7 @@ struct WindowLayoutSourceTests {
 
         #expect(workbenchSource.contains("WorkspaceEditorLauncher("))
         #expect(workbenchSource.contains("workspacePath: workspacePath"))
+        #expect(!workbenchSource.contains("private struct WorkSessionBottomBar"))
         #expect(launcherSource.contains("urlForApplication(withBundleIdentifier:"))
         #expect(launcherSource.contains("withApplicationAt: editor.applicationURL"))
     }

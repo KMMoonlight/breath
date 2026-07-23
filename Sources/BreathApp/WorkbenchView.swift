@@ -867,6 +867,7 @@ struct WorkbenchView: View {
                 WorkSessionTabBar(
                     sessions: sessions,
                     selectedSessionID: selectedID,
+                    workspacePath: model.workingDirectory(for: session),
                     model: model,
                     onSelect: selectWorkSession,
                     onCreate: { createWorkSession(in: session.workspaceID) },
@@ -874,7 +875,6 @@ struct WorkbenchView: View {
                 )
                 WorkSessionTerminalLayoutView(
                     session: session,
-                    workspacePath: model.workingDirectory(for: session),
                     model: model
                 )
                 .id(session.id)
@@ -1384,6 +1384,7 @@ struct WorkSessionTabPresentation: Equatable {
 private struct WorkSessionTabBar: View {
     let sessions: [WorkSession]
     let selectedSessionID: WorkSessionID
+    let workspacePath: String
     @ObservedObject var model: BreathApplicationModel
     let onSelect: (WorkSessionID) -> Void
     let onCreate: () -> Void
@@ -1404,6 +1405,20 @@ private struct WorkSessionTabBar: View {
                             sessionTab(session, at: index)
                                 .id(session.id)
                         }
+
+                        Button(action: onCreate) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 12, weight: .medium))
+                                .frame(
+                                    width: WorkbenchLayout.sessionTabActionSize,
+                                    height: WorkbenchLayout.sessionTabActionSize
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(localizer.string("新建工作会话"))
+                        .help(localizer.string("新建工作会话（⌘T）"))
+                        .padding(.horizontal, 3)
                     }
                 }
                 .onAppear {
@@ -1416,19 +1431,11 @@ private struct WorkSessionTabBar: View {
 
             Divider()
 
-            Button(action: onCreate) {
-                Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .medium))
-                    .frame(
-                        width: WorkbenchLayout.sessionTabActionSize,
-                        height: WorkbenchLayout.sessionTabActionSize
-                    )
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(localizer.string("新建工作会话"))
-            .help(localizer.string("新建工作会话（⌘T）"))
-            .padding(.horizontal, 3)
+            WorkspaceEditorLauncher(
+                workspacePath: workspacePath,
+                barHeight: WorkbenchLayout.sessionTabBarHeight
+            )
+            .padding(.trailing, 6)
         }
         .frame(height: WorkbenchLayout.sessionTabBarHeight)
         .background {
@@ -1609,20 +1616,16 @@ private struct WorkSessionTabBar: View {
 
 private struct WorkSessionTerminalLayoutView: View {
     let session: WorkSession
-    let workspacePath: String
     @ObservedObject var model: BreathApplicationModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            PaneLayoutView(
-                layout: session.layout,
-                workSessionID: session.id,
-                path: [],
-                paneOrder: session.layout.paneIDs,
-                model: model
-            )
-            WorkSessionBottomBar(workspacePath: workspacePath)
-        }
+        PaneLayoutView(
+            layout: session.layout,
+            workSessionID: session.id,
+            path: [],
+            paneOrder: session.layout.paneIDs,
+            model: model
+        )
     }
 }
 
@@ -2328,26 +2331,6 @@ private struct TerminalPaneView: View {
 
     private var localizer: ApplicationLocalizer {
         ApplicationLocalizer(language: applicationLanguage)
-    }
-}
-
-private struct WorkSessionBottomBar: View {
-    let workspacePath: String
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            WorkspaceEditorLauncher(
-                workspacePath: workspacePath,
-                barHeight: WorkbenchLayout.bottomBarHeight
-            )
-        }
-        .padding(.horizontal, 9)
-        .frame(height: WorkbenchLayout.bottomBarHeight)
-        .background(.bar)
-        .overlay(alignment: .top) {
-            Divider()
-        }
     }
 }
 
