@@ -13,6 +13,7 @@ public struct ManagedWorktree: Equatable, Codable, Sendable {
     public let baselineCommit: String
     public let workspaceRelativePath: String
     public let branchName: String
+    public let createdTaskBranch: Bool?
     public var state: ManagedWorktreeState
 
     public init(
@@ -23,6 +24,7 @@ public struct ManagedWorktree: Equatable, Codable, Sendable {
         baselineCommit: String,
         workspaceRelativePath: String,
         branchName: String,
+        createdTaskBranch: Bool? = nil,
         state: ManagedWorktreeState = .available
     ) {
         self.workspaceID = workspaceID
@@ -32,6 +34,7 @@ public struct ManagedWorktree: Equatable, Codable, Sendable {
         self.baselineCommit = baselineCommit
         self.workspaceRelativePath = workspaceRelativePath
         self.branchName = branchName
+        self.createdTaskBranch = createdTaskBranch
         self.state = state
     }
 
@@ -54,4 +57,11 @@ public protocol ManagedWorktreeManaging: Sendable {
     func isAvailable(_ worktree: ManagedWorktree) async -> Bool
     func validateRemoval(_ worktree: ManagedWorktree) async throws
     func remove(_ worktree: ManagedWorktree) async throws
+    func rollbackCreation(_ worktree: ManagedWorktree) async throws
+}
+
+public extension ManagedWorktreeManaging {
+    func rollbackCreation(_ worktree: ManagedWorktree) async throws {
+        try await remove(worktree)
+    }
 }

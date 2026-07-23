@@ -864,11 +864,8 @@ public actor Workbench {
             throw creationError
         }
 
-        let previousSnapshot = currentSnapshot
-        currentSnapshot.workSessions.append(workSession)
-        currentSnapshot.selectedWorkSessionID = workSessionID
         do {
-            try await persistSnapshot(rollingBackTo: previousSnapshot)
+            try await persistAndPublishCreatedWorkSession(workSession)
         } catch let creationError {
             await terminalRuntime.stop(paneID: paneID)
             try await rollbackManagedWorktreeCreation(
@@ -878,8 +875,27 @@ public actor Workbench {
             )
             throw creationError
         }
-        materializedWorkSessionIDs.insert(workSessionID)
         return workSessionID
+    }
+
+    private func persistAndPublishCreatedWorkSession(
+        _ workSession: WorkSession
+    ) async throws {
+        while true {
+            let baseSnapshot = currentSnapshot
+            var completedSnapshot = baseSnapshot
+            completedSnapshot.workSessions.append(workSession)
+            completedSnapshot.selectedWorkSessionID = workSession.id
+
+            try await repository.save(completedSnapshot)
+            guard currentSnapshot == baseSnapshot else {
+                continue
+            }
+            materializedWorkSessionIDs.insert(workSession.id)
+            currentSnapshot = completedSnapshot
+            await snapshotChangeHandler?()
+            return
+        }
     }
 
     private func rollbackManagedWorktreeCreation(
@@ -888,7 +904,7 @@ public actor Workbench {
         using manager: any ManagedWorktreeManaging
     ) async throws {
         do {
-            try await manager.remove(managedWorktree)
+            try await manager.rollbackCreation(managedWorktree)
         } catch let cleanupError {
             throw WorkbenchError.managedWorktreeCreationRollbackFailed(
                 worktreePath: managedWorktree.rootPath,

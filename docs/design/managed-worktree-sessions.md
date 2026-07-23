@@ -33,13 +33,15 @@ Breath 保存 Git common directory 作为恢复和删除依据。首版在 Git �
 
 ## 4. 任务分支、创建基线与检出安全
 
-Breath 使用 `git check-ref-format --branch` 校验任务分支。对于不存在的分支，创建开始时捕获工作区当前 `HEAD` 的完整 commit hash，并使用类似以下命令创建：
+Breath 使用 `git check-ref-format --branch` 校验任务分支。对于不存在的分支，创建开始时捕获工作区当前 `HEAD` 的完整 commit hash，先以“引用必须不存在”为前置条件原子创建无 upstream 的本地分支，再检出工作树：
 
 ```text
-git worktree add --no-track -b <task-branch> <managed-path> <captured-commit>
+git update-ref refs/heads/<task-branch> <captured-commit> <zero-oid>
+git worktree add <managed-path> <task-branch>
 ```
 
 - 对于已经存在的本地任务分支，使用 `git worktree add <managed-path> <task-branch>`。
+- 新分支的引用创建使用 compare-and-swap；若另一个 Git 进程抢先创建同名分支，本次操作失败且绝不删除对方分支。
 - 工作树从创建起就绑定任务分支，Agent 提交会持续推进该分支，不使用 detached HEAD。
 - 分支已经被其他 worktree 检出时创建失败，不使用 `--force` 绕过 Git 的保护。
 - staged、unstaged、untracked 和 ignored 内容都不复制到工作树。
@@ -74,9 +76,9 @@ git worktree add --no-track -b <task-branch> <managed-path> <captured-commit>
 1. 验证仓库与捕获创建基线。
 2. 创建并验证托管工作树。
 3. 启动第一个终端，此时会话仍未持久化或公开。
-4. 持久化并发布工作会话及工作树元数据。
+4. 在会话仍不可见时持久化完整快照，成功后再一次性发布工作会话及工作树元数据。
 
-任一步失败都先停止已经部分启动的终端，再同步回滚尚未发布的工作树。回滚失败必须同时报告工作树路径、原始失败原因和清理失败原因，不能静默吞掉。`git worktree add` 可能在返回失败前已经留下工作树或 Git 元数据；此时允许在精确校验受管路径后，对这个从未发布的创建中间态执行强制清理。正常会话删除不使用强制清理，并始终保留任务分支。
+任一步失败都先停止已经部分启动的终端，再同步回滚尚未发布的工作树。回滚失败必须同时报告工作树路径、原始失败原因和清理失败原因，不能静默吞掉。`git worktree add` 可能在返回失败前已经留下工作树或 Git 元数据；此时允许在精确校验受管路径后，对这个从未发布的创建中间态执行强制清理。若失败操作新建了任务分支，仅在分支仍指向捕获基线时删除该分支；操作前已存在的分支绝不删除。正常会话删除不使用强制清理，并始终保留任务分支。
 
 首版启动时验证已持久化 Worktree，但尚不扫描没有会话记录的孤儿目录；待清理记录、启动对账和重试界面列入后续阶段。
 
@@ -94,6 +96,7 @@ git worktree add --no-track -b <task-branch> <managed-path> <captured-commit>
 - 创建基线 commit hash。
 - 工作区相对仓库根目录的路径。
 - 任务分支名。
+- 任务分支是否由本次创建操作新建，用于发布前失败时的精确回滚。
 - 所属工作区 ID 与工作会话 ID。
 - 可用或不可用生命周期状态。
 

@@ -33,6 +33,7 @@ struct ManagedWorktreeServiceTests {
         #expect(worktree.rootPath == expectedRoot)
         #expect(worktree.workspaceRelativePath == "apps/client")
         #expect(worktree.branchName == "task/123")
+        #expect(worktree.createdTaskBranch == true)
         #expect(
             try fixture.git([
                 "-C", worktree.rootPath,
@@ -77,6 +78,7 @@ struct ManagedWorktreeServiceTests {
         )
 
         #expect(worktree.baselineCommit == expectedCommit)
+        #expect(worktree.createdTaskBranch == false)
         #expect(
             try fixture.git([
                 "-C", worktree.rootPath,
@@ -114,6 +116,55 @@ struct ManagedWorktreeServiceTests {
             ]).isEmpty
         )
         #expect(!(await service.isAvailable(worktree)))
+    }
+
+    @Test("creation rollback removes only a branch created by that operation")
+    func creationRollbackRemovesOnlyCreatedBranch() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        _ = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "branch", "task/existing-rollback",
+        ])
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let createdWorktree = try await service.create(
+            workspace: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: fixture.workspaceURL.path,
+                displayName: "client"
+            ),
+            workSessionID: WorkSessionID(rawValue: UUID()),
+            branchName: "task/new-rollback"
+        )
+        let existingWorktree = try await service.create(
+            workspace: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: fixture.workspaceURL.path,
+                displayName: "client"
+            ),
+            workSessionID: WorkSessionID(rawValue: UUID()),
+            branchName: "task/existing-rollback"
+        )
+
+        try await service.rollbackCreation(createdWorktree)
+        try await service.rollbackCreation(existingWorktree)
+
+        #expect(throws: GitWorktreeFixtureError.self) {
+            try fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "show-ref", "--verify", "--quiet",
+                "refs/heads/task/new-rollback",
+            ])
+        }
+        #expect(
+            try fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "show-ref", "--verify", "--quiet",
+                "refs/heads/task/existing-rollback",
+            ]).isEmpty
+        )
     }
 
     @Test("removal explicitly refuses a worktree with uncommitted changes")
@@ -292,6 +343,13 @@ struct ManagedWorktreeServiceTests {
                 "worktree", "list", "--porcelain",
             ]).contains(expectedRoot)
         )
+        #expect(throws: GitWorktreeFixtureError.self) {
+            try fixture.git([
+                "-C", fixture.repositoryURL.path,
+                "show-ref", "--verify", "--quiet",
+                "refs/heads/task/reported-failure",
+            ])
+        }
     }
 
     @Test("removing an externally deleted checkout also clears git metadata")
@@ -322,6 +380,67 @@ struct ManagedWorktreeServiceTests {
                 "worktree", "list", "--porcelain",
             ]).contains(worktree.rootPath)
         )
+    }
+
+    @Test("failed preparation never removes a pre-existing hooks directory")
+    func failedPreparationPreservesExistingHooksDirectory() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let hooksURL = fixture.managedRootURL
+            .appendingPathComponent(".disabled-hooks", isDirectory: true)
+            .appendingPathComponent(
+                sessionID.rawValue.uuidString,
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: hooksURL,
+            withIntermediateDirectories: true
+        )
+        let markerURL = hooksURL.appendingPathComponent("do-not-delete")
+        try Data("owned elsewhere".utf8).write(to: markerURL)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+
+        await #expect(throws: ManagedWorktreeServiceError.self) {
+            try await service.create(
+                workspace: Workspace(
+                    id: workspaceID,
+                    path: fixture.workspaceURL.path,
+                    displayName: "client"
+                ),
+                workSessionID: sessionID,
+                branchName: "task/preserve-existing-hooks"
+            )
+        }
+
+        #expect(FileManager.default.fileExists(atPath: markerURL.path))
+    }
+
+    @Test("a missing checkout and repository can still be forgotten")
+    func missingCheckoutAndRepositoryCanBeRemoved() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: fixture.workspaceURL.path,
+                displayName: "client"
+            ),
+            workSessionID: WorkSessionID(rawValue: UUID()),
+            branchName: "task/missing-repository"
+        )
+        try FileManager.default.removeItem(
+            at: URL(fileURLWithPath: worktree.rootPath, isDirectory: true)
+        )
+        try FileManager.default.removeItem(at: fixture.repositoryURL)
+
+        try await service.remove(worktree)
     }
 }
 

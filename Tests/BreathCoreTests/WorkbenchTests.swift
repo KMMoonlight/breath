@@ -104,6 +104,37 @@ struct WorkbenchTests {
         )
     }
 
+    @Test("a worktree session stays hidden while its snapshot is saving")
+    func worktreeSessionIsHiddenDuringPersistence() async throws {
+        let repository = SuspendedSaveRepository(suspendedSave: 2)
+        let workbench = Workbench(
+            repository: repository,
+            terminalRuntime: RecordingTerminalRuntime(),
+            managedWorktreeManager: RecordingManagedWorktreeManager(),
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+        let creation = Task {
+            try await workbench.createManagedWorktreeSession(
+                in: workspaceID,
+                branchName: "task/hidden-while-saving"
+            )
+        }
+        while await repository.saveCallCount < 2 {
+            await Task.yield()
+        }
+
+        #expect(await workbench.snapshot().workSessions.isEmpty)
+
+        await repository.allowSaves()
+        let sessionID = try await creation.value
+        #expect(
+            await workbench.snapshot().workSessions.map(\.id) == [sessionID]
+        )
+    }
+
     @Test("a failed worktree session save stops its terminal and removes its checkout")
     func failedWorktreeSaveCompensatesLaunch() async throws {
         let worktreeManager = RecordingManagedWorktreeManager()
@@ -1618,6 +1649,33 @@ private actor FailingSaveRepository: WorkbenchRepository {
             throw TestPersistenceError.saveFailed
         }
         self.snapshot = snapshot
+    }
+}
+
+private actor SuspendedSaveRepository: WorkbenchRepository {
+    private let suspendedSave: Int
+    private var savesAllowed = false
+    private var snapshot = WorkbenchSnapshot.empty
+    private(set) var saveCallCount = 0
+
+    init(suspendedSave: Int) {
+        self.suspendedSave = suspendedSave
+    }
+
+    func load() async throws -> WorkbenchSnapshot {
+        snapshot
+    }
+
+    func save(_ snapshot: WorkbenchSnapshot) async throws {
+        saveCallCount += 1
+        if saveCallCount == suspendedSave {
+            while !savesAllowed { await Task.yield() }
+        }
+        self.snapshot = snapshot
+    }
+
+    func allowSaves() {
+        savesAllowed = true
     }
 }
 
