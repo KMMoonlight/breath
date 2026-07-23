@@ -256,6 +256,56 @@ struct ManagedWorktreeServiceTests {
         }
     }
 
+    @Test("an inventory branch that moved after scanning is not deleted")
+    func refusesInventoryBranchThatMovedAfterScanning() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let sessionID = WorkSessionID(rawValue: UUID())
+        let branchName = ManagedWorktree.sessionBranchName(for: sessionID)
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let worktree = try await service.create(
+            workspace: workspace,
+            workSessionID: sessionID,
+            branchName: branchName
+        )
+        try await service.remove(worktree)
+        let beforeMove = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+        let branchItem = try #require(
+            beforeMove.items.first {
+                $0.branchName == branchName && $0.state == .branchOnly
+            }
+        )
+        let movedCommit = try fixture.createAlternateCommit()
+        _ = try fixture.git([
+            "-C", fixture.repositoryURL.path,
+            "update-ref", "refs/heads/\(branchName)", movedCommit,
+        ])
+
+        await #expect(throws: ManagedWorktreeServiceError.self) {
+            try await service.deleteInventoryBranch(branchItem)
+        }
+        let afterAttempt = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+        #expect(
+            afterAttempt.items.contains {
+                $0.branchName == branchName
+                    && $0.state == .branchOnly
+            }
+        )
+    }
+
     @Test("a clean orphaned checkout can be removed from inventory")
     func removesCleanOrphanedInventoryCheckout() async throws {
         let fixture = try GitWorktreeFixture()

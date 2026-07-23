@@ -59,6 +59,7 @@ struct ManagedWorktreeInventoryItem: Equatable, Identifiable, Sendable {
     let repositoryPath: String
     let gitCommonDirectory: String?
     let branchName: String?
+    let branchCommit: String?
     let directoryPath: String?
     let state: ManagedWorktreeInventoryState
 
@@ -194,6 +195,11 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
     private struct RepositoryLocations: Sendable {
         let repositoryRoot: URL
         let gitCommonDirectory: URL
+    }
+
+    private struct InventoryBranch: Sendable {
+        let name: String
+        let commit: String
     }
 
     private enum WorktreeLock {
@@ -402,6 +408,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
               item.directoryPath == nil,
               let branchName = item.branchName,
               managedWorkSessionID(for: branchName) != nil,
+              let branchCommit = item.branchCommit,
               let gitCommonDirectory = item.gitCommonDirectory
         else {
             throw ManagedWorktreeServiceError.inventoryDeletionNotAllowed(
@@ -428,13 +435,9 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                 "该分支已被 Git Worktree 检出，请刷新库存后重试。"
             )
         }
-        let commit = try await checkedOutput([
-            "--git-dir=\(gitDirectoryPath)",
-            "rev-parse", "--verify", "\(branchReference)^{commit}",
-        ]).trimmingCharacters(in: .whitespacesAndNewlines)
         _ = try await checkedResult([
             "--git-dir=\(gitDirectoryPath)",
-            "update-ref", "-d", branchReference, commit,
+            "update-ref", "-d", branchReference, branchCommit,
         ])
     }
 
@@ -623,19 +626,33 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         for (gitDirectoryPath, repository) in repositories.sorted(by: {
             $0.key.localizedStandardCompare($1.key) == .orderedAscending
         }) {
-            let branches: [String]
+            let branches: [InventoryBranch]
             let worktreeEntries: [GitWorktreeListEntry]
             do {
                 branches = try await checkedOutput([
                     "--git-dir=\(gitDirectoryPath)",
                     "for-each-ref",
                     "--sort=refname",
-                    "--format=%(refname:short)",
+                    "--format=%(refname:short)%00%(objectname)",
                     "refs/heads/breath/",
                 ])
                 .split(separator: "\n", omittingEmptySubsequences: true)
-                .map(String.init)
-                .filter { managedWorkSessionID(for: $0) != nil }
+                .compactMap { line in
+                    let fields = line.split(
+                        separator: "\0",
+                        omittingEmptySubsequences: false
+                    )
+                    .map(String.init)
+                    guard fields.count == 2,
+                          managedWorkSessionID(for: fields[0]) != nil
+                    else {
+                        return nil
+                    }
+                    return InventoryBranch(
+                        name: fields[0],
+                        commit: fields[1]
+                    )
+                }
                 worktreeEntries = parseWorktreeList(
                     try await checkedOutput([
                         "--git-dir=\(gitDirectoryPath)",
@@ -690,15 +707,19 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                         repositoryPath: repository.repositoryPath,
                         gitCommonDirectory: gitDirectoryPath,
                         branchName: knownWorktree.branchName,
+                        branchCommit: branches.first {
+                            $0.name == knownWorktree.branchName
+                        }?.commit,
                         directoryPath: knownWorktree.rootPath,
                         state: validation.state
                     )
                 )
             }
 
-            for branchName in branches
-                where representedBranchNames.insert(branchName).inserted
+            for branch in branches
+                where representedBranchNames.insert(branch.name).inserted
             {
+                let branchName = branch.name
                 let branchReference = "refs/heads/\(branchName)"
                 let entry = worktreeEntries.first {
                     $0.branchReference == branchReference
@@ -745,6 +766,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                         repositoryPath: repository.repositoryPath,
                         gitCommonDirectory: gitDirectoryPath,
                         branchName: branchName,
+                        branchCommit: branch.commit,
                         directoryPath: directoryPath,
                         state: state
                     )
@@ -805,6 +827,9 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                         repositoryPath: repository.repositoryPath,
                         gitCommonDirectory: gitDirectoryPath,
                         branchName: branchName,
+                        branchCommit: branchName.flatMap { name in
+                            branches.first { $0.name == name }?.commit
+                        },
                         directoryPath: knownWorktree?.rootPath ?? entry.path,
                         state: state
                     )
@@ -837,6 +862,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                         gitCommonDirectory: knownWorktree?
                             .gitCommonDirectory,
                         branchName: knownWorktree?.branchName,
+                        branchCommit: nil,
                         directoryPath: knownWorktree?.rootPath
                             ?? directoryURL.path,
                         state: knownWorktree == nil
@@ -866,6 +892,7 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
                     repositoryPath: workspace?.path ?? "",
                     gitCommonDirectory: worktree.gitCommonDirectory,
                     branchName: worktree.branchName,
+                    branchCommit: nil,
                     directoryPath: FileManager.default.fileExists(
                         atPath: worktree.rootPath
                     ) ? worktree.rootPath : nil,
