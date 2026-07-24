@@ -532,6 +532,17 @@ struct AgentQuotaAdapterTests {
         ])
     }
 
+    @Test("official CLI decoder preserves reset text it cannot safely convert")
+    func officialCLIResetText() throws {
+        let snapshot = try AgentQuotaCLITextDecoder.decode(
+            "5-hour: 34% used; resets in 2 hours",
+            providerName: "Factory"
+        )
+
+        #expect(snapshot.windows.first?.resetsAt == nil)
+        #expect(snapshot.windows.first?.resetDescription == "resets in 2 hours")
+    }
+
     @Test("official CLI fallback sends only the local quota command")
     func officialCLIUsesInformationalCommand() async throws {
         let recorder = QuotaCommandRecorder()
@@ -568,6 +579,42 @@ struct AgentQuotaAdapterTests {
             exitCode: 1
         )
         #expect(!String(describing: secretOutput).contains("raw-secret-output"))
+    }
+
+    @Test("official CLI format failures are reported as failures")
+    func officialCLIFormatFailure() async {
+        let runner = AgentQuotaCommandRunner { _, _, _ in
+            AgentQuotaCommandOutput(
+                data: Data("format changed".utf8),
+                exitCode: 0
+            )
+        }
+
+        let status = await AgentQuotaOfficialCLIAdapter.query(
+            agent: .factoryDroid,
+            providerName: "Factory",
+            command: "/limits",
+            commandRunner: runner
+        )
+
+        #expect(status == .failed("额度响应格式无法识别。"))
+    }
+
+    @Test("Claude does not infer warning state from percentage values")
+    func claudeDoesNotInferWarningThreshold() throws {
+        let snapshot = try ClaudeAgentQuotaAdapter.decode(
+            Data(
+                """
+                {
+                  "five_hour": {
+                    "utilization": 100
+                  }
+                }
+                """.utf8
+            )
+        )
+
+        #expect(snapshot.windows.first?.warning == false)
     }
 }
 

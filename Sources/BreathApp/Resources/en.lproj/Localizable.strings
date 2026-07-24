@@ -745,4 +745,6 @@
 "额度响应格式无法识别。" = "The quota response format was not recognized.";
 "已使用 %.0f%%" = "%.0f%% Used";
 "剩余 %.0f%%" = "%.0f%% Remaining";
+"已使用 %@" = "%@ Used";
+"剩余 %@" = "%@ Remaining";
 "%@重置" = "Resets %@";

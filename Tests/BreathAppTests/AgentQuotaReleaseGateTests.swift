@@ -26,6 +26,7 @@ struct AgentQuotaReleaseGateTests {
         #expect(!amountBlock.contains("ProgressView("))
         #expect(source.contains("direction == .used"))
         #expect(source.contains("window.warning ? .orange : .accentColor"))
+        #expect(!source.contains("%.0f%%"))
     }
 
     @Test("reset details use the adjacent info icon and local timezone")
@@ -46,6 +47,8 @@ struct AgentQuotaReleaseGateTests {
         #expect(source.contains("Color(nsColor: .windowBackgroundColor)"))
         #expect(source.contains(".accessibilityLabel(localizer.string(\"全部刷新\"))"))
         #expect(source.contains("localizer.format(\"刷新 %@ 额度\", card.displayName)"))
+        #expect(source.contains("Label(\n                                localizer.string(\"全部刷新\")"))
+        #expect(source.contains("Label(\n                        localizer.string(\"刷新\")"))
         #expect(!source.contains("查询来源"))
         #expect(!source.contains("完成时间"))
         #expect(!source.contains("fallback"))
@@ -69,6 +72,9 @@ struct AgentQuotaReleaseGateTests {
         #expect(commands.contains("AgentQuotaCommandOutput(data: <redacted>"))
         #expect(commands.contains("guard captured.count <= 1024 * 1024"))
         #expect(commands.contains("processEnvironment(baseEnvironment)"))
+        #expect(adapter.contains("AgentQuotaRedirectDelegate"))
+        #expect(adapter.contains("request.url?.scheme?.lowercased() == \"https\""))
+        #expect(adapter.contains("caseInsensitiveCompare(allowedHost)"))
     }
 
     private func appSource(_ name: String) throws -> String {

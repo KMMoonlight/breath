@@ -47,6 +47,25 @@ struct AgentQuotaServiceTests {
         #expect(await service.query(.pi) == .unsupported)
     }
 
+    @Test("an installed Agent below the supported version does not run its quota query")
+    func incompatibleAgentDoesNotQuery() async {
+        let probe = AgentQuotaInvocationProbe()
+        let service = AgentQuotaService(
+            adapters: AgentAdapterRegistry.builtIn.adapters,
+            isInstalled: { _ in true },
+            isSupported: { $0 != .codex },
+            queries: [
+                .codex: {
+                    await probe.record()
+                    return .failed("should not run")
+                },
+            ]
+        )
+
+        #expect(await service.query(.codex) == .unsupported)
+        #expect(await probe.count == 0)
+    }
+
     @Test("queries installed Agents concurrently")
     func queryAllRunsConcurrently() async {
         let probe = AgentQuotaConcurrencyProbe()
@@ -112,5 +131,13 @@ private actor AgentQuotaConcurrencyProbe {
 
     func end() {
         activeCount -= 1
+    }
+}
+
+private actor AgentQuotaInvocationProbe {
+    private(set) var count = 0
+
+    func record() {
+        count += 1
     }
 }

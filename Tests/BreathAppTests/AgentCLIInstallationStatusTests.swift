@@ -56,6 +56,25 @@ struct AgentCLIInstallationStatusTests {
         )
     }
 
+    @Test("quota capability respects the supported Agent CLI minimum version")
+    func quotaCapabilityRequiresMinimumVersion() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        try writeExecutable(
+            named: AgentKind.codex.cliExecutableName,
+            in: temporaryDirectory,
+            contents: "#!/bin/sh\necho 'codex-cli 0.120.0'\n"
+        )
+        let detector = InstalledAgentCLIDetector(
+            searchDirectories: [temporaryDirectory]
+        )
+        let adapter = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .codex }
+        )
+
+        #expect(detector.supportsMinimumVersion(of: adapter) == false)
+    }
+
     @Test("only a verified compatible Agent can be selected as a Skill target")
     func globalSkillTargetRequiresCompatibleVersion() throws {
         let adapter = try #require(

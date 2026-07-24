@@ -1109,6 +1109,23 @@ struct InstalledAgentCLIDetector: Sendable {
         executableURL(for: agent) != nil
     }
 
+    func supportsMinimumVersion(
+        of adapter: AgentAdapterDescriptor
+    ) -> Bool {
+        guard let executableURL = executableURL(for: adapter.kind) else {
+            return false
+        }
+        guard Self.hasSemanticVersion(adapter.minimumVersion) else {
+            return true
+        }
+        guard let output = try? run(executableURL, arguments: ["--version"]),
+              let version = Self.version(in: output)
+        else {
+            return true
+        }
+        return !Self.isVersion(version, olderThan: adapter.minimumVersion)
+    }
+
     func homebrewCaskToken(for agent: AgentKind) -> String? {
         guard let executableURL = executableURL(for: agent) else { return nil }
         return homebrewCaskToken(for: agent, executableURL: executableURL)

@@ -210,12 +210,6 @@ enum AgentQuotaOfficialCLIAdapter {
                 standardInput: input
             )
             let text = String(decoding: output.data, as: UTF8.self)
-            if let snapshot = try? AgentQuotaCLITextDecoder.decode(
-                text,
-                providerName: providerName
-            ) {
-                return .available(snapshot)
-            }
             let normalized = text.lowercased()
             if normalized.contains("not logged in")
                 || normalized.contains("login required")
@@ -224,11 +218,28 @@ enum AgentQuotaOfficialCLIAdapter {
             {
                 return .notLoggedIn
             }
-            return .unsupported
+            if normalized.contains("unknown command")
+                || normalized.contains("unrecognized command")
+                || normalized.contains("command not found")
+            {
+                return .unsupported
+            }
+            guard output.exitCode == 0 else {
+                return .failed("额度查询失败。")
+            }
+            guard let snapshot = try? AgentQuotaCLITextDecoder.decode(
+                text,
+                providerName: providerName
+            ) else {
+                return .failed("额度响应格式无法识别。")
+            }
+            return .available(snapshot)
         } catch is CancellationError {
             return .failed("额度查询已取消。")
-        } catch {
+        } catch AgentQuotaCommandError.notInstalled {
             return .unsupported
+        } catch {
+            return .failed("额度查询失败。")
         }
     }
 }

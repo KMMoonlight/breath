@@ -4,6 +4,7 @@ import SwiftUI
 struct AgentQuotaCard: Equatable, Identifiable, Sendable {
     let kind: AgentKind
     let displayName: String
+    var providerName: String?
     var status: AgentQuotaStatus
 
     var id: AgentKind { kind }
@@ -12,6 +13,7 @@ struct AgentQuotaCard: Equatable, Identifiable, Sendable {
 @MainActor
 final class AgentQuotaViewModel: ObservableObject {
     @Published private(set) var cards: [AgentQuotaCard] = []
+    @Published private(set) var isRefreshingAll = false
 
     private let service: AgentQuotaService
 
@@ -21,19 +23,48 @@ final class AgentQuotaViewModel: ObservableObject {
 
     func load() async {
         let agents = await service.installedAgents()
-        cards = agents.map {
-            AgentQuotaCard(
-                kind: $0.kind,
-                displayName: $0.displayName,
-                status: .checking
+        cards = []
+        for agent in agents {
+            cards.append(
+                AgentQuotaCard(
+                    kind: agent.kind,
+                    displayName: agent.displayName,
+                    providerName: await service.providerName(for: agent.kind),
+                    status: .checking
+                )
             )
         }
-        await refreshAll()
+        await refresh(
+            kinds: cards.map(\.kind),
+            tracksRefreshAll: true
+        )
     }
 
     func refreshAll() async {
-        let kinds = cards.map(\.kind)
-        for index in cards.indices {
+        guard !isRefreshingAll else { return }
+        let kinds = cards.compactMap { card in
+            card.status == .checking ? nil : card.kind
+        }
+        await refresh(kinds: kinds, tracksRefreshAll: true)
+    }
+
+    private func refresh(
+        kinds: [AgentKind],
+        tracksRefreshAll: Bool
+    ) async {
+        guard !kinds.isEmpty else { return }
+        if tracksRefreshAll {
+            isRefreshingAll = true
+        }
+        defer {
+            if tracksRefreshAll {
+                isRefreshingAll = false
+            }
+        }
+        for index in cards.indices where kinds.contains(cards[index].kind) {
+            cards[index].providerName = await service.providerName(
+                for: cards[index].kind
+            )
             cards[index].status = .checking
         }
         await withTaskGroup(of: (AgentKind, AgentQuotaStatus).self) { group in
@@ -58,6 +89,7 @@ final class AgentQuotaViewModel: ObservableObject {
         else {
             return
         }
+        cards[index].providerName = await service.providerName(for: kind)
         cards[index].status = .checking
         let status = await service.query(kind)
         guard let refreshedIndex = cards.firstIndex(where: { $0.kind == kind }) else {
@@ -90,10 +122,13 @@ struct AgentQuotaView: View {
                         Button {
                             Task { await model.refreshAll() }
                         } label: {
-                            Image(systemName: "arrow.clockwise")
+                            Label(
+                                localizer.string("全部刷新"),
+                                systemImage: "arrow.clockwise"
+                            )
                         }
                         .buttonStyle(.borderless)
-                        .disabled(model.cards.allSatisfy { $0.status == .checking })
+                        .disabled(model.isRefreshingAll)
                         .accessibilityLabel(localizer.string("全部刷新"))
                         .help(localizer.string("全部刷新"))
                     }
@@ -141,12 +176,12 @@ private struct AgentQuotaCardView: View {
             HStack(spacing: 8) {
                 Text(card.displayName)
                     .font(.headline)
+                if let providerName = displayedProviderName {
+                    Text(providerName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if case .available(let snapshot) = card.status {
-                    if let providerName = snapshot.providerName {
-                        Text(providerName)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                     if let maskedAccount = snapshot.maskedAccount {
                         Text(maskedAccount)
                             .font(.caption.monospaced())
@@ -156,7 +191,10 @@ private struct AgentQuotaCardView: View {
                 Spacer(minLength: 8)
                 statusBadge
                 Button(action: refresh) {
-                    Image(systemName: "arrow.clockwise")
+                    Label(
+                        localizer.string("刷新"),
+                        systemImage: "arrow.clockwise"
+                    )
                 }
                 .buttonStyle(.borderless)
                 .disabled(card.status == .checking)
@@ -246,6 +284,13 @@ private struct AgentQuotaCardView: View {
     private var localizer: ApplicationLocalizer {
         ApplicationLocalizer(language: applicationLanguage)
     }
+
+    private var displayedProviderName: String? {
+        if case .available(let snapshot) = card.status {
+            return snapshot.providerName ?? card.providerName
+        }
+        return card.providerName
+    }
 }
 
 private struct AgentQuotaWindowView: View {
@@ -270,8 +315,8 @@ private struct AgentQuotaWindowView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(
                         localizer.format(
-                            direction == .used ? "已使用 %.0f%%" : "剩余 %.0f%%",
-                            value
+                            direction == .used ? "已使用 %@" : "剩余 %@",
+                            formattedPercentage(value)
                         )
                     )
                     .font(.title3.monospacedDigit())
@@ -286,6 +331,10 @@ private struct AgentQuotaWindowView: View {
 
             if let resetsAt = window.resetsAt {
                 Text(relativeResetTime(resetsAt))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let resetDescription = window.resetDescription {
+                Text(resetDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -315,6 +364,15 @@ private struct AgentQuotaWindowView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .medium
         return formatter.string(from: date)
+    }
+
+    private func formattedPercentage(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = localizer.locale
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 6
+        return "\(formatter.string(from: NSNumber(value: value)) ?? String(value))%"
     }
 
     private var localizer: ApplicationLocalizer {

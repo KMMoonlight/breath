@@ -39,12 +39,50 @@ struct AgentQuotaHTTPClient: Sendable {
         sessionProvider: @escaping @Sendable () -> URLSession
     ) -> AgentQuotaHTTPClient {
         AgentQuotaHTTPClient { request in
-            let (data, response) = try await sessionProvider().data(for: request)
+            guard let allowedHost = request.url?.host else {
+                throw AgentQuotaAdapterError.invalidResponse
+            }
+            let delegate = AgentQuotaRedirectDelegate(
+                allowedHost: allowedHost
+            )
+            let (data, response) = try await sessionProvider().data(
+                for: request,
+                delegate: delegate
+            )
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw AgentQuotaAdapterError.invalidResponse
             }
             return (data, httpResponse)
         }
+    }
+}
+
+private final class AgentQuotaRedirectDelegate:
+    NSObject,
+    URLSessionTaskDelegate,
+    @unchecked Sendable
+{
+    private let allowedHost: String
+
+    init(allowedHost: String) {
+        self.allowedHost = allowedHost
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard request.url?.scheme?.lowercased() == "https",
+              request.url?.host?.caseInsensitiveCompare(allowedHost)
+                == .orderedSame
+        else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
     }
 }
 
@@ -116,15 +154,6 @@ struct AgentQuotaCredentialStore: Sendable {
             return nil
         }
         return AgentQuotaSecret(token)
-    }
-
-    static func maskAccount(_ account: String) -> String {
-        if let atIndex = account.firstIndex(of: "@") {
-            let localPart = String(account[..<atIndex])
-            let domain = String(account[atIndex...])
-            return "\(localPart.prefix(2))***\(domain)"
-        }
-        return "\(account.prefix(2))***"
     }
 
     private static func claudeAccessToken(in data: Data) -> String? {
@@ -414,7 +443,7 @@ enum CodexAgentQuotaAppServer {
         prefix: String?,
         to windows: inout [AgentQuotaWindow]
     ) {
-        let warning = limits.rateLimitReachedType != nil
+        let warning = limits.rateLimitReachedType?.isEmpty == false
         if let primary = limits.primary {
             windows.append(window(primary, prefix: prefix, warning: warning))
         }
@@ -527,6 +556,7 @@ enum AgentQuotaCLITextDecoder {
         for rawLine in output.split(whereSeparator: \.isNewline) {
             let line = String(rawLine)
             guard let name = windowName(in: line) else { continue }
+            let reset = resetDetails(in: line)
             let warning = line.range(
                 of: #"limit\s+reached|exhausted|depleted"#,
                 options: [.regularExpression, .caseInsensitive]
@@ -544,7 +574,8 @@ enum AgentQuotaCLITextDecoder {
                                 ? .remaining
                                 : .used
                         ),
-                        resetsAt: nil,
+                        resetsAt: reset.date,
+                        resetDescription: reset.description,
                         warning: warning
                     )
                 )
@@ -563,7 +594,8 @@ enum AgentQuotaCLITextDecoder {
                                 ? .remaining
                                 : .used
                         ),
-                        resetsAt: nil,
+                        resetsAt: reset.date,
+                        resetDescription: reset.description,
                         warning: warning
                     )
                 )
@@ -580,7 +612,8 @@ enum AgentQuotaCLITextDecoder {
                             value: amount[0],
                             unit: amount[1]
                         ),
-                        resetsAt: nil,
+                        resetsAt: reset.date,
+                        resetDescription: reset.description,
                         warning: warning
                     )
                 )
@@ -627,6 +660,36 @@ enum AgentQuotaCLITextDecoder {
             return "Requests"
         }
         return nil
+    }
+
+    private static func resetDetails(
+        in line: String
+    ) -> (date: Date?, description: String?) {
+        if let timestamp = firstMatch(
+            #"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))"#,
+            in: line
+        )?.first {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [
+                .withInternetDateTime,
+                .withFractionalSeconds,
+            ]
+            let date = formatter.date(from: timestamp) ?? {
+                formatter.formatOptions = [.withInternetDateTime]
+                return formatter.date(from: timestamp)
+            }()
+            if let date {
+                return (date, nil)
+            }
+        }
+        let description = firstMatch(
+            #"((?:resets?|resetting)\b[^,;]*)$"#,
+            in: line
+        )?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (
+            nil,
+            description.flatMap { $0.isEmpty ? nil : $0 }
+        )
     }
 
     private static func firstMatch(
@@ -743,7 +806,7 @@ enum ClaudeAgentQuotaAdapter {
                             unit: "Credits"
                         ),
                         resetsAt: nil,
-                        warning: extraUsage.utilization.map { $0 >= 100 } ?? false
+                        warning: false
                     )
                 )
             } else if let utilization = extraUsage.utilization {
@@ -755,7 +818,7 @@ enum ClaudeAgentQuotaAdapter {
                             direction: .used
                         ),
                         resetsAt: nil,
-                        warning: utilization >= 100
+                        warning: false
                     )
                 )
             }
@@ -781,7 +844,7 @@ enum ClaudeAgentQuotaAdapter {
                 name: name,
                 value: .percentage(value: utilization, direction: .used),
                 resetsAt: source?.resetsAt,
-                warning: utilization >= 100
+                warning: false
             )
         )
     }
@@ -1020,6 +1083,10 @@ struct CurrentQuotaProviderResolver: Sendable {
         )
     }
 
+    func providerName() -> String? {
+        selectedProviderID().map(Self.displayName(for:))
+    }
+
     private func selectedProviderID() -> String? {
         for url in settingsURLs {
             guard let data = try? Data(contentsOf: url),
@@ -1242,21 +1309,39 @@ extension AgentQuotaService {
             authURL: piDirectory.appendingPathComponent("auth.json"),
             environment: environment
         )
+        let adapters = AgentAdapterRegistry.builtIn.adapters
+        let adaptersByKind = Dictionary(
+            uniqueKeysWithValues: adapters.map { ($0.kind, $0) }
+        )
         return AgentQuotaService(
-            adapters: AgentAdapterRegistry.builtIn.adapters,
+            adapters: adapters,
             isInstalled: { detector.isInstalled($0) },
+            isSupported: { kind in
+                guard let adapter = adaptersByKind[kind] else { return false }
+                return detector.supportsMinimumVersion(of: adapter)
+            },
+            providerNames: [
+                .qwenCode: { qwenProvider.providerName() },
+                .openCode: { openCodeProvider.providerName() },
+                .pi: { piProvider.providerName() },
+            ],
             queries: [
                 .codex: {
-                    await CodexAgentQuotaAdapter.query(
+                    let protocolStatus = await CodexAgentQuotaAppServer.query(
+                        commandRunner: commandRunner
+                    )
+                    switch protocolStatus {
+                    case .available, .notLoggedIn:
+                        return protocolStatus
+                    case .checking, .unsupported, .failed:
+                        break
+                    }
+                    return await CodexAgentQuotaAdapter.query(
                         credentialProvider: {
                             credentialStore.codexCredential()
                         },
                         httpClient: httpClient,
-                        fallback: {
-                            await CodexAgentQuotaAppServer.query(
-                                commandRunner: commandRunner
-                            )
-                        }
+                        fallback: { .unsupported }
                     )
                 },
                 .claudeCode: {
