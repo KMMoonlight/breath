@@ -36,7 +36,7 @@ enum NetworkProxySessionConfiguration {
             if !username.isEmpty || !password.isEmpty {
                 proxy.applyCredential(username: username, password: password)
             }
-            configuration.connectionProxyDictionary = [:]
+            configuration.connectionProxyDictionary = nil
             configuration.proxyConfigurations = [proxy]
         }
         return configuration

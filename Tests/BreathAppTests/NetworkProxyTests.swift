@@ -38,7 +38,9 @@ struct NetworkProxyTests {
             password: "secret"
         )
 
-        #expect(configuration.connectionProxyDictionary?.isEmpty == true)
+        // An empty legacy dictionary overrides proxyConfigurations and silently
+        // sends requests directly, so manual mode must leave it unset.
+        #expect(configuration.connectionProxyDictionary == nil)
         #expect(configuration.proxyConfigurations.count == 1)
     }
 
