@@ -2758,50 +2758,6 @@ private struct ActivityBarButtonStyle: ButtonStyle {
     }
 }
 
-private struct AgentBrandIcon: View {
-    private static let iconCount: CGFloat = 9
-    private static let sprite = Bundle.module
-        .url(forResource: "AgentBrandIcons", withExtension: "svg")
-        .flatMap(NSImage.init(contentsOf:))
-
-    let agent: AgentKind
-
-    var body: some View {
-        Group {
-            if let sprite = Self.sprite {
-                GeometryReader { _ in
-                    Image(nsImage: sprite)
-                        .resizable()
-                        .renderingMode(.template)
-                        .interpolation(.high)
-                        .frame(
-                            width: WorkbenchLayout.agentIconGlyphSize * Self.iconCount,
-                            height: WorkbenchLayout.agentIconGlyphSize
-                        )
-                        .offset(
-                            x: -CGFloat(agent.brandIconIndex)
-                                * WorkbenchLayout.agentIconGlyphSize
-                        )
-                }
-                .frame(
-                    width: WorkbenchLayout.agentIconGlyphSize,
-                    height: WorkbenchLayout.agentIconGlyphSize
-                )
-                .clipped()
-            } else {
-                Image(systemName: "terminal")
-                    .symbolRenderingMode(.monochrome)
-                    .font(.system(size: 13, weight: .medium))
-            }
-        }
-        .foregroundStyle(.secondary)
-        .frame(
-            width: WorkbenchLayout.agentIconFrameSize,
-            height: WorkbenchLayout.agentIconFrameSize
-        )
-    }
-}
-
 enum WorkbenchLayout {
     static let windowControlsHeight: CGFloat = 32
     static let activityBarWidth: CGFloat = 44
@@ -2868,20 +2824,6 @@ private extension AgentKind {
         case .factoryDroid: "Droid"
         case .openCode: "OpenCode"
         case .pi: "Pi"
-        }
-    }
-
-    var brandIconIndex: Int {
-        switch self {
-        case .codex: 0
-        case .claudeCode: 1
-        case .geminiCLI: 2
-        case .githubCopilotCLI: 3
-        case .qwenCode: 4
-        case .cursorAgent: 5
-        case .factoryDroid: 6
-        case .openCode: 7
-        case .pi: 8
         }
     }
 }

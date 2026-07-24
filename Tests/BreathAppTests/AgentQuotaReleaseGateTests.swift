@@ -22,16 +22,46 @@ struct AgentQuotaReleaseGateTests {
         let amountBlock = source[amount.lowerBound..<amountEnd.lowerBound]
 
         #expect(source.contains("static let cardWidth: CGFloat = 360"))
+        #expect(source.contains("static let cardHeight: CGFloat = 188"))
+        #expect(source.contains("static let quotaWindowWidth: CGFloat = 161"))
+        #expect(source.contains("static let quotaWindowHeight: CGFloat = 110"))
         #expect(source.contains(
             ".adaptive(\n                                        minimum: AgentQuotaLayout.cardWidth,\n                                        maximum: AgentQuotaLayout.cardWidth"
         ))
         #expect(source.contains("width: AgentQuotaLayout.cardWidth"))
-        #expect(source.contains("GridItem(.adaptive(minimum: 145)"))
+        #expect(source.contains("height: AgentQuotaLayout.cardHeight"))
+        #expect(source.range(
+            of: #"GridItem\(\s*\.fixed\(AgentQuotaLayout\.quotaWindowWidth\)"#,
+            options: .regularExpression
+        ) != nil)
+        #expect(source.contains("height: AgentQuotaLayout.quotaWindowHeight"))
         #expect(percentageBlock.contains("ProgressView("))
         #expect(!amountBlock.contains("ProgressView("))
         #expect(source.contains("direction == .used"))
         #expect(source.contains("window.warning ? .orange : .accentColor"))
         #expect(!source.contains("%.0f%%"))
+    }
+
+    @Test("quota cards use branded, color-only visual status")
+    func brandedColorStatus() throws {
+        let source = try appSource("AgentQuotaView.swift")
+
+        #expect(source.contains(
+            "AgentBrandIcon(agent: card.kind, color: agentStatusColor)"
+        ))
+        #expect(source.contains(".foregroundStyle(agentStatusColor)"))
+        #expect(source.contains("case .available: .green"))
+        #expect(source.contains(
+            "case .notLoggedIn, .unsupported: .secondary"
+        ))
+        #expect(source.contains("case .failed: .orange"))
+        #expect(!source.contains("statusBadge"))
+        #expect(!source.contains(
+            "Text(localizer.string(\"不支持查询\"))"
+        ))
+        #expect(!source.contains(
+            "Text(localizer.string(\"未登录\"))"
+        ))
     }
 
     @Test("reset details use the adjacent info icon and local timezone")

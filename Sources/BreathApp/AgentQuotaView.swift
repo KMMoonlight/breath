@@ -3,7 +3,11 @@ import SwiftUI
 
 private enum AgentQuotaLayout {
     static let cardWidth: CGFloat = 360
+    static let cardHeight: CGFloat = 188
+    static let quotaWindowWidth: CGFloat = 161
+    static let quotaWindowHeight: CGFloat = 110
     static let cardSpacing: CGFloat = 12
+    static let quotaWindowSpacing: CGFloat = 10
     static let contentPadding: CGFloat = 16
 }
 
@@ -195,9 +199,17 @@ private struct AgentQuotaCardView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(card.displayName)
-                        .font(.headline)
-                        .lineLimit(2)
+                    HStack(spacing: 6) {
+                        AgentBrandIcon(agent: card.kind, color: agentStatusColor)
+                            .accessibilityHidden(true)
+                        Text(card.displayName)
+                            .font(.headline)
+                            .foregroundStyle(agentStatusColor)
+                            .lineLimit(1)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(card.displayName)
+                    .accessibilityValue(localizer.string(accessibleStatus))
                     if hasIdentityDetails {
                         HStack(spacing: 6) {
                             if let providerName = displayedProviderName {
@@ -218,29 +230,32 @@ private struct AgentQuotaCardView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                VStack(alignment: .trailing, spacing: 6) {
-                    statusBadge
-                    Button(action: refresh) {
-                        Label(
-                            localizer.string("刷新"),
-                            systemImage: "arrow.clockwise"
-                        )
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(card.status == .checking)
-                    .accessibilityLabel(
-                        localizer.format("刷新 %@ 额度", card.displayName)
+                Button(action: refresh) {
+                    Label(
+                        localizer.string("刷新"),
+                        systemImage: "arrow.clockwise"
                     )
-                    .help(localizer.format("刷新 %@ 额度", card.displayName))
                 }
+                .buttonStyle(.borderless)
+                .disabled(card.status == .checking)
+                .accessibilityLabel(
+                    localizer.format("刷新 %@ 额度", card.displayName)
+                )
+                .help(localizer.format("刷新 %@ 额度", card.displayName))
                 .fixedSize(horizontal: true, vertical: false)
             }
 
             statusContent
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .topLeading
+                )
         }
         .padding(14)
         .frame(
             width: AgentQuotaLayout.cardWidth,
+            height: AgentQuotaLayout.cardHeight,
             alignment: .topLeading
         )
         .background(
@@ -260,59 +275,53 @@ private struct AgentQuotaCardView: View {
             ProgressView()
                 .controlSize(.small)
         case .available(let snapshot):
-            LazyVGrid(
-                columns: [
-                    GridItem(.adaptive(minimum: 145), spacing: 10),
-                ],
-                alignment: .leading,
-                spacing: 10
-            ) {
-                ForEach(snapshot.windows) { window in
-                    AgentQuotaWindowView(window: window)
+            ScrollView(.vertical) {
+                LazyVGrid(
+                    columns: [
+                        GridItem(
+                            .fixed(AgentQuotaLayout.quotaWindowWidth),
+                            spacing: AgentQuotaLayout.quotaWindowSpacing
+                        ),
+                        GridItem(
+                            .fixed(AgentQuotaLayout.quotaWindowWidth),
+                            spacing: AgentQuotaLayout.quotaWindowSpacing
+                        ),
+                    ],
+                    alignment: .leading,
+                    spacing: AgentQuotaLayout.quotaWindowSpacing
+                ) {
+                    ForEach(snapshot.windows) { window in
+                        AgentQuotaWindowView(window: window)
+                    }
                 }
             }
-        case .notLoggedIn:
-            Text(localizer.string("未登录"))
-                .foregroundStyle(.secondary)
-        case .unsupported:
-            Text(localizer.string("不支持查询"))
-                .foregroundStyle(.secondary)
+            .scrollIndicators(.automatic)
+        case .notLoggedIn, .unsupported:
+            Color.clear
         case .failed(let reason):
             Text(localizer.string(reason))
-                .foregroundStyle(.red)
+                .font(.caption)
+                .foregroundStyle(.orange)
                 .textSelection(.enabled)
         }
     }
 
-    private var statusBadge: some View {
-        let presentation = statusPresentation
-        return Label(
-            localizer.string(presentation.title),
-            systemImage: presentation.systemImage
-        )
-        .font(.caption)
-        .foregroundStyle(presentation.color)
-        .accessibilityElement(children: .combine)
+    private var agentStatusColor: Color {
+        switch card.status {
+        case .checking: .secondary
+        case .available: .green
+        case .notLoggedIn, .unsupported: .secondary
+        case .failed: .orange
+        }
     }
 
-    private var statusPresentation: (
-        title: String,
-        systemImage: String,
-        color: Color
-    ) {
+    private var accessibleStatus: String {
         switch card.status {
-        case .checking:
-            ("查询中", "arrow.triangle.2.circlepath", .secondary)
-        case .available(let snapshot):
-            snapshot.windows.contains(where: \.warning)
-                ? ("警告", "exclamationmark.triangle", .orange)
-                : ("可用", "checkmark.circle", .secondary)
-        case .notLoggedIn:
-            ("未登录", "person.crop.circle.badge.questionmark", .secondary)
-        case .unsupported:
-            ("不支持查询", "questionmark.circle", .secondary)
-        case .failed:
-            ("查询失败", "xmark.circle", .red)
+        case .checking: "查询中"
+        case .available: "可用"
+        case .notLoggedIn: "未登录"
+        case .unsupported: "不支持查询"
+        case .failed: "查询失败"
         }
     }
 
@@ -386,7 +395,11 @@ private struct AgentQuotaWindowView: View {
             }
         }
         .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(
+            width: AgentQuotaLayout.quotaWindowWidth,
+            height: AgentQuotaLayout.quotaWindowHeight,
+            alignment: .topLeading
+        )
         .background(
             Color.primary.opacity(0.035),
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
