@@ -11,6 +11,7 @@ enum WorkbenchAccessibility {
     static let openGitWorkbench = "打开 Git 工作台"
     static let openTaskView = "打开任务视图"
     static let openSkills = "打开 Skills"
+    static let openAgentQuota = "打开额度"
     static let taskViewPanel = "任务视图面板"
 }
 
@@ -18,6 +19,7 @@ private enum WorkbenchDetailMode: Equatable {
     case workspace
     case tasks
     case skills
+    case agentQuota
     case settings
     case gitWorkbench(WorkspaceID?)
 }
@@ -333,6 +335,14 @@ struct WorkbenchView: View {
                 action: { detailMode = .skills }
             ) {
                 SkillActivityIcon()
+            }
+
+            activityBarButton(
+                systemName: "gauge.with.dots.needle.67percent",
+                accessibilityLabel: WorkbenchAccessibility.openAgentQuota,
+                isSelected: detailMode == .agentQuota
+            ) {
+                detailMode = .agentQuota
             }
 
             Spacer(minLength: 0)
@@ -963,6 +973,8 @@ struct WorkbenchView: View {
             BreathSettingsView(model: model)
         } else if detailMode == .skills {
             SkillsView(service: model.skillsService)
+        } else if detailMode == .agentQuota {
+            AgentQuotaView(service: model.agentQuotaService)
         } else if detailMode == .tasks {
             Color(nsColor: .windowBackgroundColor)
                 .accessibilityElement(children: .ignore)

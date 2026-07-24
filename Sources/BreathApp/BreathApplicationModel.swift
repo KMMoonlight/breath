@@ -30,6 +30,7 @@ final class BreathApplicationModel: ObservableObject {
 
     let terminalEngine: any TerminalEngine & TerminalViewProviding
     let skillsService: GlobalSkillsService
+    let agentQuotaService: AgentQuotaService
     let adapters = AgentAdapterRegistry.builtIn.adapters
 
     private let repository: SQLiteWorkbenchRepository
@@ -83,10 +84,19 @@ final class BreathApplicationModel: ObservableObject {
     ) throws {
         self.homeDirectory = homeDirectory
         self.integrationPreferences = integrationPreferences
-        self.installedAgentCLIDetector = installedAgentCLIDetector
+        let resolvedAgentCLIDetector = installedAgentCLIDetector
             ?? InstalledAgentCLIDetector(homeDirectory: homeDirectory)
+        self.installedAgentCLIDetector = resolvedAgentCLIDetector
         self.networkSessionManager = networkSessionManager
         self.networkProxyPasswordStore = networkProxyPasswordStore
+        agentQuotaService = AgentQuotaService.live(
+            homeDirectory: homeDirectory,
+            detector: resolvedAgentCLIDetector,
+            sessionProvider: { networkSessionManager.session },
+            processEnvironment: {
+                networkSessionManager.processEnvironment(basedOn: $0)
+            }
+        )
         agentCLILatestVersionChecker = AgentCLILatestVersionChecker(
             sessionProvider: { networkSessionManager.session }
         )
@@ -1174,7 +1184,7 @@ struct InstalledAgentCLIDetector: Sendable {
         return ["claude-code", "claude-code@latest"].contains(token) ? token : nil
     }
 
-    private func executableURL(for agent: AgentKind) -> URL? {
+    func executableURL(for agent: AgentKind) -> URL? {
         searchDirectories
             .map { $0.appendingPathComponent(agent.cliExecutableName) }
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }

@@ -14,6 +14,50 @@ private final class TestSplitTrackingAncestor:
 
 @Suite("Main window layout source guard")
 struct WindowLayoutSourceTests {
+    @Test("activity bar opens Agent quota after Skills")
+    func activityBarOpensAgentQuota() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/WorkbenchView.swift"
+            ),
+            encoding: .utf8
+        )
+        let activityStart = try #require(
+            source.range(of: "private var activityBar: some View")
+        )
+        let buttonStart = try #require(
+            source.range(
+                of: "private func activityBarButton(",
+                range: activityStart.upperBound..<source.endIndex
+            )
+        )
+        let activityBar = source[
+            activityStart.lowerBound..<buttonStart.lowerBound
+        ]
+        let skills = try #require(
+            activityBar.range(of: "WorkbenchAccessibility.openSkills")
+        )
+        let quota = try #require(
+            activityBar.range(of: "WorkbenchAccessibility.openAgentQuota")
+        )
+        let spacer = try #require(
+            activityBar.range(of: "Spacer(minLength: 0)")
+        )
+        let settings = try #require(
+            activityBar.range(of: "WorkbenchAccessibility.openSettings")
+        )
+
+        #expect(skills.lowerBound < quota.lowerBound)
+        #expect(quota.lowerBound < spacer.lowerBound)
+        #expect(spacer.lowerBound < settings.lowerBound)
+        #expect(source.contains("case agentQuota"))
+        #expect(source.contains("AgentQuotaView(service: model.agentQuotaService)"))
+    }
+
     @Test("page toolbar reserves traffic-light space only in windowed mode")
     func pageToolbarLeadingInsetAdaptsToFullScreen() {
         #expect(

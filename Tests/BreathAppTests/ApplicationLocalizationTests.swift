@@ -47,6 +47,9 @@ struct ApplicationLocalizationTests {
         #expect(english.string("正在安装…") == "Installing…")
         #expect(english.format("安装 %@", "Kami") == "Install Kami")
         #expect(english.string("安装状态") == "Installation Status")
+        #expect(english.string("额度") == "Quota")
+        #expect(english.string("每月") == "Monthly")
+        #expect(english.string("额度查询超时。") == "Quota query timed out.")
         #expect(chinese.string("此 Skill 已安装") == "此 Skill 已安装")
         #expect(english.format("作者：%@", "Example") == "Author: Example")
         #expect(
@@ -95,6 +98,7 @@ struct ApplicationLocalizationTests {
             "Sources/BreathApp/BreathApp.swift",
             "Sources/BreathApp/WorkbenchView.swift",
             "Sources/BreathApp/SkillsView.swift",
+            "Sources/BreathApp/AgentQuotaView.swift",
         ]
         let referencedKeys = try sourceFiles.reduce(into: Set<String>()) {
             result,
