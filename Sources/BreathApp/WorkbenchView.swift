@@ -1128,8 +1128,14 @@ private struct ManagedWorktreeMergeSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(localizer.string("合并 Worktree 分支"))
-                    .font(.headline)
+                ExplanationLabel(
+                    localizer.string(
+                        "将 Worktree 分支合并到所选本地分支。只会合并已提交内容；不会删除源 Worktree。若发生冲突，Breath 会自动中止合并。"
+                    )
+                ) {
+                    Text(localizer.string("合并 Worktree 分支"))
+                        .font(.headline)
+                }
                 Text(session.title)
                     .foregroundStyle(.secondary)
             }
@@ -1174,15 +1180,6 @@ private struct ManagedWorktreeMergeSheet: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            Text(
-                localizer.string(
-                    "将 Worktree 分支合并到所选本地分支。只会合并已提交内容；不会删除源 Worktree。若发生冲突，Breath 会自动中止合并。"
-                )
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
 
             if let errorMessage {
                 Text(errorMessage)
@@ -1299,14 +1296,9 @@ private struct ManagedWorktreeCreationSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 5) {
+                ExplanationLabel(startBranchHelp) {
                     Text(localizer.string("起始分支"))
                         .font(.subheadline.weight(.medium))
-                    Image(systemName: "info.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .help(startBranchHelp)
-                        .accessibilityLabel(startBranchHelp)
                 }
                 if isLoadingStartBranches {
                     HStack(spacing: 8) {
@@ -1585,6 +1577,16 @@ private struct ManagedWorktreeMarker: View {
             height: WorkbenchLayout.agentIconFrameSize
         )
         .help(
+            [
+                localizer.format("Worktree 分支：%@", worktree.branchName),
+                workingDirectory,
+                localizer.format(
+                    "创建基线：%@",
+                    String(worktree.baselineCommit.prefix(8))
+                ),
+            ].joined(separator: "\n")
+        )
+        .accessibilityLabel(
             [
                 localizer.format("Worktree 分支：%@", worktree.branchName),
                 workingDirectory,

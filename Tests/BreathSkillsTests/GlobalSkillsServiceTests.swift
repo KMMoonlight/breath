@@ -1,6 +1,6 @@
 import BreathAgents
 import BreathCore
-import BreathSkills
+@testable import BreathSkills
 import Foundation
 import Testing
 

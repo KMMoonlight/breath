@@ -172,6 +172,10 @@ _Avoid_: 动态快捷键回退、Agent 快捷键探测、Ghostty 快捷键配置
 由 Breath 拥有、只负责终端之外应用界面样式的配置。
 _Avoid_: 终端配置、应用行为配置、Agent 项目配置
 
+**网络代理（Network Proxy）**：
+由用户在设置页选择的 Breath 网络访问策略，支持“不使用代理”“使用系统代理”和“使用手动代理”。手动代理接受 HTTP、HTTPS 或 SOCKS5 URL，以及可选用户名和密码；非密码字段随设置持久化，密码只保存在 macOS Keychain。该策略覆盖 Breath 内置网络请求和 Breath 发起的 Git HTTP(S) 操作，不修改 macOS 系统代理、终端内命令或 Sparkle 应用更新的网络行为。无效的手动代理配置必须阻止请求，不能静默退回直连。
+_Avoid_: 系统网络设置、终端代理、Git 凭据、应用更新代理
+
 **应用更新（Application Update）**：
 Breath 通过 Sparkle 在应用内完成的版本检查、签名验证和安装流程。构建产物与更新包由公开 GitHub Releases 托管，签名后的 appcast 由同一 GitHub 仓库的 GitHub Pages 托管；客户端不使用自建更新服务、GitHub 登录或访问令牌。
 _Avoid_: Breath 更新服务器、GitHub API 更新器、静默强制更新

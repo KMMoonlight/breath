@@ -81,7 +81,9 @@ struct GitCommandRunner: Sendable {
             process.arguments = arguments
             process.standardOutput = standardOutput
             process.standardError = standardError
-            process.environment = environment ?? ProcessInfo.processInfo.environment
+            process.environment = NetworkSessionManager.shared.processEnvironment(
+                basedOn: environment ?? ProcessInfo.processInfo.environment
+            )
             let termination = GitProcessTermination()
             process.terminationHandler = { process in
                 termination.finish(process.terminationStatus)

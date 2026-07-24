@@ -33,9 +33,17 @@ struct SkillInstallationWizard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(localizer.string("安装 Skill"))
                         .font(.title2.weight(.semibold))
-                    Text(stepTitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let stepExplanation {
+                        ExplanationLabel(stepExplanation) {
+                            Text(stepTitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text(stepTitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
             }
@@ -95,6 +103,23 @@ struct SkillInstallationWizard: View {
         }
     }
 
+    private var stepExplanation: String? {
+        switch step {
+        case .source, .review:
+            nil
+        case .candidates:
+            localizer.string("只会安装你明确选择的候选 Skill。")
+        case .targets:
+            localizer.string(
+                "每次安装默认不选择任何 Agent。每个目标将获得完整独立副本。"
+            )
+        case .result:
+            localizer.string(
+                "新的或重启后的 Agent 会话可能才会加载变更；Breath 没有停止任何运行中会话。"
+            )
+        }
+    }
+
     private var sourceStep: some View {
         VStack(alignment: .leading, spacing: 18) {
             Picker(localizer.string("来源"), selection: $sourceMode) {
@@ -126,10 +151,14 @@ struct SkillInstallationWizard: View {
 
     private var zipSourcePane: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(localizer.string("选择 ZIP 文件"))
-                .font(.headline)
-            Text(localizer.string("ZIP 可以包含一个或多个 Skill；导入前不会执行其中的脚本。"))
-                .foregroundStyle(.secondary)
+            ExplanationLabel(
+                localizer.string(
+                    "ZIP 可以包含一个或多个 Skill；导入前不会执行其中的脚本。"
+                )
+            ) {
+                Text(localizer.string("选择 ZIP 文件"))
+                    .font(.headline)
+            }
             if activity == .checkingZip {
                 progressStatus("正在检查 ZIP…")
             } else {
@@ -144,8 +173,14 @@ struct SkillInstallationWizard: View {
 
     private var githubSourcePane: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(localizer.string("输入公开 GitHub Repo"))
-                .font(.headline)
+            ExplanationLabel(
+                localizer.string(
+                    "仅支持无需认证的公开 GitHub Repo；私有 Repo 请改用 ZIP。"
+                )
+            ) {
+                Text(localizer.string("输入公开 GitHub Repo"))
+                    .font(.headline)
+            }
             HStack {
                 TextField("owner/repo", text: $githubInput)
                     .textFieldStyle(.roundedBorder)
@@ -162,9 +197,6 @@ struct SkillInstallationWizard: View {
                         )
                 }
             }
-            Text(localizer.string("仅支持无需认证的公开 GitHub Repo；私有 Repo 请改用 ZIP。"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -321,8 +353,6 @@ struct SkillInstallationWizard: View {
 
     private var candidateStep: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(localizer.string("只会安装你明确选择的候选 Skill。"))
-                .foregroundStyle(.secondary)
             List {
                 ForEach(batch?.candidates ?? []) { candidate in
                     Toggle(isOn: membership(candidate.id, in: $selectedCandidateIDs)) {
@@ -381,8 +411,6 @@ struct SkillInstallationWizard: View {
 
     private var targetStep: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(localizer.string("每次安装默认不选择任何 Agent。每个目标将获得完整独立副本。"))
-                .foregroundStyle(.secondary)
             List(snapshot.targets) { target in
                 let isAlreadyInstalled = preinstalledAgents.contains(target.agent)
                 Toggle(isOn: membership(target.agent, in: $selectedAgents)) {
@@ -559,10 +587,6 @@ struct SkillInstallationWizard: View {
                     }
                 }
             }
-            Text(localizer.string("新的或重启后的 Agent 会话可能才会加载变更；Breath 没有停止任何运行中会话。"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 20)
         }
         .padding(.vertical, 12)
     }
@@ -983,12 +1007,24 @@ struct SkillUpdateReviewView: View {
                             Text(target.agentDisplayName).fontWeight(.medium)
                             Text(target.directory.path).font(.caption.monospaced())
                             if target.isLocallyModified {
-                                Text(localizer.string("本地已修改，默认不选择"))
-                                    .font(.caption).foregroundStyle(.orange)
+                                ExplanationLabel(
+                                    localizer.string("本地已修改，默认不选择")
+                                ) {
+                                    Text(localizer.string("本地已修改"))
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
                             }
                             if target.isSymbolicLink {
-                                Text(localizer.string("更新后该链接会变成此 Agent 的独立实体目录"))
-                                    .font(.caption).foregroundStyle(.orange)
+                                ExplanationLabel(
+                                    localizer.string(
+                                        "更新后该链接会变成此 Agent 的独立实体目录"
+                                    )
+                                ) {
+                                    Text(localizer.string("外部符号链接"))
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
                             }
                         }
                     }
@@ -1069,10 +1105,12 @@ struct SkillUninstallView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(localizer.format("卸载 %@", skill.name))
-                    .font(.title2.weight(.semibold))
-                Text(localizer.string("只会从明确选择的 Agent 中移除 Skill。"))
-                    .font(.caption).foregroundStyle(.secondary)
+                ExplanationLabel(
+                    localizer.string("只会从明确选择的 Agent 中移除 Skill。")
+                ) {
+                    Text(localizer.format("卸载 %@", skill.name))
+                        .font(.title2.weight(.semibold))
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
@@ -1098,13 +1136,27 @@ struct SkillUninstallView: View {
                 }
             } else if let preview {
                 List(preview.items) { item in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(item.agentDisplayName).fontWeight(.medium)
-                        Text(item.directory.path).font(.caption.monospaced())
-                        Text(item.action == .moveToTrash
-                            ? localizer.string("移入 macOS 废纸篓，可恢复")
-                            : localizer.string("只移除链接，共享目标保持不变"))
-                            .font(.caption).foregroundStyle(.secondary)
+                    HStack(alignment: .top, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.agentDisplayName).fontWeight(.medium)
+                            Text(item.directory.path).font(.caption.monospaced())
+                        }
+                        Spacer()
+                        ExplanationLabel(
+                            item.action == .moveToTrash
+                                ? localizer.string("移入 macOS 废纸篓，可恢复")
+                                : localizer.string("只移除链接，共享目标保持不变")
+                        ) {
+                            Text(
+                                localizer.string(
+                                    item.action == .moveToTrash
+                                        ? "移入废纸篓"
+                                        : "移除链接"
+                                )
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
                     }
                 }
             } else {
@@ -1182,13 +1234,16 @@ private struct RiskBadge: View {
     let localizer: ApplicationLocalizer
 
     var body: some View {
-        Text(audit.riskLevel.displayName(localizer))
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .foregroundStyle(audit.riskLevel.requiresExtraConfirmation ? .red : .secondary)
-            .background(.quaternary, in: Capsule())
-            .help(audit.summary)
+        ExplanationLabel(localizer.string(audit.summary)) {
+            Text(audit.riskLevel.displayName(localizer))
+                .font(.caption2.weight(.semibold))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .foregroundStyle(
+                    audit.riskLevel.requiresExtraConfirmation ? .red : .secondary
+                )
+                .background(.quaternary, in: Capsule())
+        }
     }
 }
 

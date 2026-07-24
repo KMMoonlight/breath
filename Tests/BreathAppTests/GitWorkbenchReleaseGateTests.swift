@@ -70,7 +70,7 @@ struct GitWorkbenchReleaseGateTests {
         #expect(!gitSources.contains("worktree add"))
         #expect(!gitSources.contains("worktree remove"))
         #expect(
-            gitSources.components(separatedBy: "\"--force\"").count - 1 == 1
+            gitSources.components(separatedBy: "\"--force\"").count - 1 == 3
         )
         #expect(
             gitSources.contains(

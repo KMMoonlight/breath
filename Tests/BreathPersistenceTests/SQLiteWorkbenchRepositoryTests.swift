@@ -125,7 +125,7 @@ struct SQLiteWorkbenchRepositoryTests {
         #expect(actual == expected)
     }
 
-    @Test("application and terminal settings survive a repository round trip")
+    @Test("application, terminal, and proxy settings survive a repository round trip")
     func settingsRoundTrip() async throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("breath-settings-\(UUID().uuidString).sqlite")
@@ -144,7 +144,12 @@ struct SQLiteWorkbenchRepositoryTests {
                 colorTheme: .solarizedDark,
                 cursorStyle: .underline
             ),
-            terminalShortcutPolicy: .terminalFirst
+            terminalShortcutPolicy: .terminalFirst,
+            networkProxy: NetworkProxySettings(
+                mode: .manual,
+                manualURL: "http://127.0.0.1:7890",
+                username: "breath"
+            )
         )
 
         try await repository.saveSettings(expected)

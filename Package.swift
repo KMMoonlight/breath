@@ -77,7 +77,11 @@ targets += [
             "BreathTerminal",
             "BreathUpdates",
         ],
-        resources: [.process("Resources")]
+        resources: [.process("Resources")],
+        linkerSettings: [
+            .linkedFramework("Network"),
+            .linkedFramework("Security"),
+        ]
     ),
     .testTarget(
         name: "BreathCoreTests",

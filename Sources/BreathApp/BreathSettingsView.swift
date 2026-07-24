@@ -6,6 +6,7 @@ import SwiftUI
 
 enum BreathSettingsTab: Hashable, CaseIterable {
     case application
+    case network
     case terminal
     case git
     case worktrees
@@ -18,6 +19,7 @@ private extension BreathSettingsTab {
     var title: String {
         switch self {
         case .application: "应用配置"
+        case .network: "网络"
         case .terminal: "终端配置"
         case .git: "Git"
         case .worktrees: "Worktree"
@@ -30,6 +32,7 @@ private extension BreathSettingsTab {
     var systemImage: String {
         switch self {
         case .application: "paintbrush"
+        case .network: "network"
         case .terminal: "terminal"
         case .git: "point.topleft.down.to.point.bottomright.curvepath"
         case .worktrees: "arrow.triangle.branch"
@@ -47,6 +50,7 @@ private enum SettingsLayout {
     static let controlColumnWidth: CGFloat = 160
     static let controlHeight: CGFloat = 24
     static let gitExecutableControlWidth: CGFloat = 320
+    static let networkControlWidth: CGFloat = 360
 }
 
 private struct ShortcutReference: Identifiable {
@@ -102,6 +106,11 @@ struct BreathSettingsView: View {
     @State private var pendingWorktreeInventoryDeletion:
         PendingWorktreeInventoryDeletion?
     @State private var gitExecutableTestResult: String?
+    @State private var proxyTestAddress = "https://www.google.com"
+    @State private var proxyTestResult: NetworkProxyTestResult?
+    @State private var isTestingProxy = false
+    @State private var proxyTestTask: Task<Void, Never>?
+    @State private var proxyTestRequestID = UUID()
 
     init(
         model: BreathApplicationModel,
@@ -123,6 +132,9 @@ struct BreathSettingsView: View {
             minHeight: 0,
             maxHeight: .infinity
         )
+        .onDisappear {
+            proxyTestTask?.cancel()
+        }
         .background(Color(nsColor: .windowBackgroundColor))
         .font(applicationFont())
         .disabled(!model.isReady)
@@ -271,6 +283,8 @@ struct BreathSettingsView: View {
         switch selectedTab {
         case .application:
             applicationSettings
+        case .network:
+            networkSettings
         case .terminal:
             terminalSettings
         case .git:
@@ -386,6 +400,126 @@ struct BreathSettingsView: View {
         }
     }
 
+    private var networkSettings: some View {
+        settingsList {
+            Section {
+                settingsControlRow("代理方式") {
+                    settingsMenuPicker(
+                        selection: networkProxyMode,
+                        options: [
+                            (
+                                localizer.string("不使用代理"),
+                                NetworkProxyMode.none
+                            ),
+                            (
+                                localizer.string("使用系统代理"),
+                                NetworkProxyMode.system
+                            ),
+                            (
+                                localizer.string("使用手动代理"),
+                                NetworkProxyMode.manual
+                            ),
+                        ],
+                        accessibilityLabel: localizer.string("代理方式")
+                    )
+                }
+
+                if model.settings.networkProxy.mode == .manual {
+                    settingsControlRow(
+                        "代理 URL",
+                        explanation: localizer.string(
+                            "支持 HTTP、HTTPS 和 SOCKS5 代理，例如 http://127.0.0.1:7890。"
+                        ),
+                        controlWidth: SettingsLayout.networkControlWidth
+                    ) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            TextField(
+                                "http://127.0.0.1:7890",
+                                text: manualProxyURL
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel(localizer.string("代理 URL"))
+                            if let error = model.networkProxyConfigurationError {
+                                Label(
+                                    proxyConfigurationErrorMessage(error),
+                                    systemImage: "exclamationmark.triangle.fill"
+                                )
+                                .font(applicationFont(offset: -1))
+                                .foregroundStyle(.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    settingsControlRow(
+                        "用户名（可选）",
+                        controlWidth: SettingsLayout.networkControlWidth
+                    ) {
+                        TextField("", text: manualProxyUsername)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel(localizer.string("代理用户名"))
+                    }
+                    settingsControlRow(
+                        "密码（可选）",
+                        explanation: localizer.string(
+                            "代理密码保存在 macOS Keychain 中，不会写入 Breath 设置数据库。"
+                        ),
+                        controlWidth: SettingsLayout.networkControlWidth
+                    ) {
+                        SecureField("", text: manualProxyPassword)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel(localizer.string("代理密码"))
+                    }
+                }
+            } header: {
+                ExplanationLabel(
+                    localizer.string(
+                        "适用于 Breath 内置网络请求和 Breath 发起的 Git HTTP(S) 操作；不会修改终端命令、应用更新或 macOS 系统代理设置。"
+                    )
+                ) {
+                    Text(localizer.string("网络代理"))
+                }
+            }
+
+            Section(localizer.string("代理测试")) {
+                settingsControlRow(
+                    "测试地址",
+                    controlWidth: SettingsLayout.networkControlWidth
+                ) {
+                    HStack(spacing: 8) {
+                        TextField(
+                            "https://www.google.com",
+                            text: $proxyTestAddress
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel(localizer.string("代理测试地址"))
+                        .onChange(of: proxyTestAddress) { _, _ in
+                            resetProxyTest()
+                        }
+                        Button(localizer.string("测试连接")) {
+                            testNetworkProxy()
+                        }
+                        .disabled(
+                            isTestingProxy
+                                || model.networkProxyConfigurationError != nil
+                        )
+                    }
+                }
+
+                if isTestingProxy {
+                    HStack(spacing: 7) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(localizer.string("正在测试连接…"))
+                    }
+                    .font(applicationFont(offset: -1))
+                    .foregroundStyle(.secondary)
+                } else if let proxyTestResult {
+                    proxyTestResultView(proxyTestResult)
+                }
+            }
+        }
+    }
+
     private func settingsList<Content: View>(
         @ViewBuilder content: () -> Content
     ) -> some View {
@@ -445,12 +579,20 @@ struct BreathSettingsView: View {
 
     private func settingsControlRow<Control: View>(
         _ title: String,
+        explanation: String? = nil,
         controlWidth: CGFloat = SettingsLayout.controlColumnWidth,
         @ViewBuilder control: () -> Control
     ) -> some View {
         HStack {
-            Text(localizer.string(title))
-                .lineLimit(1)
+            if let explanation {
+                ExplanationLabel(explanation) {
+                    Text(localizer.string(title))
+                        .lineLimit(1)
+                }
+            } else {
+                Text(localizer.string(title))
+                    .lineLimit(1)
+            }
             Spacer(minLength: 24)
             control()
                 .frame(width: controlWidth, alignment: .trailing)
@@ -490,7 +632,12 @@ struct BreathSettingsView: View {
     private var shortcutsSettings: some View {
         settingsList {
             Section(localizer.string("终端中的快捷键")) {
-                settingsControlRow("快捷键优先级") {
+                settingsControlRow(
+                    "快捷键优先级",
+                    explanation: localizer.string(
+                        "选择终端聚焦时，由 Breath 还是终端内应用优先获得冲突快捷键。"
+                    )
+                ) {
                     settingsMenuPicker(
                         selection: terminalShortcutPolicy,
                         options: [
@@ -506,13 +653,6 @@ struct BreathSettingsView: View {
                         accessibilityLabel: localizer.string("快捷键优先级")
                     )
                 }
-                Text(
-                    localizer.string(
-                        "选择终端聚焦时，由 Breath 还是终端内应用优先获得冲突快捷键。"
-                    )
-                )
-                .font(applicationFont(offset: -2))
-                .foregroundStyle(.secondary)
             }
             Section(localizer.string("Breath")) {
                 ForEach(Self.supportedShortcuts) { shortcut in
@@ -598,6 +738,139 @@ struct BreathSettingsView: View {
                 model.saveApplicationSettings(settings)
             }
         )
+    }
+
+    private var networkProxyMode: Binding<NetworkProxyMode> {
+        Binding(
+            get: { model.settings.networkProxy.mode },
+            set: { mode in
+                var settings = model.settings.networkProxy
+                settings.mode = mode
+                model.saveNetworkProxySettings(settings)
+                resetProxyTest()
+            }
+        )
+    }
+
+    private var manualProxyURL: Binding<String> {
+        networkProxyBinding(\.manualURL)
+    }
+
+    private var manualProxyUsername: Binding<String> {
+        networkProxyBinding(\.username)
+    }
+
+    private var manualProxyPassword: Binding<String> {
+        Binding(
+            get: { model.networkProxyPassword },
+            set: { password in
+                model.saveNetworkProxyPassword(password)
+                resetProxyTest()
+            }
+        )
+    }
+
+    private func networkProxyBinding<Value>(
+        _ keyPath: WritableKeyPath<NetworkProxySettings, Value>
+    ) -> Binding<Value> {
+        Binding(
+            get: { model.settings.networkProxy[keyPath: keyPath] },
+            set: { value in
+                var settings = model.settings.networkProxy
+                settings[keyPath: keyPath] = value
+                model.saveNetworkProxySettings(settings)
+                resetProxyTest()
+            }
+        )
+    }
+
+    private func testNetworkProxy() {
+        guard !isTestingProxy else { return }
+        proxyTestTask?.cancel()
+        let requestID = UUID()
+        proxyTestRequestID = requestID
+        isTestingProxy = true
+        proxyTestResult = nil
+        let address = proxyTestAddress
+        proxyTestTask = Task {
+            let result = await model.testNetworkProxy(address: address)
+            guard !Task.isCancelled, proxyTestRequestID == requestID else {
+                return
+            }
+            proxyTestResult = result
+            isTestingProxy = false
+            proxyTestTask = nil
+        }
+    }
+
+    private func resetProxyTest() {
+        proxyTestTask?.cancel()
+        proxyTestTask = nil
+        proxyTestRequestID = UUID()
+        proxyTestResult = nil
+        isTestingProxy = false
+    }
+
+    @ViewBuilder
+    private func proxyTestResultView(
+        _ result: NetworkProxyTestResult
+    ) -> some View {
+        switch result {
+        case .success(let statusCode, let elapsedMilliseconds):
+            Label(
+                localizer.format(
+                    "连接成功 · HTTP %d · %d ms",
+                    statusCode,
+                    elapsedMilliseconds
+                ),
+                systemImage: "checkmark.circle.fill"
+            )
+            .font(applicationFont(offset: -1))
+            .foregroundStyle(.green)
+        case .failure(let failure):
+            Label(
+                proxyTestFailureMessage(failure),
+                systemImage: "xmark.circle.fill"
+            )
+            .font(applicationFont(offset: -1))
+            .foregroundStyle(.red)
+        }
+    }
+
+    private func proxyTestFailureMessage(
+        _ failure: NetworkProxyTestFailure
+    ) -> String {
+        switch failure {
+        case .invalidAddress:
+            localizer.string("测试地址必须是有效的 HTTP 或 HTTPS URL。")
+        case .invalidProxyConfiguration(let error):
+            proxyConfigurationErrorMessage(error)
+        case .invalidResponse:
+            localizer.string("连接失败：服务器没有返回 HTTP 响应。")
+        case .httpStatus(let statusCode):
+            localizer.format("连接失败：HTTP %d。", statusCode)
+        case .requestFailed(let message):
+            localizer.format("连接失败：%@", message)
+        }
+    }
+
+    private func proxyConfigurationErrorMessage(
+        _ error: NetworkProxyConfigurationError
+    ) -> String {
+        switch error {
+        case .emptyURL:
+            localizer.string("请输入代理 URL。")
+        case .invalidURL:
+            localizer.string("代理 URL 无效。")
+        case .unsupportedScheme:
+            localizer.string("代理协议仅支持 HTTP、HTTPS 或 SOCKS5。")
+        case .missingHost:
+            localizer.string("代理 URL 缺少主机名。")
+        case .invalidPort:
+            localizer.string("代理端口无效。")
+        case .credentialsInURL:
+            localizer.string("请在用户名和密码字段填写凭据，不要写入代理 URL。")
+        }
     }
 
     private var gitSettings: some View {
@@ -811,7 +1084,13 @@ struct BreathSettingsView: View {
                 }
             } header: {
                 HStack {
-                    Text(localizer.string("Worktree 库存"))
+                    ExplanationLabel(
+                        localizer.string(
+                            "列出 Breath 会话分支与托管目录。仅剩分支、目录残留和未关联会话的检出目录会继续占用本地资源。"
+                        )
+                    ) {
+                        Text(localizer.string("Worktree 库存"))
+                    }
                     Spacer()
                     if model.isRefreshingManagedWorktreeInventory {
                         ProgressView()
@@ -828,12 +1107,6 @@ struct BreathSettingsView: View {
                         .buttonStyle(.plain)
                     }
                 }
-            } footer: {
-                Text(
-                    localizer.string(
-                        "列出 Breath 会话分支与托管目录。仅剩分支、目录残留和未关联会话的检出目录会继续占用本地资源。"
-                    )
-                )
             }
         }
         .task {

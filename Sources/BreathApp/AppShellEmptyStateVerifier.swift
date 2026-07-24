@@ -162,8 +162,8 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
         require(
-            tabAccessibilityText.contains("实现会话")
-                && tabAccessibilityText.contains("审查会话"),
+            tabAccessibilityText.contains(where: { $0.contains("实现会话") })
+                && tabAccessibilityText.contains(where: { $0.contains("审查会话") }),
             "WorkSession tabs are missing from the accessibility tree: \(tabAccessibilityText)",
             into: &failures
         )
@@ -258,13 +258,15 @@ enum AppShellEmptyStateVerifier {
                     id: selectedSessionID,
                     workspaceID: workspaceID,
                     title: "实现会话",
-                    pane: TerminalPane(id: TerminalPaneID(rawValue: UUID()))
+                    pane: TerminalPane(id: TerminalPaneID(rawValue: UUID())),
+                    titleSource: .agentNative
                 ),
                 WorkSession(
                     id: WorkSessionID(rawValue: UUID()),
                     workspaceID: workspaceID,
                     title: "审查会话",
-                    pane: TerminalPane(id: TerminalPaneID(rawValue: UUID()))
+                    pane: TerminalPane(id: TerminalPaneID(rawValue: UUID())),
+                    titleSource: .agentNative
                 ),
             ],
             selectedWorkSessionID: selectedSessionID

@@ -56,7 +56,7 @@ struct SkillsShHTTPProviderTests {
             return (response, data)
         }
 
-        let provider = SkillsShHTTPProvider(session: session)
+        let provider = SkillsShHTTPProvider(sessionProvider: { session })
         let results = try await provider.search(query: "browser", limit: 3)
 
         #expect(results.count == 1)

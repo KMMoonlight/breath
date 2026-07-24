@@ -175,14 +175,22 @@ public protocol GitHubSkillProviding: Sendable {
 }
 
 public struct GitHubHTTPSkillProvider: GitHubSkillProviding, Sendable {
-    private let session: URLSession
+    private let sessionProvider: @Sendable () -> URLSession
     private let maximumDownloadBytes: Int
 
     public init(
         session: URLSession = .shared,
         maximumDownloadBytes: Int = 64 * 1_024 * 1_024
     ) {
-        self.session = session
+        sessionProvider = { session }
+        self.maximumDownloadBytes = maximumDownloadBytes
+    }
+
+    public init(
+        sessionProvider: @escaping @Sendable () -> URLSession,
+        maximumDownloadBytes: Int = 64 * 1_024 * 1_024
+    ) {
+        self.sessionProvider = sessionProvider
         self.maximumDownloadBytes = maximumDownloadBytes
     }
 
@@ -224,7 +232,7 @@ public struct GitHubHTTPSkillProvider: GitHubSkillProviding, Sendable {
         request.setValue("Breath", forHTTPHeaderField: "User-Agent")
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await sessionProvider().data(for: request)
         } catch {
             throw OnlineSkillSourceError.serviceUnavailable
         }
@@ -391,10 +399,16 @@ public protocol SkillsShProviding: Sendable {
 }
 
 public struct SkillsShHTTPProvider: SkillsShProviding, Sendable {
-    private let session: URLSession
+    private let sessionProvider: @Sendable () -> URLSession
 
     public init(session: URLSession = .shared) {
-        self.session = session
+        sessionProvider = { session }
+    }
+
+    public init(
+        sessionProvider: @escaping @Sendable () -> URLSession
+    ) {
+        self.sessionProvider = sessionProvider
     }
 
     public func search(query: String, limit: Int = 50) async throws -> [SkillsShSearchResult] {
@@ -421,7 +435,7 @@ public struct SkillsShHTTPProvider: SkillsShProviding, Sendable {
         request.setValue("Breath", forHTTPHeaderField: "User-Agent")
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await sessionProvider().data(for: request)
         } catch {
             throw OnlineSkillSourceError.serviceUnavailable
         }

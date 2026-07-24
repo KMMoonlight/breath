@@ -145,25 +145,51 @@ public enum TerminalShortcutPolicy: String, CaseIterable, Equatable, Codable, Se
     case terminalFirst = "terminal-first"
 }
 
+public enum NetworkProxyMode: String, CaseIterable, Equatable, Codable, Sendable {
+    case none
+    case system
+    case manual
+}
+
+public struct NetworkProxySettings: Equatable, Codable, Sendable {
+    public var mode: NetworkProxyMode
+    public var manualURL: String
+    public var username: String
+
+    public init(
+        mode: NetworkProxyMode = .system,
+        manualURL: String = "",
+        username: String = ""
+    ) {
+        self.mode = mode
+        self.manualURL = manualURL
+        self.username = username
+    }
+}
+
 public struct SettingsSnapshot: Equatable, Codable, Sendable {
     public var application: ApplicationSettings
     public var terminal: TerminalSettings
     public var terminalShortcutPolicy: TerminalShortcutPolicy
+    public var networkProxy: NetworkProxySettings
 
     public init(
         application: ApplicationSettings = ApplicationSettings(),
         terminal: TerminalSettings = TerminalSettings(),
-        terminalShortcutPolicy: TerminalShortcutPolicy = .breathFirst
+        terminalShortcutPolicy: TerminalShortcutPolicy = .breathFirst,
+        networkProxy: NetworkProxySettings = NetworkProxySettings()
     ) {
         self.application = application
         self.terminal = terminal
         self.terminalShortcutPolicy = terminalShortcutPolicy
+        self.networkProxy = networkProxy
     }
 
     private enum CodingKeys: String, CodingKey {
         case application
         case terminal
         case terminalShortcutPolicy
+        case networkProxy
     }
 
     public init(from decoder: any Decoder) throws {
@@ -174,7 +200,11 @@ public struct SettingsSnapshot: Equatable, Codable, Sendable {
             terminalShortcutPolicy: try container.decodeIfPresent(
                 TerminalShortcutPolicy.self,
                 forKey: .terminalShortcutPolicy
-            ) ?? .breathFirst
+            ) ?? .breathFirst,
+            networkProxy: try container.decodeIfPresent(
+                NetworkProxySettings.self,
+                forKey: .networkProxy
+            ) ?? NetworkProxySettings()
         )
     }
 
@@ -183,6 +213,7 @@ public struct SettingsSnapshot: Equatable, Codable, Sendable {
         try container.encode(application, forKey: .application)
         try container.encode(terminal, forKey: .terminal)
         try container.encode(terminalShortcutPolicy, forKey: .terminalShortcutPolicy)
+        try container.encode(networkProxy, forKey: .networkProxy)
     }
 
     public static let `default` = SettingsSnapshot()

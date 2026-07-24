@@ -28,7 +28,9 @@ struct WorkspaceEditorLauncher: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(workspacePath.isEmpty)
-                .help(localizer.format("使用 %@ 打开工作区", selectedEditor.displayName))
+                .help(
+                    localizer.format("使用 %@ 打开工作区", selectedEditor.displayName)
+                )
                 .accessibilityLabel(
                     localizer.format("使用 %@ 打开工作区", selectedEditor.displayName)
                 )

@@ -1102,8 +1102,29 @@ struct GitWorkbenchView: View {
     private var commitPanel: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Text(localizer.string("提交信息"))
-                    .font(.subheadline.weight(.semibold))
+                if model.selectedRoot == nil, model.snapshot.roots.count > 1 {
+                    let roots = model.snapshot.roots.filter { !$0.isSubmoduleRoot }
+                    ExplanationLabel(
+                        localizer.format(
+                            "将分别提交 %d 个 Root，不保证跨 Root 原子性",
+                            roots.count
+                        )
+                            + "\n"
+                            + roots.map {
+                                "• \($0.rootURL.lastPathComponent): "
+                                    + localizer.format(
+                                        "%d 个文件",
+                                        $0.changes.count
+                                    )
+                            }.joined(separator: "\n")
+                    ) {
+                        Text(localizer.string("提交信息"))
+                            .font(.subheadline.weight(.semibold))
+                    }
+                } else {
+                    Text(localizer.string("提交信息"))
+                        .font(.subheadline.weight(.semibold))
+                }
                 Spacer()
                 Menu {
                     if !model.recentCommitMessages.isEmpty {
@@ -1154,32 +1175,6 @@ struct GitWorkbenchView: View {
             }
             .accessibilityLabel(localizer.string("提交信息"))
 
-            if model.selectedRoot == nil, model.snapshot.roots.count > 1 {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(
-                        localizer.format(
-                            "将分别提交 %d 个 Root，不保证跨 Root 原子性",
-                            model.snapshot.roots.filter {
-                                !$0.isSubmoduleRoot
-                            }.count
-                        )
-                    )
-                    ForEach(
-                        model.snapshot.roots.filter { !$0.isSubmoduleRoot }
-                    ) { root in
-                        Text(
-                            "• \(root.rootURL.lastPathComponent): "
-                                + localizer.format(
-                                    "%d 个文件",
-                                    root.changes.count
-                                )
-                        )
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-
             HStack {
                 Button(localizer.string("Commit")) {
                     model.commit()
@@ -1229,8 +1224,17 @@ struct GitWorkbenchView: View {
     private func commitHistoryList(graphLayout: GitGraphLayout) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Label(localizer.string("提交历史"), systemImage: "point.3.filled.connected.trianglepath.dotted")
+                ExplanationLabel(
+                    localizer.string(
+                        "支持 author:、since:、until:、path:、branch:、tag:、hash: 和 root:"
+                    )
+                ) {
+                    Label(
+                        localizer.string("提交历史"),
+                        systemImage: "point.3.filled.connected.trianglepath.dotted"
+                    )
                     .font(.subheadline.weight(.semibold))
+                }
                 Spacer(minLength: 4)
                 TextField(
                     localizer.string("搜索提交"),
@@ -1251,11 +1255,6 @@ struct GitWorkbenchView: View {
                     preferences: preferencesStore.preferences
                 )
                 .accessibilityLabel(localizer.string("搜索提交"))
-                .help(
-                    localizer.string(
-                        "支持 author:、since:、until:、path:、branch:、tag:、hash: 和 root:"
-                    )
-                )
                 Text("\(model.commits.count)")
                     .foregroundStyle(.secondary)
             }
@@ -1890,14 +1889,20 @@ struct GitWorkbenchView: View {
                     confirmSynchronizedPush(remote: "origin")
                 }
             } else {
-                Text(localizer.string("请在工作区 Git 设置中启用同步多 Root 分支操作"))
+                Text(localizer.string("未启用"))
             }
         } label: {
             Image(systemName: "square.stack.3d.up")
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help(localizer.string("同步多 Git Root 分支操作"))
+        .help(
+            localizer.string(
+                model.metadata.synchronizeMultiRootOperations
+                    ? "同步多 Git Root 分支操作"
+                    : "请在工作区 Git 设置中启用同步多 Root 分支操作"
+            )
+        )
         .accessibilityLabel(localizer.string("同步多 Git Root 分支操作"))
     }
 
@@ -2253,10 +2258,12 @@ struct GitWorkbenchView: View {
 
     private var authenticationSheet: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(localizer.string("Git 凭证"))
-                .font(.title3.weight(.semibold))
-            Text(localizer.string("凭证只传递给当前 Git 进程，Breath 不会保存。"))
-                .foregroundStyle(.secondary)
+            ExplanationLabel(
+                localizer.string("凭证只传递给当前 Git 进程，Breath 不会保存。")
+            ) {
+                Text(localizer.string("Git 凭证"))
+                    .font(.title3.weight(.semibold))
+            }
             TextField(localizer.string("用户名"), text: $model.authenticationUsername)
             SecureField(localizer.string("密码、Token 或 Passphrase"), text: $model.authenticationSecret)
             Toggle(
@@ -2466,8 +2473,14 @@ struct GitWorkbenchView: View {
     private var snapshotSheet: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(localizer.string("Git 安全快照"))
-                    .font(.title3.weight(.semibold))
+                ExplanationLabel(
+                    localizer.string(
+                        "安全快照是尽力而为的本地缓存，不是连续 Local History。"
+                    )
+                ) {
+                    Text(localizer.string("Git 安全快照"))
+                        .font(.title3.weight(.semibold))
+                }
                 Spacer()
                 Button(localizer.string("完成")) {
                     showingSnapshots = false
@@ -2515,10 +2528,6 @@ struct GitWorkbenchView: View {
                     }
                 }
             }
-            Text(localizer.string("安全快照是尽力而为的本地缓存，不是连续 Local History。"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding()
         }
         .frame(width: 620, height: 460)
     }
@@ -2830,8 +2839,14 @@ struct GitWorkbenchView: View {
     private var interactiveRebaseSheet: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(localizer.string("Interactive Rebase"))
-                    .font(.title3.weight(.semibold))
+                ExplanationLabel(
+                    localizer.string(
+                        "拖动提交可重新排序；受保护或已发布历史会被安全规则阻止。"
+                    )
+                ) {
+                    Text(localizer.string("Interactive Rebase"))
+                        .font(.title3.weight(.semibold))
+                }
                 Spacer()
                 Text(localizer.format("Base %@", String(rebaseBase.prefix(8))))
                     .foregroundStyle(.secondary)
@@ -2897,9 +2912,6 @@ struct GitWorkbenchView: View {
             }
             Divider()
             HStack {
-                Text(localizer.string("拖动提交可重新排序；受保护或已发布历史会被安全规则阻止。"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 Spacer()
                 Button(localizer.string("取消")) {
                     showingInteractiveRebase = false
@@ -3590,16 +3602,15 @@ struct GitWorkbenchView: View {
 
     private func upstreamSheet(_ request: GitUpstreamRequest) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(localizer.string("设置 Upstream"))
-                .font(.headline)
-            Text(
+            ExplanationLabel(
                 localizer.format(
                     "选择 %@ 要跟踪的远程分支。",
                     request.branch.shortName
                 )
-            )
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            ) {
+                Text(localizer.string("设置 Upstream"))
+                    .font(.headline)
+            }
 
             Divider()
 
@@ -4564,18 +4575,20 @@ private struct GitStructuredDiffView: View {
     var body: some View {
         if diff.isBinary || diff.isTooLarge {
             VStack(spacing: 12) {
-                ContentUnavailableView(
-                    localizer.string(diff.isBinary ? "二进制文件" : "文件过大"),
-                    systemImage: diff.isBinary ? "doc.fill" : "doc.badge.ellipsis",
-                    description: Text(
-                        localizer.format(
-                            diff.isBinary
-                                ? "大小：%d 字节，可使用系统预览。"
-                                : "大小：%d 字节；为保持页面响应，未自动生成文本 Diff。",
-                            diff.byteCount
-                        )
+                Image(systemName: diff.isBinary ? "doc.fill" : "doc.badge.ellipsis")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.secondary)
+                ExplanationLabel(
+                    localizer.format(
+                        diff.isBinary
+                            ? "大小：%d 字节，可使用系统预览。"
+                            : "大小：%d 字节；为保持页面响应，未自动生成文本 Diff。",
+                        diff.byteCount
                     )
-                )
+                ) {
+                    Text(localizer.string(diff.isBinary ? "二进制文件" : "文件过大"))
+                        .font(.title3.weight(.semibold))
+                }
                 if diff.path != nil {
                     Button(localizer.string("使用系统应用打开")) {
                         onSystemPreview()

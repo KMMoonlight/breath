@@ -14,6 +14,7 @@ final class BreathApplicationModel: ObservableObject {
     @Published private(set) var enabledAgents: Set<AgentKind> = []
     @Published private(set) var agentCLIStatuses: [AgentKind: AgentCLIInstallationStatus] = [:]
     @Published private(set) var updatingAgents: Set<AgentKind> = []
+    @Published private(set) var networkProxyPassword = ""
     @Published private(set) var creatingWorktreeWorkspaceIDs: Set<WorkspaceID> = []
     @Published private(set) var managedWorktreeInventory:
         [ManagedWorktreeInventoryItem] = []
@@ -41,12 +42,15 @@ final class BreathApplicationModel: ObservableObject {
     private let scriptInstaller = ScriptIntegrationInstaller()
     private let integrationPreferences: AgentIntegrationPreferenceStore
     private let installedAgentCLIDetector: InstalledAgentCLIDetector
-    private let agentCLILatestVersionChecker = AgentCLILatestVersionChecker()
+    private let networkSessionManager: NetworkSessionManager
+    private let networkProxyPasswordStore: any NetworkProxyPasswordStoring
+    private let agentCLILatestVersionChecker: AgentCLILatestVersionChecker
     private let homeDirectory: URL
     private var started = false
     private var startupSucceeded = false
     private var startupError: String?
     private var startupTask: Task<Void, Never>?
+    private var networkProxyPasswordSaveTask: Task<Void, Never>?
     private var resolvedAppearance: ResolvedApplicationAppearance = .dark
 
     static func makeDefault() -> BreathApplicationModel {
@@ -72,12 +76,20 @@ final class BreathApplicationModel: ObservableObject {
         supportDirectory: URL,
         terminalEngineOverride: (any TerminalEngine & TerminalViewProviding)? = nil,
         integrationPreferences: AgentIntegrationPreferenceStore = AgentIntegrationPreferenceStore(),
-        installedAgentCLIDetector: InstalledAgentCLIDetector? = nil
+        installedAgentCLIDetector: InstalledAgentCLIDetector? = nil,
+        networkSessionManager: NetworkSessionManager = .shared,
+        networkProxyPasswordStore: any NetworkProxyPasswordStoring =
+            KeychainNetworkProxyPasswordStore()
     ) throws {
         self.homeDirectory = homeDirectory
         self.integrationPreferences = integrationPreferences
         self.installedAgentCLIDetector = installedAgentCLIDetector
             ?? InstalledAgentCLIDetector(homeDirectory: homeDirectory)
+        self.networkSessionManager = networkSessionManager
+        self.networkProxyPasswordStore = networkProxyPasswordStore
+        agentCLILatestVersionChecker = AgentCLILatestVersionChecker(
+            sessionProvider: { networkSessionManager.session }
+        )
         try FileManager.default.createDirectory(
             at: supportDirectory,
             withIntermediateDirectories: true,
@@ -101,7 +113,13 @@ final class BreathApplicationModel: ObservableObject {
                     )
                 }
             ),
-            recordRepository: repository
+            recordRepository: repository,
+            githubProvider: GitHubHTTPSkillProvider(
+                sessionProvider: { networkSessionManager.session }
+            ),
+            skillsShProvider: SkillsShHTTPProvider(
+                sessionProvider: { networkSessionManager.session }
+            )
         )
         if let terminalEngineOverride {
             terminalEngine = terminalEngineOverride
@@ -194,7 +212,6 @@ final class BreathApplicationModel: ObservableObject {
             lastError = "自动安装 Agent 集成失败：\(error.localizedDescription)"
         }
         refreshEnabledAgents()
-        refreshAgentCLIStatuses()
         isRestoringSelectedSession = true
         startupTask = Task { [weak self] in
             guard let self else { return }
@@ -207,6 +224,18 @@ final class BreathApplicationModel: ObservableObject {
                     await self?.refreshSnapshot()
                 }
                 settings = try await repository.loadSettings()
+                do {
+                    networkProxyPassword = try await networkProxyPasswordStore
+                        .loadPassword()
+                } catch {
+                    networkProxyPassword = ""
+                    lastError = "读取代理密码失败：\(error.localizedDescription)"
+                }
+                networkSessionManager.update(
+                    settings: settings.networkProxy,
+                    password: networkProxyPassword
+                )
+                refreshAgentCLIStatuses()
                 let terminalSettings = resolveTerminalSettings()
                 await runtime.apply(settings: terminalSettings)
                 try await workbench.restoreSnapshotFromRepository()
@@ -503,6 +532,57 @@ final class BreathApplicationModel: ObservableObject {
         persistSettings()
     }
 
+    func saveNetworkProxySettings(_ networkProxy: NetworkProxySettings) {
+        settings.networkProxy = networkProxy
+        networkSessionManager.update(
+            settings: networkProxy,
+            password: networkProxyPassword
+        )
+        persistSettings()
+    }
+
+    func saveNetworkProxyPassword(_ password: String) {
+        networkProxyPassword = password
+        networkSessionManager.update(
+            settings: settings.networkProxy,
+            password: password
+        )
+        let previousSave = networkProxyPasswordSaveTask
+        let passwordStore = networkProxyPasswordStore
+        networkProxyPasswordSaveTask = Task { [weak self] in
+            await previousSave?.value
+            do {
+                try await passwordStore.savePassword(password)
+            } catch {
+                self?.lastError = "保存代理密码失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    var networkProxyConfigurationError: NetworkProxyConfigurationError? {
+        do {
+            try NetworkProxySessionConfiguration.validate(settings.networkProxy)
+            return nil
+        } catch let error as NetworkProxyConfigurationError {
+            return error
+        } catch {
+            return .invalidURL
+        }
+    }
+
+    func testNetworkProxy(address: String) async -> NetworkProxyTestResult {
+        if let networkProxyConfigurationError {
+            return .failure(
+                .invalidProxyConfiguration(networkProxyConfigurationError)
+            )
+        }
+        return await NetworkProxyTester(
+            sessionProvider: { [networkSessionManager] in
+                networkSessionManager.session
+            }
+        ).test(address)
+    }
+
     func synchronizeTerminalAppearance(_ appearance: ResolvedApplicationAppearance) {
         let previousTheme = effectiveTerminalColorTheme
         resolvedAppearance = appearance
@@ -645,6 +725,7 @@ final class BreathApplicationModel: ObservableObject {
     func prepareForTermination() async -> Bool {
         guard !isPreparingForTermination else { return false }
         isPreparingForTermination = true
+        await networkProxyPasswordSaveTask?.value
         if !started { start() }
         await startupTask?.value
         guard startupSucceeded else {
@@ -889,6 +970,16 @@ enum AgentCLIInstallationError: LocalizedError {
 }
 
 struct AgentCLILatestVersionChecker: Sendable {
+    private let sessionProvider: @Sendable () -> URLSession
+
+    init(
+        sessionProvider: @escaping @Sendable () -> URLSession = {
+            URLSession.shared
+        }
+    ) {
+        self.sessionProvider = sessionProvider
+    }
+
     func latestVersion(
         for agent: AgentKind,
         homebrewCask: String? = nil
@@ -902,7 +993,7 @@ struct AgentCLILatestVersionChecker: Sendable {
             timeoutInterval: 5
         )
         request.setValue("Breath", forHTTPHeaderField: "User-Agent")
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
+        guard let (data, response) = try? await sessionProvider().data(for: request),
               let httpResponse = response as? HTTPURLResponse,
               (200..<300).contains(httpResponse.statusCode),
               data.count <= 1_000_000

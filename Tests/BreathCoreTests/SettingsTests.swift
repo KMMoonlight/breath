@@ -35,6 +35,51 @@ struct SettingsTests {
         #expect(SettingsSnapshot.default.terminalShortcutPolicy == .breathFirst)
     }
 
+    @Test("network proxy defaults to the system proxy")
+    func networkProxyDefault() {
+        #expect(SettingsSnapshot.default.networkProxy.mode == .system)
+        #expect(SettingsSnapshot.default.networkProxy.manualURL.isEmpty)
+        #expect(SettingsSnapshot.default.networkProxy.username.isEmpty)
+    }
+
+    @Test("legacy settings snapshots default to the system proxy")
+    func legacyNetworkProxyDefault() throws {
+        let payload = Data(
+            """
+            {
+              "application": {
+                "appearance": "system",
+                "sidebarDensity": "comfortable",
+                "fontSize": 12,
+                "language": "system"
+              },
+              "terminal": {
+                "fontFamily": "Menlo",
+                "fontSize": 13,
+                "colorTheme": "dark",
+                "cursorStyle": "block"
+              }
+            }
+            """.utf8
+        )
+
+        let settings = try JSONDecoder().decode(SettingsSnapshot.self, from: payload)
+
+        #expect(settings.networkProxy == NetworkProxySettings())
+    }
+
+    @Test("manual network proxy settings survive a Codable round trip")
+    func networkProxyCodableRoundTrip() throws {
+        let expected = NetworkProxySettings(
+            mode: .manual,
+            manualURL: "http://127.0.0.1:7890",
+            username: "breath"
+        )
+        let data = try JSONEncoder().encode(expected)
+
+        #expect(try JSONDecoder().decode(NetworkProxySettings.self, from: data) == expected)
+    }
+
     @Test("legacy settings snapshots default terminal shortcut ownership to Breath-first")
     func legacyTerminalShortcutPolicyDefault() throws {
         let payload = Data(

@@ -120,7 +120,7 @@ struct ApplicationLocalizationTests {
         }
     }
 
-    @Test("language setting is wired into settings and both app windows")
+    @Test("language setting is wired into settings and the app window")
     func languageSettingWiring() throws {
         let root = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
@@ -140,13 +140,13 @@ struct ApplicationLocalizationTests {
         )
 
         #expect(settingsSource.contains("selection: applicationLanguage"))
-        #expect(settingsSource.contains(".tag(ApplicationLanguage.system)"))
-        #expect(settingsSource.contains(".tag(ApplicationLanguage.chinese)"))
-        #expect(settingsSource.contains(".tag(ApplicationLanguage.english)"))
+        #expect(settingsSource.contains("ApplicationLanguage.system"))
+        #expect(settingsSource.contains("ApplicationLanguage.chinese"))
+        #expect(settingsSource.contains("ApplicationLanguage.english"))
         #expect(
             appSource.components(
                 separatedBy: ".applicationLanguage(model.settings.application.language)"
-            ).count == 3
+            ).count == 2
         )
         #expect(workbenchSource.contains("Text(localizer.string(\"工作区\"))"))
     }
