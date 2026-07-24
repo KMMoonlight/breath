@@ -21,7 +21,12 @@ struct AgentQuotaReleaseGateTests {
         )
         let amountBlock = source[amount.lowerBound..<amountEnd.lowerBound]
 
-        #expect(source.contains("GridItem(.adaptive(minimum: 180)"))
+        #expect(source.contains("static let cardWidth: CGFloat = 360"))
+        #expect(source.contains(
+            ".adaptive(\n                                        minimum: AgentQuotaLayout.cardWidth,\n                                        maximum: AgentQuotaLayout.cardWidth"
+        ))
+        #expect(source.contains("width: AgentQuotaLayout.cardWidth"))
+        #expect(source.contains("GridItem(.adaptive(minimum: 145)"))
         #expect(percentageBlock.contains("ProgressView("))
         #expect(!amountBlock.contains("ProgressView("))
         #expect(source.contains("direction == .used"))
@@ -47,8 +52,14 @@ struct AgentQuotaReleaseGateTests {
         #expect(source.contains("Color(nsColor: .windowBackgroundColor)"))
         #expect(source.contains(".accessibilityLabel(localizer.string(\"全部刷新\"))"))
         #expect(source.contains("localizer.format(\"刷新 %@ 额度\", card.displayName)"))
-        #expect(source.contains("Label(\n                                localizer.string(\"全部刷新\")"))
-        #expect(source.contains("Label(\n                        localizer.string(\"刷新\")"))
+        #expect(source.range(
+            of: #"Label\(\s*localizer\.string\("全部刷新"\)"#,
+            options: .regularExpression
+        ) != nil)
+        #expect(source.range(
+            of: #"Label\(\s*localizer\.string\("刷新"\)"#,
+            options: .regularExpression
+        ) != nil)
         #expect(!source.contains("查询来源"))
         #expect(!source.contains("完成时间"))
         #expect(!source.contains("fallback"))

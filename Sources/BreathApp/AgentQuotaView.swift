@@ -1,6 +1,12 @@
 import BreathCore
 import SwiftUI
 
+private enum AgentQuotaLayout {
+    static let cardWidth: CGFloat = 360
+    static let cardSpacing: CGFloat = 12
+    static let contentPadding: CGFloat = 16
+}
+
 struct AgentQuotaCard: Equatable, Identifiable, Sendable {
     let kind: AgentKind
     let displayName: String
@@ -139,7 +145,20 @@ struct AgentQuotaView: View {
                     Divider()
 
                     ScrollView {
-                        LazyVStack(spacing: 12) {
+                        LazyVGrid(
+                            columns: [
+                                GridItem(
+                                    .adaptive(
+                                        minimum: AgentQuotaLayout.cardWidth,
+                                        maximum: AgentQuotaLayout.cardWidth
+                                    ),
+                                    spacing: AgentQuotaLayout.cardSpacing,
+                                    alignment: .top
+                                ),
+                            ],
+                            alignment: .leading,
+                            spacing: AgentQuotaLayout.cardSpacing
+                        ) {
                             ForEach(model.cards) { card in
                                 AgentQuotaCardView(
                                     card: card,
@@ -149,7 +168,8 @@ struct AgentQuotaView: View {
                                 )
                             }
                         }
-                        .padding(16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(AgentQuotaLayout.contentPadding)
                     }
                 }
                 .background(Color(nsColor: .windowBackgroundColor))
@@ -173,41 +193,56 @@ private struct AgentQuotaCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Text(card.displayName)
-                    .font(.headline)
-                if let providerName = displayedProviderName {
-                    Text(providerName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if case .available(let snapshot) = card.status {
-                    if let maskedAccount = snapshot.maskedAccount {
-                        Text(maskedAccount)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(card.displayName)
+                        .font(.headline)
+                        .lineLimit(2)
+                    if hasIdentityDetails {
+                        HStack(spacing: 6) {
+                            if let providerName = displayedProviderName {
+                                Text(providerName)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            if let maskedAccount = displayedMaskedAccount {
+                                Text(maskedAccount)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
                     }
                 }
-                Spacer(minLength: 8)
-                statusBadge
-                Button(action: refresh) {
-                    Label(
-                        localizer.string("刷新"),
-                        systemImage: "arrow.clockwise"
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(alignment: .trailing, spacing: 6) {
+                    statusBadge
+                    Button(action: refresh) {
+                        Label(
+                            localizer.string("刷新"),
+                            systemImage: "arrow.clockwise"
+                        )
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(card.status == .checking)
+                    .accessibilityLabel(
+                        localizer.format("刷新 %@ 额度", card.displayName)
                     )
+                    .help(localizer.format("刷新 %@ 额度", card.displayName))
                 }
-                .buttonStyle(.borderless)
-                .disabled(card.status == .checking)
-                .accessibilityLabel(
-                    localizer.format("刷新 %@ 额度", card.displayName)
-                )
-                .help(localizer.format("刷新 %@ 额度", card.displayName))
+                .fixedSize(horizontal: true, vertical: false)
             }
 
             statusContent
         }
         .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(
+            width: AgentQuotaLayout.cardWidth,
+            alignment: .topLeading
+        )
         .background(
             Color(nsColor: .controlBackgroundColor),
             in: RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -227,7 +262,7 @@ private struct AgentQuotaCardView: View {
         case .available(let snapshot):
             LazyVGrid(
                 columns: [
-                    GridItem(.adaptive(minimum: 180), spacing: 10),
+                    GridItem(.adaptive(minimum: 145), spacing: 10),
                 ],
                 alignment: .leading,
                 spacing: 10
@@ -290,6 +325,17 @@ private struct AgentQuotaCardView: View {
             return snapshot.providerName ?? card.providerName
         }
         return card.providerName
+    }
+
+    private var displayedMaskedAccount: String? {
+        if case .available(let snapshot) = card.status {
+            return snapshot.maskedAccount
+        }
+        return nil
+    }
+
+    private var hasIdentityDetails: Bool {
+        displayedProviderName != nil || displayedMaskedAccount != nil
     }
 }
 

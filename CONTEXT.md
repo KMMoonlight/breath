@@ -285,7 +285,7 @@ _Avoid_: 本地用量估算、Token 统计、费用估算、Breath 额度
 _Avoid_: 综合额度、平均额度、主要额度
 
 **额度检查（Quota Check）**：
-对当前已安装且受支持的 Agent CLI 的 Agent 额度及其可用状态的汇总；未安装的 Agent 不进入汇总，也不创建卡片。每个 Agent 独立产生结果，一个 Agent 失败不使其他结果失效。
+对当前已安装且受支持的 Agent CLI 的 Agent 额度及其可用状态的汇总；未安装的 Agent 不进入汇总，也不创建卡片。每个 Agent 独立产生结果，一个 Agent 失败不使其他结果失效。每个 Agent 使用固定宽度的独立卡片，页面按可用空间横向排列并自动换行，不把卡片拉伸为整行。
 _Avoid_: 全部受支持 Agent 清单、Agent 排行、用量估算
 
 **额度检查状态（Quota Check Status）**：
