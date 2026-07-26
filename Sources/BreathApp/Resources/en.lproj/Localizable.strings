@@ -724,6 +724,7 @@
 "警告" = "Warning";
 "未登录" = "Not Signed In";
 "不支持查询" = "Query Unsupported";
+"当前 Auth 暂不支持" = "Current Auth Not Supported";
 "查询失败" = "Query Failed";
 "5 小时" = "5 Hours";
 "每周" = "Weekly";

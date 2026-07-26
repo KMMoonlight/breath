@@ -241,14 +241,25 @@ extension GitWorkbenchService {
         rootURL: URL,
         limit: Int = 20
     ) async throws -> [String] {
-        let result = try await requiredGit(
-            rootURL: rootURL,
+        let result = try await runner.run(
             arguments: [
+                "-C",
+                rootURL.path,
                 "log",
                 "-\(max(1, limit))",
                 "--format=%B%x00",
             ]
         )
+        guard result.exitCode == 0 else {
+            if try await repositoryHasAnyCommit(rootURL: rootURL) == false {
+                return []
+            }
+            throw GitCommandError.failed(
+                command: result.displayCommand,
+                exitCode: result.exitCode,
+                output: result.combinedOutput
+            )
+        }
         var seen: Set<String> = []
         return result.standardOutput
             .split(separator: "\0")
@@ -367,7 +378,19 @@ extension GitWorkbenchService {
         if let resolvedPath = path ?? filter.path {
             arguments += ["--", resolvedPath]
         }
-        let result = try await requiredGit(rootURL: rootURL, arguments: arguments)
+        let result = try await runner.run(
+            arguments: ["-C", rootURL.path] + arguments
+        )
+        guard result.exitCode == 0 else {
+            if try await repositoryHasAnyCommit(rootURL: rootURL) == false {
+                return GitCommitPage(commits: [], hasMore: false)
+            }
+            throw GitCommandError.failed(
+                command: result.displayCommand,
+                exitCode: result.exitCode,
+                output: result.combinedOutput
+            )
+        }
         var commits = GitLogParser(rootID: GitRootID(rawValue: rootURL.path))
             .parse(result.standardOutput)
         let hasMore = commits.count > limit
@@ -375,6 +398,28 @@ extension GitWorkbenchService {
             commits.removeLast(commits.count - limit)
         }
         return GitCommitPage(commits: commits, hasMore: hasMore)
+    }
+
+    private func repositoryHasAnyCommit(rootURL: URL) async throws -> Bool {
+        let result = try await runner.run(
+            arguments: [
+                "-C",
+                rootURL.path,
+                "rev-list",
+                "--all",
+                "--max-count=1",
+            ]
+        )
+        guard result.exitCode == 0 else {
+            throw GitCommandError.failed(
+                command: result.displayCommand,
+                exitCode: result.exitCode,
+                output: result.combinedOutput
+            )
+        }
+        return !result.standardOutput.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty
     }
 
     func commitDetails(rootURL: URL, objectID: String) async throws -> GitCommitDetails {

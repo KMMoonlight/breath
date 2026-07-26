@@ -117,6 +117,7 @@ targets += [
             "BreathApp",
             "BreathCore",
             "BreathPersistence",
+            "BreathTerminal",
             "BreathTestSupport",
         ]
     ),

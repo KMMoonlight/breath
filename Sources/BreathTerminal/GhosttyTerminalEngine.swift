@@ -177,6 +177,15 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         views[paneID]
     }
 
+    func surfacePixelSize(for paneID: TerminalPaneID) -> CGSize? {
+        guard let surface = views[paneID]?.surface else { return nil }
+        let size = ghostty_surface_size(surface)
+        return CGSize(
+            width: Int(size.width_px),
+            height: Int(size.height_px)
+        )
+    }
+
     public func handleShortcutKeyDown(
         _ event: NSEvent,
         for paneID: TerminalPaneID
@@ -972,6 +981,10 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
 
     public func view(for paneID: TerminalPaneID) -> NSView? {
         views[paneID]
+    }
+
+    func surfacePixelSize(for paneID: TerminalPaneID) -> CGSize? {
+        nil
     }
 }
 

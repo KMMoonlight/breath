@@ -37,6 +37,8 @@ struct AgentQuotaReleaseGateTests {
         #expect(source.contains("height: AgentQuotaLayout.quotaWindowHeight"))
         #expect(percentageBlock.contains("ProgressView("))
         #expect(!amountBlock.contains("ProgressView("))
+        #expect(amountBlock.contains("integerAmount(value)"))
+        #expect(source.contains("maximumFractionDigits = 0"))
         #expect(source.contains("direction == .used"))
         #expect(source.contains("window.warning ? .orange : .accentColor"))
         #expect(!source.contains("%.0f%%"))
@@ -55,6 +57,11 @@ struct AgentQuotaReleaseGateTests {
             "case .notLoggedIn, .unsupported: .secondary"
         ))
         #expect(source.contains("case .failed: .orange"))
+        #expect(
+            source.contains(
+                "Text(localizer.string(\"当前 Auth 暂不支持\"))"
+            )
+        )
         #expect(!source.contains("statusBadge"))
         #expect(!source.contains(
             "Text(localizer.string(\"不支持查询\"))"

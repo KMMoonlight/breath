@@ -296,8 +296,12 @@ private struct AgentQuotaCardView: View {
                 }
             }
             .scrollIndicators(.automatic)
-        case .notLoggedIn, .unsupported:
+        case .notLoggedIn:
             Color.clear
+        case .unsupported:
+            Text(localizer.string("当前 Auth 暂不支持"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
         case .failed(let reason):
             Text(localizer.string(reason))
                 .font(.caption)
@@ -320,7 +324,7 @@ private struct AgentQuotaCardView: View {
         case .checking: "查询中"
         case .available: "可用"
         case .notLoggedIn: "未登录"
-        case .unsupported: "不支持查询"
+        case .unsupported: "当前 Auth 暂不支持"
         case .failed: "查询失败"
         }
     }
@@ -379,7 +383,8 @@ private struct AgentQuotaWindowView: View {
                         .tint(window.warning ? .orange : .accentColor)
                 }
             case .amount(let value, let unit):
-                Text([value, unit].compactMap { $0 }.joined(separator: " "))
+                let displayedValue = unit == "Credits" ? integerAmount(value) : value
+                Text([displayedValue, unit].compactMap { $0 }.joined(separator: " "))
                     .font(.title3.monospacedDigit())
                     .textSelection(.enabled)
             }
@@ -434,7 +439,37 @@ private struct AgentQuotaWindowView: View {
         return "\(formatter.string(from: NSNumber(value: value)) ?? String(value))%"
     }
 
+    private func integerAmount(_ value: String) -> String {
+        AgentQuotaAmountFormatter.integer(value, locale: localizer.locale)
+    }
+
     private var localizer: ApplicationLocalizer {
         ApplicationLocalizer(language: applicationLanguage)
+    }
+}
+
+enum AgentQuotaAmountFormatter {
+    static func integer(_ value: String, locale: Locale) -> String {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedValue.range(
+            of: #"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$"#,
+            options: .regularExpression
+        ) != nil else {
+            return value
+        }
+        guard let decimal = Decimal(
+            string: trimmedValue,
+            locale: Locale(identifier: "en_US_POSIX")
+        ) else {
+            return value
+        }
+
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 0
+        return formatter.string(from: NSDecimalNumber(decimal: decimal)) ?? value
     }
 }

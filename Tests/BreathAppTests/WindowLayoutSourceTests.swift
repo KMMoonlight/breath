@@ -1,8 +1,11 @@
 import AppKit
+import BreathCore
+import BreathTestSupport
 import Foundation
 import SwiftUI
 import Testing
 @testable import BreathApp
+@testable import BreathTerminal
 
 @MainActor
 private final class TestSplitTrackingAncestor:
@@ -12,8 +15,238 @@ private final class TestSplitTrackingAncestor:
     var isTrackingDividerForDescendants = false
 }
 
+private struct RecreatedTerminalSplitHarness: View {
+    let firstTerminalView: NSView
+    let secondTerminalView: NSView
+    let fraction: Double
+
+    var body: some View {
+        NativeSplitView(
+            orientation: .horizontal,
+            position: .fraction(fraction),
+            minimumPosition: .fraction(0.1),
+            maximumPosition: .fraction(0.9),
+            minimumSecondLength: 1,
+            updatesPosition: true
+        ) {
+            RecreatedTerminalPaneHarness(terminalView: firstTerminalView)
+        } second: {
+            RecreatedTerminalPaneHarness(terminalView: secondTerminalView)
+        }
+    }
+}
+
+private struct RecreatedTerminalPaneHarness: View {
+    let terminalView: NSView
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(height: 30)
+            RecreatedTerminalHostRepresentable(terminalView: terminalView)
+        }
+    }
+}
+
+private struct RecreatedTerminalHostRepresentable: NSViewRepresentable {
+    let terminalView: NSView
+
+    func makeNSView(context: Context) -> TerminalHostView {
+        let host = TerminalHostView()
+        host.install(terminalView)
+        return host
+    }
+
+    func updateNSView(_ host: TerminalHostView, context: Context) {
+        host.install(terminalView)
+    }
+}
+
 @Suite("Main window layout source guard")
 struct WindowLayoutSourceTests {
+    @Test("recreating a split resynchronizes the Ghostty surface viewport")
+    @MainActor
+    func recreatedSplitResynchronizesGhosttySurfaceViewport() async throws {
+        await NativeUITestGate.shared.acquire()
+        defer { NativeUITestGate.shared.release() }
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "breath-recreated-split-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let engine = try GhosttyTerminalEngine(
+            configurationDirectory: directory,
+            agentSocketURL: directory.appendingPathComponent("events.sock"),
+            synchronizeRendering: false
+        )
+        guard engine.usesLibghostty else { return }
+        let firstPaneID = TerminalPaneID(rawValue: UUID())
+        let secondPaneID = TerminalPaneID(rawValue: UUID())
+        for paneID in [firstPaneID, secondPaneID] {
+            try await engine.open(
+                TerminalLaunch(
+                    paneID: paneID,
+                    workingDirectory: "/tmp",
+                    executable: "/bin/zsh",
+                    arguments: ["-l"],
+                    environment: [:]
+                )
+            )
+        }
+        guard let firstTerminalView = engine.view(for: firstPaneID),
+              let secondTerminalView = engine.view(for: secondPaneID)
+        else {
+            Issue.record("libghostty did not create both terminal views")
+            return
+        }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1_880, height: 1_200),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+
+        let originalPage = NSHostingView(
+            rootView: RecreatedTerminalSplitHarness(
+                firstTerminalView: firstTerminalView,
+                secondTerminalView: secondTerminalView,
+                fraction: 0.5
+            )
+        )
+        window.contentView = originalPage
+        originalPage.layoutSubtreeIfNeeded()
+        await Task.yield()
+
+        for index in 0..<100 {
+            window.contentView = NSView()
+            let fraction = index.isMultiple(of: 2) ? 0.71 : 0.31
+            let recreatedPage = NSHostingView(
+                rootView: RecreatedTerminalSplitHarness(
+                    firstTerminalView: firstTerminalView,
+                    secondTerminalView: secondTerminalView,
+                    fraction: fraction
+                )
+            )
+            window.contentView = recreatedPage
+            for _ in 0..<4 {
+                recreatedPage.layoutSubtreeIfNeeded()
+                await Task.yield()
+            }
+            recreatedPage.layoutSubtreeIfNeeded()
+
+            let firstHost = try #require(
+                firstTerminalView.superview as? TerminalHostView
+            )
+            let secondHost = try #require(
+                secondTerminalView.superview as? TerminalHostView
+            )
+            let hostedWidth = firstHost.bounds.width + secondHost.bounds.width
+            #expect(
+                abs(firstHost.bounds.width / hostedWidth - fraction) < 0.005
+            )
+            #expect(firstTerminalView.frame == firstHost.bounds)
+            #expect(secondTerminalView.frame == secondHost.bounds)
+            #expect(
+                engine.surfacePixelSize(for: firstPaneID)
+                    == firstTerminalView.convertToBacking(
+                        firstTerminalView.bounds
+                    ).size
+            )
+            #expect(
+                engine.surfacePixelSize(for: secondPaneID)
+                    == secondTerminalView.convertToBacking(
+                        secondTerminalView.bounds
+                    ).size
+            )
+        }
+
+        await engine.close(firstPaneID)
+        await engine.close(secondPaneID)
+    }
+
+    @Test("a terminal host reclaims its native view after another host moved it")
+    @MainActor
+    func terminalHostReclaimsMovedNativeView() async {
+        await NativeUITestGate.shared.acquire()
+        defer { NativeUITestGate.shared.release() }
+        let terminalView = NSView()
+        let firstHost = TerminalHostView(
+            frame: NSRect(x: 0, y: 0, width: 900, height: 600)
+        )
+        let secondHost = TerminalHostView(
+            frame: NSRect(x: 0, y: 0, width: 500, height: 600)
+        )
+
+        firstHost.install(terminalView)
+        secondHost.install(terminalView)
+        secondHost.layoutSubtreeIfNeeded()
+        firstHost.install(terminalView)
+        firstHost.layoutSubtreeIfNeeded()
+
+        #expect(terminalView.superview === firstHost)
+        #expect(firstHost.subviews == [terminalView])
+        #expect(secondHost.subviews.isEmpty)
+        #expect(terminalView.frame == firstHost.bounds)
+    }
+
+    @Test("a terminal host synchronizes native geometry on attachment")
+    @MainActor
+    func terminalHostSynchronizesGeometryOnAttachment() {
+        let terminalView = NSView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let host = TerminalHostView(
+            frame: NSRect(x: 0, y: 0, width: 1_240, height: 760)
+        )
+
+        host.install(terminalView)
+
+        #expect(terminalView.frame == host.bounds)
+    }
+
+    @Test("an off-window terminal host cannot steal the view from the visible page")
+    @MainActor
+    func hiddenTerminalHostCannotStealVisibleNativeView() async {
+        await NativeUITestGate.shared.acquire()
+        defer { NativeUITestGate.shared.release() }
+        let terminalView = NSView()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let firstHost = TerminalHostView(
+            frame: NSRect(x: 0, y: 0, width: 900, height: 600)
+        )
+        let secondHost = TerminalHostView(
+            frame: NSRect(x: 0, y: 0, width: 500, height: 600)
+        )
+
+        for _ in 0..<100 {
+            window.contentView = firstHost
+            firstHost.install(terminalView)
+            firstHost.layoutSubtreeIfNeeded()
+            secondHost.install(terminalView)
+
+            #expect(secondHost.window == nil)
+            #expect(terminalView.superview === firstHost)
+            #expect(terminalView.frame == firstHost.bounds)
+
+            window.contentView = secondHost
+            secondHost.install(terminalView)
+            secondHost.layoutSubtreeIfNeeded()
+            firstHost.install(terminalView)
+
+            #expect(firstHost.window == nil)
+            #expect(terminalView.superview === secondHost)
+            #expect(terminalView.frame == secondHost.bounds)
+        }
+    }
+
     @Test("activity bar opens Agent quota after Skills")
     func activityBarOpensAgentQuota() throws {
         let root = URL(
@@ -159,6 +392,32 @@ struct WindowLayoutSourceTests {
         #expect(!sessionTreeSource.contains(".transition("))
         #expect(sessionTreeSource.contains("transaction.disablesAnimations = true"))
         #expect(sessionTreeSource.contains("withTransaction(transaction)"))
+    }
+
+    @Test("the selected split session background does not intercept disclosure clicks")
+    func splitSessionSelectionBackgroundIgnoresHitTesting() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/WorkbenchView.swift"
+            ),
+            encoding: .utf8
+        )
+        let rowStart = try #require(
+            source.range(of: "private func sessionRowContent(")
+        )
+        let archiveStart = try #require(
+            source.range(
+                of: "private func archive(_ session: WorkSession)",
+                range: rowStart.upperBound..<source.endIndex
+            )
+        )
+        let rowSource = source[rowStart.lowerBound..<archiveStart.lowerBound]
+
+        #expect(rowSource.contains(".allowsHitTesting(false)"))
     }
 
     @Test("terminal focus centrally arbitrates Breath shortcuts")
@@ -969,7 +1228,7 @@ struct WindowLayoutSourceTests {
         )
     }
 
-    @Test("activity bar opens Git for the currently selected workspace")
+    @Test("Git repository selection stays independent from terminal workspace")
     func activityBarOwnsTheGitEntry() throws {
         let root = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
@@ -1054,12 +1313,30 @@ struct WindowLayoutSourceTests {
         #expect(source.contains("height: WorkbenchLayout.activityBarIconSize"))
         #expect(activityBar.contains("WorkbenchAccessibility.openGitWorkbench"))
         #expect(!activityBar.contains("isEnabled: model.currentWorkspaceID != nil"))
-        #expect(activityBar.contains("openGitWorkbenchForCurrentWorkspace"))
+        #expect(activityBar.contains("openGitWorkbench"))
         #expect(activityBar.contains("WorkbenchAccessibility.openTaskView"))
-        #expect(source.contains("case gitWorkbench(WorkspaceID?)"))
-        #expect(source.contains("detailMode = .gitWorkbench(model.currentWorkspaceID)"))
+        #expect(source.contains("case gitWorkbench"))
+        #expect(source.contains("@State private var selectedGitWorkspace: Workspace?"))
+        #expect(!source.contains("case gitWorkbench(WorkspaceID?)"))
+        #expect(
+            !source.contains(
+                "if previousSnapshot.selectedWorkSessionID != snapshot.selectedWorkSessionID"
+            )
+        )
+        #expect(source.contains("detailMode = .gitWorkbench"))
         #expect(source.contains("GitWorkbenchUnselectedView("))
+        #expect(source.contains("workspaces: gitWorkspaceChoices"))
+        #expect(source.contains("onSelectWorkspace: selectGitWorkspace"))
+        #expect(source.contains(".id(workspace.path)"))
         #expect(gitSource.contains("struct GitWorkbenchUnselectedView: View"))
+        #expect(gitSource.contains("private var workspacePicker: some View"))
+        #expect(gitSource.contains("workspacePicker"))
+        #expect(
+            gitSource.contains(
+                "if model.snapshot.roots.count > 1 {\n                rootPicker"
+            )
+        )
+        #expect(!gitSource.contains("if !model.snapshot.roots.isEmpty"))
         #expect(!gitSource.contains("let onClose: () -> Void"))
         #expect(!gitSource.contains("toolbarIcon(\"xmark\")"))
         #expect(!gitSource.contains("关闭 Git 工作台"))

@@ -1,11 +1,30 @@
 import BreathAgents
 import BreathCore
+import Foundation
 import Testing
 @testable import BreathApp
 
 @MainActor
 @Suite("Agent quota page")
 struct AgentQuotaViewModelTests {
+    @Test("credits display as integers without changing compound quota values")
+    func formatsCreditAmounts() {
+        let locale = Locale(identifier: "en_US_POSIX")
+
+        #expect(
+            AgentQuotaAmountFormatter.integer(
+                "2102.1608575000",
+                locale: locale
+            ) == "2102"
+        )
+        #expect(
+            AgentQuotaAmountFormatter.integer(
+                "250 / 1000",
+                locale: locale
+            ) == "250 / 1000"
+        )
+    }
+
     @Test("loads only installed Agent cards and their independent status")
     func loadsInstalledCards() async {
         let service = AgentQuotaService(

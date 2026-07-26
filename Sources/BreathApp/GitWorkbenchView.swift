@@ -97,9 +97,24 @@ private struct GitDialogRequest: Identifiable {
     let content: GitDialogContent
 }
 
+struct GitWorkspaceChoice: Identifiable, Equatable {
+    let id: String
+    let workspace: Workspace
+    let displayName: String
+
+    init(workspace: Workspace, displayName: String? = nil) {
+        id = URL(
+            fileURLWithPath: workspace.path,
+            isDirectory: true
+        ).standardizedFileURL.path
+        self.workspace = workspace
+        self.displayName = displayName ?? workspace.displayName
+    }
+}
+
 struct GitWorkbenchUnselectedView: View {
-    let workspaces: [Workspace]
-    let onSelectWorkspace: (WorkspaceID) -> Void
+    let workspaces: [GitWorkspaceChoice]
+    let onSelectWorkspace: (String) -> Void
 
     @Environment(\.applicationLanguage) private var applicationLanguage
 
@@ -110,7 +125,7 @@ struct GitWorkbenchUnselectedView: View {
                     .font(.headline)
 
                 Picker("", selection: workspaceSelection) {
-                    Text(localizer.string("请选择")).tag(WorkspaceID?.none)
+                    Text(localizer.string("请选择")).tag(String?.none)
                     ForEach(workspaces) { workspace in
                         Text(workspace.displayName).tag(Optional(workspace.id))
                     }
@@ -133,12 +148,12 @@ struct GitWorkbenchUnselectedView: View {
         .accessibilityLabel(localizer.string("Git 工作台"))
     }
 
-    private var workspaceSelection: Binding<WorkspaceID?> {
+    private var workspaceSelection: Binding<String?> {
         Binding(
             get: { nil },
-            set: { workspaceID in
-                guard let workspaceID else { return }
-                onSelectWorkspace(workspaceID)
+            set: { workspacePath in
+                guard let workspacePath else { return }
+                onSelectWorkspace(workspacePath)
             }
         )
     }
@@ -150,9 +165,11 @@ struct GitWorkbenchUnselectedView: View {
 
 struct GitWorkbenchView: View {
     let workspace: Workspace
+    let workspaces: [GitWorkspaceChoice]
     @ObservedObject var model: GitWorkspaceViewModel
     @ObservedObject private var preferencesStore: GitPreferencesStore
     let onAddWorkspace: (URL) -> Void
+    let onSelectWorkspace: (String) -> Void
 
     @Environment(\.applicationLanguage) private var applicationLanguage
     @Environment(\.colorScheme) private var colorScheme
@@ -189,15 +206,19 @@ struct GitWorkbenchView: View {
 
     init(
         workspace: Workspace,
+        workspaces: [GitWorkspaceChoice],
         model: GitWorkspaceViewModel,
-        onAddWorkspace: @escaping (URL) -> Void
+        onAddWorkspace: @escaping (URL) -> Void,
+        onSelectWorkspace: @escaping (String) -> Void
     ) {
         self.workspace = workspace
+        self.workspaces = workspaces
         _model = ObservedObject(wrappedValue: model)
         _preferencesStore = ObservedObject(
             wrappedValue: model.preferencesStore
         )
         self.onAddWorkspace = onAddWorkspace
+        self.onSelectWorkspace = onSelectWorkspace
     }
 
     var body: some View {
@@ -356,7 +377,10 @@ struct GitWorkbenchView: View {
             Text(localizer.string("Git 工作台"))
                 .font(.headline)
 
-            rootPicker
+            workspacePicker
+            if model.snapshot.roots.count > 1 {
+                rootPicker
+            }
             toolbarButton(
                 "arrow.clockwise",
                 "刷新",
@@ -472,6 +496,35 @@ struct GitWorkbenchView: View {
         .pageToolbarLeadingPadding()
         .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
         .frame(height: WorkbenchLayout.pageToolbarHeight)
+    }
+
+    private var workspacePicker: some View {
+        Picker(
+            "",
+            selection: Binding(
+                get: { selectedWorkspaceID },
+                set: { workspacePath in
+                    guard workspacePath != selectedWorkspaceID else { return }
+                    onSelectWorkspace(workspacePath)
+                }
+            )
+        ) {
+            ForEach(workspaces) { candidate in
+                Text(candidate.displayName).tag(candidate.id)
+            }
+        }
+        .labelsHidden()
+        .frame(maxWidth: 180)
+        .fixedSize()
+        .help(workspace.path)
+        .accessibilityLabel(localizer.string("Git 目录"))
+    }
+
+    private var selectedWorkspaceID: String {
+        URL(
+            fileURLWithPath: workspace.path,
+            isDirectory: true
+        ).standardizedFileURL.path
     }
 
     private var preferredPullStrategy: GitPullStrategy {

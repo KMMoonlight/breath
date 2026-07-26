@@ -1336,6 +1336,14 @@ public actor Workbench {
     }
 
     public func closePane(_ paneID: TerminalPaneID) async throws {
+        try await withManagedWorktreeLifecycleGate {
+            try await closePaneWithoutAcquiringGate(paneID)
+        }
+    }
+
+    private func closePaneWithoutAcquiringGate(
+        _ paneID: TerminalPaneID
+    ) async throws {
         guard let sessionIndex = currentSnapshot.workSessions.firstIndex(where: {
             $0.layout.paneIDs.contains(paneID)
         }) else {

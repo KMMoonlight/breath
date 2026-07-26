@@ -21,7 +21,7 @@ private enum WorkbenchDetailMode: Equatable {
     case skills
     case agentQuota
     case settings
-    case gitWorkbench(WorkspaceID?)
+    case gitWorkbench
 }
 
 struct WorkbenchView: View {
@@ -42,6 +42,7 @@ struct WorkbenchView: View {
     @State private var hoveredSessionID: WorkSessionID?
     @State private var pendingTerminalFocusID: TerminalPaneID?
     @State private var detailMode = WorkbenchDetailMode.workspace
+    @State private var selectedGitWorkspace: Workspace?
     @State private var isWindowFullScreen = false
     @StateObject private var gitCoordinator = GitWorkbenchCoordinator()
 
@@ -74,15 +75,19 @@ struct WorkbenchView: View {
                 updateWorkspaceExpansion(from: previousSnapshot, to: snapshot)
                 offerRemovalForUnavailableWorkspace()
                 focusPendingTerminalAfterViewUpdate()
-                if previousSnapshot.selectedWorkSessionID != snapshot.selectedWorkSessionID {
-                    if case .gitWorkbench = detailMode {
-                        detailMode = .gitWorkbench(model.currentWorkspaceID)
-                    }
+                if let selectedGitWorkspace,
+                   !gitWorkspaceChoices(for: snapshot).contains(where: {
+                       $0.id == GitWorkspaceChoice(
+                           workspace: selectedGitWorkspace
+                       ).id
+                   })
+                {
+                    self.selectedGitWorkspace = nil
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathOpenGitWorkbench)) { _ in
                 guard GitWorkbenchReleaseGate.isEnabled else { return }
-                detailMode = .gitWorkbench(model.currentWorkspaceID)
+                openGitWorkbench()
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathOpenSettings)) { _ in
                 detailMode = .settings
@@ -104,22 +109,14 @@ struct WorkbenchView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathGitCommit)) { _ in
                 guard GitWorkbenchReleaseGate.isEnabled else { return }
-                guard let workspaceID = model.currentWorkspaceID,
-                      let workspace = model.gitWorkspace(for: workspaceID)
-                else {
-                    return
-                }
-                detailMode = .gitWorkbench(workspaceID)
+                guard let workspace = gitCommandWorkspace else { return }
+                selectGitWorkspace(workspace)
                 gitCoordinator.model(for: workspace).shouldFocusCommitMessage = true
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathGitPush)) { _ in
                 guard GitWorkbenchReleaseGate.isEnabled else { return }
-                guard let workspaceID = model.currentWorkspaceID,
-                      let workspace = model.gitWorkspace(for: workspaceID)
-                else {
-                    return
-                }
-                detailMode = .gitWorkbench(workspaceID)
+                guard let workspace = gitCommandWorkspace else { return }
+                selectGitWorkspace(workspace)
                 gitCoordinator.model(for: workspace).shouldPresentPushReview = true
             }
     }
@@ -323,7 +320,7 @@ struct WorkbenchView: View {
                 activityBarButton(
                     accessibilityLabel: WorkbenchAccessibility.openGitWorkbench,
                     isSelected: isGitWorkbenchSelected,
-                    action: openGitWorkbenchForCurrentWorkspace
+                    action: openGitWorkbench
                 ) {
                     GitBranchIcon()
                 }
@@ -806,6 +803,7 @@ struct WorkbenchView: View {
                     )
                     .padding(.leading, selectionBackgroundLeadingPadding)
                     .padding(.trailing, -5)
+                    .allowsHitTesting(false)
             }
         }
         .contextMenu {
@@ -926,14 +924,79 @@ struct WorkbenchView: View {
     }
 
     private var isGitWorkbenchSelected: Bool {
-        if case .gitWorkbench = detailMode {
-            return true
-        }
-        return false
+        detailMode == .gitWorkbench
     }
 
-    private func openGitWorkbenchForCurrentWorkspace() {
-        detailMode = .gitWorkbench(model.currentWorkspaceID)
+    private var gitCommandWorkspace: Workspace? {
+        if detailMode == .gitWorkbench, let selectedGitWorkspace {
+            return selectedGitWorkspace
+        }
+        if let currentWorkspaceID = model.currentWorkspaceID {
+            return model.gitWorkspace(for: currentWorkspaceID)
+        }
+        return selectedGitWorkspace
+    }
+
+    private func openGitWorkbench() {
+        if selectedGitWorkspace == nil,
+           let currentWorkspaceID = model.currentWorkspaceID
+        {
+            selectedGitWorkspace = model.gitWorkspace(for: currentWorkspaceID)
+        }
+        detailMode = .gitWorkbench
+    }
+
+    private var gitWorkspaceChoices: [GitWorkspaceChoice] {
+        gitWorkspaceChoices(for: model.snapshot)
+    }
+
+    private func gitWorkspaceChoices(
+        for snapshot: WorkbenchSnapshot
+    ) -> [GitWorkspaceChoice] {
+        var choices: [GitWorkspaceChoice] = []
+        var paths: Set<String> = []
+        for workspace in snapshot.workspaces {
+            let workspaceChoice = GitWorkspaceChoice(workspace: workspace)
+            if paths.insert(workspaceChoice.id).inserted {
+                choices.append(workspaceChoice)
+            }
+            for session in snapshot.activeWorkSessions where
+                session.workspaceID == workspace.id
+            {
+                guard let worktree = session.managedWorktree,
+                      worktree.state == .available
+                else {
+                    continue
+                }
+                let worktreeWorkspace = Workspace(
+                    id: workspace.id,
+                    path: worktree.workingDirectory,
+                    displayName: workspace.displayName
+                )
+                let choice = GitWorkspaceChoice(
+                    workspace: worktreeWorkspace,
+                    displayName: "\(workspace.displayName) · \(worktree.branchName)"
+                )
+                if paths.insert(choice.id).inserted {
+                    choices.append(choice)
+                }
+            }
+        }
+        return choices
+    }
+
+    private func selectGitWorkspace(_ workspacePath: String) {
+        guard let workspace = gitWorkspaceChoices.first(where: {
+            $0.id == workspacePath
+        })?.workspace else {
+            return
+        }
+        selectGitWorkspace(workspace)
+    }
+
+    private func selectGitWorkspace(_ workspace: Workspace) {
+        selectedGitWorkspace = workspace
+        detailMode = .gitWorkbench
     }
 
     private var sidebarActionForegroundColor: Color {
@@ -980,22 +1043,21 @@ struct WorkbenchView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(localizer.string(WorkbenchAccessibility.taskViewPanel))
         } else if GitWorkbenchReleaseGate.isEnabled,
-                  case .gitWorkbench(let workspaceID) = detailMode
+                  detailMode == .gitWorkbench
         {
-            if let workspaceID,
-               let workspace = model.gitWorkspace(for: workspaceID)
-            {
+            if let workspace = selectedGitWorkspace {
                 GitWorkbenchView(
                     workspace: workspace,
+                    workspaces: gitWorkspaceChoices,
                     model: gitCoordinator.model(for: workspace),
-                    onAddWorkspace: { model.addWorkspace($0) }
+                    onAddWorkspace: { model.addWorkspace($0) },
+                    onSelectWorkspace: selectGitWorkspace
                 )
+                .id(workspace.path)
             } else {
                 GitWorkbenchUnselectedView(
-                    workspaces: model.snapshot.workspaces,
-                    onSelectWorkspace: { workspaceID in
-                        detailMode = .gitWorkbench(workspaceID)
-                    }
+                    workspaces: gitWorkspaceChoices,
+                    onSelectWorkspace: selectGitWorkspace
                 )
             }
         } else {
@@ -2156,6 +2218,7 @@ final class NativeSplitNSView:
     private var minimumPosition = NativeSplitPosition.fraction(0)
     private var maximumPosition = NativeSplitPosition.fraction(1)
     private var minimumSecondLength: CGFloat = 0
+    private var configuredPosition: NativeSplitPosition?
     private var pendingPosition: NativeSplitPosition?
     private var isApplyingPosition = false
     private var isTrackingDivider = false
@@ -2185,6 +2248,23 @@ final class NativeSplitNSView:
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.window != nil,
+                  !self.isTrackingDivider,
+                  let configuredPosition = self.configuredPosition
+            else {
+                return
+            }
+            self.pendingPosition = configuredPosition
+            self.needsLayout = true
+            self.layoutSubtreeIfNeeded()
+        }
     }
 
     func setContent(first: AnyView, second: AnyView) {
@@ -2222,6 +2302,7 @@ final class NativeSplitNSView:
         self.minimumSecondLength = minimumSecondLength
         self.onResize = onResize
         if appliesPosition {
+            configuredPosition = position
             if isTrackingDivider {
                 pendingPosition = nil
             } else if hasTrackingSplitAncestor {
@@ -2901,6 +2982,8 @@ final class TerminalHostView: NSView {
     private var focusEventMonitor: Any?
     private var lastReportedFocus: Bool?
     private var retainsInputFocus = false
+    private weak var requestedTerminalView: NSView?
+    private var requestedPlaceholder = "终端正在启动…"
     var onFocusChange: ((Bool) -> Void)?
     var shortcutPolicy: TerminalShortcutPolicy = .breathFirst
     var breathShortcutMatch: ((NSEvent) -> BreathShortcutMatch?)?
@@ -2908,8 +2991,16 @@ final class TerminalHostView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        attachRequestedViewIfNeeded()
+        synchronizeHostedViewGeometry()
         updateFocusMonitoring()
         reportFocusAfterEvent()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        attachRequestedViewIfNeeded()
+        synchronizeHostedViewGeometry()
     }
 
     override func viewDidHide() {
@@ -2917,13 +3008,40 @@ final class TerminalHostView: NSView {
         relinquishInputFocus(in: window)
     }
 
+    override func layout() {
+        super.layout()
+        synchronizeHostedViewGeometry()
+    }
+
     func install(
         _ terminalView: NSView?,
         placeholder: String = "终端正在启动…"
     ) {
-        if let terminalView, hostedView === terminalView { return }
+        requestedTerminalView = terminalView
+        requestedPlaceholder = placeholder
+        attachRequestedViewIfNeeded()
+        synchronizeHostedViewGeometry()
+    }
+
+    private func attachRequestedViewIfNeeded() {
+        let terminalView = requestedTerminalView
+        if let terminalView,
+           hostedView === terminalView,
+           terminalView.superview === self
+        {
+            return
+        }
+        if let terminalView,
+           terminalView.superview !== self,
+           !isVisibleInWindow,
+           let currentHost = terminalView.superview as? TerminalHostView,
+           currentHost.isVisibleInWindow
+        {
+            return
+        }
         hostedView?.removeFromSuperview()
-        let view = terminalView ?? NSTextField(labelWithString: placeholder)
+        let view = terminalView
+            ?? NSTextField(labelWithString: requestedPlaceholder)
         hostedView = view
         view.translatesAutoresizingMaskIntoConstraints = false
         addSubview(view)
@@ -2934,6 +3052,13 @@ final class TerminalHostView: NSView {
             view.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
         reportFocusAfterEvent()
+    }
+
+    private func synchronizeHostedViewGeometry() {
+        guard let hostedView else { return }
+        let expectedFrame = NSRect(origin: .zero, size: bounds.size)
+        guard hostedView.frame != expectedFrame else { return }
+        hostedView.frame = expectedFrame
     }
 
     func synchronizeFocusState() {

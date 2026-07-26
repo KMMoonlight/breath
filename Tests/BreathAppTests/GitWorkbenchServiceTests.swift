@@ -256,6 +256,80 @@ struct GitWorkbenchServiceTests {
         #expect(workspace.emptyState == .notRepository)
     }
 
+    @Test("a non-Git workspace stays error-free across refreshes")
+    @MainActor
+    func refreshesNonRepositoryWithoutErrors() async throws {
+        let directory = try TemporaryDirectory()
+        let storage = try TemporaryDirectory()
+        let defaults = try #require(
+            UserDefaults(suiteName: "GitWorkbenchServiceTests.\(UUID())")
+        )
+        let model = GitWorkspaceViewModel(
+            workspace: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: directory.url.path,
+                displayName: "Not Git"
+            ),
+            operationRegistry: GitOperationRegistry(
+                store: GitConsoleStore(
+                    fileURL: storage.url.appendingPathComponent("console.json")
+                )
+            ),
+            preferencesStore: GitPreferencesStore(
+                defaults: defaults,
+                key: "preferences"
+            ),
+            metadataStore: GitWorkspaceMetadataStore(baseURL: storage.url)
+        )
+
+        await model.load()
+        await model.refresh()
+        await model.refresh()
+
+        #expect(model.snapshot.roots.isEmpty)
+        #expect(model.snapshot.emptyState == .notRepository)
+        #expect(model.errorMessage == nil)
+    }
+
+    @Test("an unborn repository without remotes stays an error-free empty history")
+    @MainActor
+    func opensUnbornRepositoryWithoutRepeatedErrors() async throws {
+        let repository = try GitWorkbenchTestRepository()
+        let storage = try TemporaryDirectory()
+        let defaults = try #require(
+            UserDefaults(suiteName: "GitWorkbenchServiceTests.\(UUID())")
+        )
+        let model = GitWorkspaceViewModel(
+            workspace: Workspace(
+                id: WorkspaceID(rawValue: UUID()),
+                path: repository.url.path,
+                displayName: "Unborn"
+            ),
+            operationRegistry: GitOperationRegistry(
+                store: GitConsoleStore(
+                    fileURL: storage.url.appendingPathComponent("console.json")
+                )
+            ),
+            preferencesStore: GitPreferencesStore(
+                defaults: defaults,
+                key: "preferences"
+            ),
+            metadataStore: GitWorkspaceMetadataStore(baseURL: storage.url)
+        )
+
+        await model.load()
+        #expect(model.snapshot.roots.count == 1)
+        #expect(model.commits.isEmpty)
+        #expect(model.recentCommitMessages.isEmpty)
+        #expect(model.errorMessage == nil)
+
+        model.errorMessage = nil
+        await model.refresh()
+        await model.refresh()
+
+        #expect(model.errorMessage == nil)
+    }
+
     @Test("initialization and clone reject implicit or destructive destinations")
     func initializesAndClonesSafely() async throws {
         let empty = try TemporaryDirectory()

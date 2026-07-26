@@ -1520,6 +1520,62 @@ struct WorkbenchTests {
         #expect(await runtime.stoppedPaneIDs == [secondPaneID])
     }
 
+    @Test("concurrent pane closures persist the final collapsed layout")
+    func concurrentPaneClosuresPersistFinalLayout() async throws {
+        let repository = SuspendedSaveRepository(suspendedSave: 5)
+        let runtime = RecordingTerminalRuntime()
+        let workbench = Workbench(
+            repository: repository,
+            terminalRuntime: runtime,
+            defaultShell: { "/bin/zsh" }
+        )
+        let workspaceID = try await workbench.addWorkspace(
+            at: URL(fileURLWithPath: "/tmp/example-project", isDirectory: true)
+        )
+        _ = try await workbench.createWorkSession(in: workspaceID)
+        let firstPaneID = try #require(
+            await workbench.snapshot().workSessions.first?.pane.id
+        )
+        let secondPaneID = try await workbench.splitPane(
+            firstPaneID,
+            orientation: .horizontal
+        )
+        let thirdPaneID = try await workbench.splitPane(
+            secondPaneID,
+            orientation: .vertical
+        )
+
+        let firstClose = Task {
+            try await workbench.closePane(thirdPaneID)
+        }
+        while await repository.saveCallCount < 5 {
+            await Task.yield()
+        }
+        let secondClose = Task {
+            try await workbench.closePane(secondPaneID)
+        }
+        for _ in 0..<1_000 {
+            if await repository.saveCallCount >= 6 { break }
+            await Task.yield()
+        }
+        await repository.allowSaves()
+        try await firstClose.value
+        try await secondClose.value
+
+        #expect(
+            await workbench.snapshot().workSessions.first?.layout.paneIDs
+                == [firstPaneID]
+        )
+        #expect(
+            await repository.latestSnapshot.workSessions.first?.layout.paneIDs
+                == [firstPaneID]
+        )
+        #expect(
+            Set(await runtime.stoppedPaneIDs)
+                == Set([secondPaneID, thirdPaneID])
+        )
+    }
+
     @Test("closing a pane publishes the collapsed layout before destroying its terminal")
     func closePanePublishesLayoutBeforeStop() async throws {
         let runtime = SuspendedStopTerminalRuntime()
