@@ -107,18 +107,22 @@ private struct AutomationMarkdownListView: View {
                     Text(marker(for: index))
                         .foregroundStyle(.secondary)
                         .frame(width: 24, alignment: .trailing)
-                    if let checkbox = item.checkbox {
+                    if let taskMarker = item.taskMarker {
                         Image(
-                            systemName: checkbox
+                            systemName: taskMarker == .checked
                                 ? "checkmark.square.fill"
                                 : "square"
                         )
                         .foregroundStyle(
-                            checkbox ? Color.accentColor : Color.secondary
+                            taskMarker == .checked
+                                ? Color.accentColor
+                                : Color.secondary
                         )
                         .accessibilityLabel(
                             localizer.string(
-                                checkbox ? "已完成" : "未完成"
+                                taskMarker == .checked
+                                    ? "已完成"
+                                    : "未完成"
                             )
                         )
                     }
@@ -285,7 +289,7 @@ private enum AutomationMarkdownAttributedStringBuilder {
                 code,
                 intent: intent.union(.code)
             )
-        case .link(let destination, _, let children):
+        case .link(let destination, let children):
             var value = build(children, intent: intent)
             if let destination,
                let url = URL(string: destination)
@@ -293,15 +297,9 @@ private enum AutomationMarkdownAttributedStringBuilder {
                 value.link = url
             }
             return value
-        case .image(let source, _, let children):
+        case .image(let children):
             var value = styled("▧ ", intent: intent)
-            var alternative = build(children, intent: intent)
-            if let source,
-               let url = URL(string: source)
-            {
-                alternative.link = url
-            }
-            value.append(alternative)
+            value.append(build(children, intent: intent))
             return value
         case .softBreak:
             return styled(" ", intent: intent)

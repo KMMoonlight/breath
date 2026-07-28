@@ -33,7 +33,7 @@ struct AutomationMarkdownTests {
                 ),
                 .unorderedList([
                     AutomationMarkdownListItem(
-                        checkbox: nil,
+                        taskMarker: nil,
                         blocks: [
                             .paragraph(
                                 AutomationMarkdownText(spans: [
@@ -42,7 +42,7 @@ struct AutomationMarkdownTests {
                             ),
                             .unorderedList([
                                 AutomationMarkdownListItem(
-                                    checkbox: nil,
+                                    taskMarker: nil,
                                     blocks: [
                                         .paragraph(
                                             AutomationMarkdownText(spans: [
@@ -92,7 +92,6 @@ struct AutomationMarkdownTests {
                             .text(" and "),
                             .link(
                                 destination: "https://example.com",
-                                title: nil,
                                 children: [.text("docs")]
                             ),
                             .text("."),
@@ -103,7 +102,7 @@ struct AutomationMarkdownTests {
                     start: 3,
                     items: [
                         AutomationMarkdownListItem(
-                            checkbox: true,
+                            taskMarker: .checked,
                             blocks: [
                                 .paragraph(
                                     AutomationMarkdownText(spans: [
@@ -116,13 +115,11 @@ struct AutomationMarkdownTests {
                             ]
                         ),
                         AutomationMarkdownListItem(
-                            checkbox: nil,
+                            taskMarker: nil,
                             blocks: [
                                 .paragraph(
                                     AutomationMarkdownText(spans: [
                                         .image(
-                                            source: "https://example.com/diagram.png",
-                                            title: nil,
                                             children: [.text("diagram")]
                                         ),
                                     ])

@@ -24,8 +24,13 @@ indirect enum AutomationMarkdownBlock: Equatable, Sendable {
 }
 
 struct AutomationMarkdownListItem: Equatable, Sendable {
-    let checkbox: Bool?
+    let taskMarker: AutomationMarkdownTaskMarker?
     let blocks: [AutomationMarkdownBlock]
+}
+
+enum AutomationMarkdownTaskMarker: Equatable, Sendable {
+    case checked
+    case unchecked
 }
 
 struct AutomationMarkdownText: Equatable, Sendable {
@@ -52,14 +57,9 @@ indirect enum AutomationMarkdownSpan: Equatable, Sendable {
     case inlineCode(String)
     case link(
         destination: String?,
-        title: String?,
         children: [AutomationMarkdownSpan]
     )
-    case image(
-        source: String?,
-        title: String?,
-        children: [AutomationMarkdownSpan]
-    )
+    case image(children: [AutomationMarkdownSpan])
     case softBreak
     case lineBreak
     case inlineHTML(String)
@@ -110,10 +110,10 @@ private enum AutomationMarkdownParser {
 
     static func listItem(_ item: ListItem) -> AutomationMarkdownListItem {
         AutomationMarkdownListItem(
-            checkbox: item.checkbox.map { checkbox in
+            taskMarker: item.checkbox.map { checkbox in
                 switch checkbox {
-                case .checked: true
-                case .unchecked: false
+                case .checked: .checked
+                case .unchecked: .unchecked
                 }
             },
             blocks: item.children.compactMap(block)
@@ -154,13 +154,10 @@ private enum AutomationMarkdownParser {
         case let link as Link:
             return .link(
                 destination: link.destination,
-                title: link.title,
                 children: link.children.compactMap(span)
             )
         case let image as Image:
             return .image(
-                source: image.source,
-                title: image.title,
                 children: image.children.compactMap(span)
             )
         case is SoftBreak:
