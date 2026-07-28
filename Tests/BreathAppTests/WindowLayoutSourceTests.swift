@@ -301,6 +301,60 @@ struct WindowLayoutSourceTests {
         )
     }
 
+    @Test("Automation split-pane toolbars share one aligned compact row")
+    func automationSplitPaneToolbarsAlign() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/AutomationView.swift"
+            ),
+            encoding: .utf8
+        )
+        let listStart = try #require(
+            source.range(of: "private func listPanel(")
+        )
+        let emptyRowStart = try #require(
+            source.range(
+                of: "private var compactEmptyListRow",
+                range: listStart.upperBound..<source.endIndex
+            )
+        )
+        let listPanel = source[
+            listStart.lowerBound..<emptyRowStart.lowerBound
+        ]
+        let detailHeaderStart = try #require(
+            source.range(of: "private var detailHeader: some View")
+        )
+        let promptSectionStart = try #require(
+            source.range(
+                of: "private var promptSection: some View",
+                range: detailHeaderStart.upperBound..<source.endIndex
+            )
+        )
+        let detailHeader = source[
+            detailHeaderStart.lowerBound..<promptSectionStart.lowerBound
+        ]
+        let sharedHeight = ".frame(height: AutomationViewLayout.paneToolbarHeight)"
+
+        #expect(listPanel.contains(sharedHeight))
+        #expect(detailHeader.contains(sharedHeight))
+        #expect(
+            detailHeader.contains(
+                "HStack(alignment: .firstTextBaseline, spacing: 8)"
+            )
+        )
+        #expect(!detailHeader.contains("VStack(alignment: .leading"))
+        #expect(
+            detailHeader.contains(
+                "AutomationViewLayout.paneToolbarHorizontalPadding"
+            )
+        )
+        #expect(!detailHeader.contains(".pageToolbarLeadingPadding()"))
+    }
+
     @Test("Work Session Tabs use vertical separators instead of line-through dividers")
     func workSessionTabsUseVerticalSeparators() throws {
         let root = URL(

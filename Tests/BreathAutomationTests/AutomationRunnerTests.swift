@@ -254,6 +254,80 @@ struct AutomationRunnerTests {
         #expect(result.finalOutput == "configuration copied")
     }
 
+    @Test("Codex relies on the outer sandbox instead of nesting sandbox-exec")
+    func codexDoesNotAttemptNestedSandbox() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "breath-codex-sandbox-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let workspace = root.appendingPathComponent(
+            "workspace",
+            isDirectory: true
+        )
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        let runtime = root.appendingPathComponent("runtime", isDirectory: true)
+        for directory in [workspace, home, runtime] {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("workspace content".utf8).write(
+            to: workspace.appendingPathComponent("project.txt")
+        )
+
+        let executable = root.appendingPathComponent("fake-codex")
+        try Data(
+            """
+            #!/bin/sh
+            output=""
+            externally_sandboxed=false
+            while [ "$#" -gt 0 ]; do
+              case "$1" in
+                --output-last-message)
+                  shift
+                  output="$1"
+                  ;;
+                --dangerously-bypass-approvals-and-sandbox)
+                  externally_sandboxed=true
+                  ;;
+              esac
+              shift
+            done
+            if [ "$externally_sandboxed" = true ]; then
+              result=$(/bin/cat "$PWD/project.txt" 2>&1)
+            else
+              result=$(/usr/bin/sandbox-exec -p '(version 1) (allow default)' \
+                /bin/cat "$PWD/project.txt" 2>&1)
+            fi
+            printf '%s' "$result" > "$output"
+            """.utf8
+        ).write(to: executable)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executable.path
+        )
+        let runner = CLIAutomationRunner(
+            homeDirectory: home,
+            runtimeRootDirectory: runtime
+        )
+
+        let result = try await runner.run(
+            AutomationRunRequest(
+                runID: AutomationRunID(rawValue: UUID()),
+                automationID: AutomationID(rawValue: UUID()),
+                agent: .codex,
+                executablePath: executable.path,
+                workspacePath: workspace.path,
+                prompt: "Read project.txt",
+                maximumDurationMinutes: 1
+            )
+        )
+
+        #expect(result.finalOutput == "workspace content")
+    }
+
     @Test("every supported Agent adapter extracts one structured final answer")
     func supportedAgentFinalAnswers() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(

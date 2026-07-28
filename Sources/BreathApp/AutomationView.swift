@@ -46,6 +46,8 @@ private enum AutomationViewLayout {
     static let listIdealWidth: CGFloat = 370
     static let listMaximumWidth: CGFloat = 470
     static let contentPadding: CGFloat = 16
+    static let paneToolbarHeight: CGFloat = 40
+    static let paneToolbarHorizontalPadding: CGFloat = 12
 }
 
 struct AutomationView: View {
@@ -194,8 +196,11 @@ struct AutomationView: View {
             .accessibilityLabel(
                 localizer.string(AutomationAccessibility.search)
             )
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(
+                .horizontal,
+                AutomationViewLayout.paneToolbarHorizontalPadding
+            )
+            .frame(height: AutomationViewLayout.paneToolbarHeight)
 
             Divider()
 
@@ -602,18 +607,16 @@ private struct AutomationDetailView: View {
     }
 
     private var detailHeader: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(automation.name)
-                    .font(.headline)
-                Text(
-                    automation.isEnabled
-                        ? localizer.string("已启用")
-                        : localizer.string("已禁用")
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(automation.name)
+                .font(.headline)
+            Text(
+                automation.isEnabled
+                    ? localizer.string("已启用")
+                    : localizer.string("已禁用")
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
             Spacer()
             if let activeRun {
                 Button(localizer.string("取消运行")) {
@@ -659,9 +662,11 @@ private struct AutomationDetailView: View {
             .menuStyle(.borderlessButton)
             .accessibilityLabel(localizer.string("更多操作"))
         }
-        .pageToolbarLeadingPadding()
-        .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
-        .frame(height: WorkbenchLayout.pageToolbarHeight)
+        .padding(
+            .horizontal,
+            AutomationViewLayout.paneToolbarHorizontalPadding
+        )
+        .frame(height: AutomationViewLayout.paneToolbarHeight)
     }
 
     private var promptSection: some View {

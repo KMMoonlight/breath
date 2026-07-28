@@ -74,7 +74,11 @@ struct AgentAdapterRegistryTests {
     @Test("every automation capability declares its non-interactive command contract")
     func automationCommandContracts() throws {
         let expected: [AgentKind: [String]] = [
-            .codex: ["exec", "--sandbox", "read-only", "--ephemeral"],
+            .codex: [
+                "exec",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--ephemeral",
+            ],
             .claudeCode: ["--permission-mode", "dontAsk", "--no-session-persistence"],
             .geminiCLI: ["--approval-mode", "plan", "--skip-trust"],
             .githubCopilotCLI: ["--allow-all-tools", "--no-ask-user"],

@@ -233,7 +233,9 @@ public struct AgentAutomationCapability: Equatable, Sendable {
         case .codex:
             [
                 "exec",
-                "--sandbox", "read-only",
+                // Breath supplies the outer sandbox and fixed approval policy.
+                // A nested Codex sandbox fails with sandbox_apply on macOS.
+                "--dangerously-bypass-approvals-and-sandbox",
                 "--ephemeral",
                 "--skip-git-repo-check",
                 "--color", "never",
