@@ -49,6 +49,8 @@ struct ApplicationLocalizationTests {
         #expect(english.string("安装状态") == "Installation Status")
         #expect(english.string("额度") == "Quota")
         #expect(english.string("每月") == "Monthly")
+        #expect(chinese.string("未命名") == "未命名")
+        #expect(english.string("未命名") == "Untitled")
         #expect(english.string("额度查询超时。") == "Quota query timed out.")
         #expect(chinese.string("此 Skill 已安装") == "此 Skill 已安装")
         #expect(english.format("作者：%@", "Example") == "Author: Example")

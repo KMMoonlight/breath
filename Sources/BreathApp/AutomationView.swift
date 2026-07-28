@@ -12,6 +12,20 @@ enum AutomationAccessibility {
     static let detail = "自动化详情"
 }
 
+func automationAgentUnavailableReason(
+    selectedAgent: AgentKind?,
+    options: [AutomationAgentOption],
+    missingAgentReason: String
+) -> String? {
+    guard let selectedAgent else { return nil }
+    guard let option = options.first(where: {
+        $0.adapter.kind == selectedAgent
+    }) else {
+        return missingAgentReason
+    }
+    return option.availability.unavailableReason
+}
+
 private enum AutomationViewLayout {
     static let compactWidth: CGFloat = 760
     static let listMinimumWidth: CGFloat = 310
@@ -1083,7 +1097,13 @@ private struct AutomationEditorSheet: View {
             second: 0,
             of: now
         ) ?? now
-        _name = State(initialValue: automation?.name ?? "")
+        let localizer = ApplicationLocalizer(
+            language: model.settings.application.language
+        )
+        _name = State(
+            initialValue: automation?.name
+                ?? localizer.string("未命名")
+        )
         _workspaceID = State(
             initialValue: automation?.workspaceID
                 ?? model.snapshot.workspaces.first?.id
@@ -1161,12 +1181,18 @@ private struct AutomationEditorSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(
-                    automation == nil
-                        ? localizer.string("新建自动化")
-                        : localizer.string("编辑自动化")
-                )
-                .font(.headline)
+                ExplanationLabel(
+                    localizer.string(
+                        "Agent 直接读取真实工作区，但 macOS 沙盒会阻止它修改项目文件。"
+                    )
+                ) {
+                    Text(
+                        automation == nil
+                            ? localizer.string("新建自动化")
+                            : localizer.string("编辑自动化")
+                    )
+                    .font(.headline)
+                }
                 Spacer()
             }
             .padding(16)
@@ -1258,13 +1284,6 @@ private struct AutomationEditorSheet: View {
                     )
                     .foregroundStyle(.red)
                 }
-                Text(
-                    localizer.string(
-                        "Agent 直接读取真实工作区，但 macOS 沙盒会阻止它修改项目文件。"
-                    )
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
             }
             .formStyle(.grouped)
             Divider()
@@ -1503,11 +1522,13 @@ private struct AutomationEditorSheet: View {
     }
 
     private var selectedAgentReason: String? {
-        guard let agent else { return nil }
-        return model.automationAgentOptions.first {
-            $0.adapter.kind == agent
-        }?.availability.unavailableReason
-            ?? localizer.string("所选 Agent 当前不可用于自动化。")
+        automationAgentUnavailableReason(
+            selectedAgent: agent,
+            options: model.automationAgentOptions,
+            missingAgentReason: localizer.string(
+                "所选 Agent 当前不可用于自动化。"
+            )
+        )
     }
 
     private func agentOptionLabel(_ option: AutomationAgentOption) -> String {

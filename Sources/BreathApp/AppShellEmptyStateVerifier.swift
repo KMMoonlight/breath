@@ -139,8 +139,23 @@ enum AppShellEmptyStateVerifier {
             automationEditorAccessibilityText.contains("所属工作区")
                 && automationEditorAccessibilityText.contains(
                     "没有可选工作区"
-                ),
-            "the Automation editor did not expose an empty Workspace picker",
+                )
+                && automationEditorAccessibilityText.contains("未命名"),
+            "the Automation editor did not expose its localized defaults",
+            into: &failures
+        )
+        require(
+            automationEditorAccessibilityText.contains(
+                "Agent 直接读取真实工作区，但 macOS 沙盒会阻止它修改项目文件。"
+            ),
+            "the Automation editor title lost its Workspace-access explanation",
+            into: &failures
+        )
+        require(
+            !automationEditorAccessibilityText.contains(
+                "所选 Agent 当前不可用于自动化。"
+            ),
+            "the Automation editor marked an available Agent as unavailable",
             into: &failures
         )
         require(

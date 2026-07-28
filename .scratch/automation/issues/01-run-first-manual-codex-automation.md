@@ -16,7 +16,8 @@ Status: ready-for-agent
 
 - [ ] 活动栏原“任务”位置改为“自动化”，没有选中 Workspace 或 Work Session 时仍可进入；选择工作会话后沿用既有规则返回终端
 - [ ] 没有 Workspace 时仍可浏览自动化库并打开创建表单；“所属工作区”下拉没有可选项，选择前不能保存
-- [ ] 用户可以创建名称、Workspace、固定多行 Prompt、Codex、仅手动触发和最大运行时长完整的自动化；名称、Workspace、Prompt 和 Agent 必填
+- [ ] 用户可以创建名称、Workspace、固定多行 Prompt、Codex、仅手动触发和最大运行时长完整的自动化；名称默认使用本地化“未命名 / Untitled”，Workspace、Prompt 和 Agent 必填
+- [ ] Workspace 只读解释只通过新建/编辑标题后的 `ExplanationLabel` tooltip 展示，不作为表单正文或页脚
 - [ ] 自动化使用不展示的唯一 ID，创建后默认启用但不立即运行，并通过公开用例与 GRDB repository 在应用重启后恢复
 - [ ] Codex 只有在已安装、达到兼容版本且具备自动化 Runner 契约时可选择；未安装时不显示，版本过旧时显示禁用原因
 - [ ] “立即运行”直接以真实 Workspace 为工作目录启动 Codex，不创建 Work Session、Terminal Tab、Terminal Pane、Agent Conversation、Managed Worktree 或 Git 分支
