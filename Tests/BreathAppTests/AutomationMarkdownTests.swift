@@ -153,12 +153,13 @@ struct AutomationMarkdownTests {
 
     @Test("preserves soft breaks, hard breaks, and safe inline HTML")
     func preservesInlineBreaksAndHTML() {
+        let hardBreakLine = "second" + String(repeating: " ", count: 2)
         let document = AutomationMarkdownDocument(
-            parsing: """
-            first
-            second  
-            third <kbd>Enter</kbd>
-            """
+            parsing: [
+                "first",
+                hardBreakLine,
+                "third <kbd>Enter</kbd>",
+            ].joined(separator: "\n")
         )
 
         #expect(
