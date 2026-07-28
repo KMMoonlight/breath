@@ -88,6 +88,7 @@ targets += [
             "BreathSkills",
             "BreathTerminal",
             "BreathUpdates",
+            .product(name: "Markdown", package: "swift-markdown"),
         ],
         resources: [.process("Resources")],
         linkerSettings: [
@@ -164,6 +165,10 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.10.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.9.4"),
+        .package(
+            url: "https://github.com/swiftlang/swift-markdown.git",
+            exact: "0.8.0"
+        ),
         .package(url: "https://github.com/jpsim/Yams.git", exact: "6.2.2"),
     ],
     targets: targets

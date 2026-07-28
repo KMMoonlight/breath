@@ -1057,22 +1057,6 @@ private struct AutomationDetailView: View {
     }
 }
 
-private struct MarkdownAutomationOutput: View {
-    let output: String
-
-    var body: some View {
-        Group {
-            if let attributed = try? AttributedString(markdown: output) {
-                Text(attributed)
-            } else {
-                Text(output)
-            }
-        }
-        .textSelection(.enabled)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
 private enum AutomationTriggerChoice: String, CaseIterable, Identifiable {
     case manual
     case once

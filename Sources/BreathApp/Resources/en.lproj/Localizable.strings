@@ -404,6 +404,8 @@
 "推送 Tags" = "Push Tags";
 "拖动提交可重新排序；受保护或已发布历史会被安全规则阻止。" = "Drag commits to reorder them. Safety rules block protected or published history.";
 "完成" = "Done";
+"已完成" = "Completed";
+"未完成" = "Not completed";
 "未跟踪" = "Untracked";
 "未暂存" = "Unstaged";
 "文件" = "File";
