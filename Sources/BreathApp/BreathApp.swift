@@ -255,6 +255,16 @@ private final class BreathAppDelegate: NSObject, NSApplicationDelegate {
     weak var model: BreathApplicationModel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+#if DEBUG
+        if let iconURL = Bundle.module.url(
+            forResource: "AppIcon",
+            withExtension: "png"
+        ) {
+            NSApplication.shared.applicationIconImage = NSImage(
+                contentsOf: iconURL
+            )
+        }
+#endif
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(workspaceDidWake(_:)),
