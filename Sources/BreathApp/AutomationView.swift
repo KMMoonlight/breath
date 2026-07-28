@@ -328,7 +328,12 @@ struct AutomationView: View {
                         .frame(width: 6, height: 6)
                         .accessibilityHidden(true)
                     Text(statusLabel(recentRun.status, localizer: localizer))
-                    Text(recentRun.queuedAt, style: .relative)
+                    switch automationRunTimePresentation(for: recentRun) {
+                    case .fixed(let date):
+                        Text(date, style: .time)
+                    case .relative(let date):
+                        Text(date, style: .relative)
+                    }
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)

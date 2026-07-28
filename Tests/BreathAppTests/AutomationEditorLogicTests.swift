@@ -95,4 +95,39 @@ struct AutomationEditorLogicTests {
                 == .relative(queuedAt)
         )
     }
+
+    @Test("the Automation list freezes terminal run times")
+    func automationListStopsTerminalRunTime() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/AutomationView.swift"
+            ),
+            encoding: .utf8
+        )
+        let rowStart = try #require(
+            source.range(of: "private func automationRow(")
+        )
+        let actionsStart = try #require(
+            source.range(
+                of: "private func automationRowActions(",
+                range: rowStart.upperBound..<source.endIndex
+            )
+        )
+        let row = source[rowStart.lowerBound..<actionsStart.lowerBound]
+
+        #expect(
+            row.contains(
+                "automationRunTimePresentation(for: recentRun)"
+            )
+        )
+        #expect(
+            !row.contains(
+                "Text(recentRun.queuedAt, style: .relative)"
+            )
+        )
+    }
 }
