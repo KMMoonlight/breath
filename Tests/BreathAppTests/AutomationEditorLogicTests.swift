@@ -1,5 +1,6 @@
 import BreathAgents
 import BreathAutomation
+import Foundation
 import Testing
 @testable import BreathApp
 
@@ -51,6 +52,47 @@ struct AutomationEditorLogicTests {
                 options: [option],
                 missingAgentReason: "missing"
             ) == "version too old"
+        )
+    }
+
+    @Test("a failed run shows a fixed completion time")
+    func failedRunTimeStopsUpdating() {
+        let queuedAt = Date(timeIntervalSince1970: 100)
+        let endedAt = Date(timeIntervalSince1970: 110)
+        let run = AutomationRun(
+            id: AutomationRunID(rawValue: UUID()),
+            automationID: AutomationID(rawValue: UUID()),
+            status: .failed,
+            triggerSource: .manual,
+            queuedAt: queuedAt,
+            startedAt: queuedAt,
+            endedAt: endedAt,
+            effectiveDuration: 10,
+            agent: .codex
+        )
+
+        #expect(
+            automationRunTimePresentation(for: run)
+                == .fixed(endedAt)
+        )
+    }
+
+    @Test("an active run keeps showing relative elapsed time")
+    func activeRunTimeKeepsUpdating() {
+        let queuedAt = Date(timeIntervalSince1970: 100)
+        let run = AutomationRun(
+            id: AutomationRunID(rawValue: UUID()),
+            automationID: AutomationID(rawValue: UUID()),
+            status: .running,
+            triggerSource: .manual,
+            queuedAt: queuedAt,
+            startedAt: queuedAt,
+            agent: .codex
+        )
+
+        #expect(
+            automationRunTimePresentation(for: run)
+                == .relative(queuedAt)
         )
     }
 }

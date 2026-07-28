@@ -338,13 +338,17 @@ public struct CLIAutomationRunner: AutomationRunning, Sendable {
         ]
         let values = try source.resourceValues(forKeys: [
             .isDirectoryKey,
+            .isRegularFileKey,
             .isSymbolicLinkKey,
         ])
         if values.isSymbolicLink == true {
             return
         }
-        if values.isDirectory != true {
+        if values.isRegularFile == true {
             try fileManager.copyItem(at: source, to: destination)
+            return
+        }
+        guard values.isDirectory == true else {
             return
         }
         try fileManager.createDirectory(

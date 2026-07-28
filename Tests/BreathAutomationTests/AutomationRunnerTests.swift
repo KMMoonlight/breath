@@ -179,6 +179,81 @@ struct AutomationRunnerTests {
         )
     }
 
+    @Test("runtime setup skips Unix sockets in Agent configuration")
+    func runtimeSetupSkipsConfigurationSockets() async throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent(
+                "breath-sock-\(UUID().uuidString.prefix(8))",
+                isDirectory: true
+            )
+        let workspace = root.appendingPathComponent(
+            "workspace",
+            isDirectory: true
+        )
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        let runtime = root.appendingPathComponent("runtime", isDirectory: true)
+        let codexHome = home.appendingPathComponent(
+            ".codex",
+            isDirectory: true
+        )
+        let socketDirectory = codexHome.appendingPathComponent(
+            "ipc",
+            isDirectory: true
+        )
+        for directory in [workspace, socketDirectory, runtime] {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("model = \"test\"".utf8).write(
+            to: codexHome.appendingPathComponent("config.toml")
+        )
+        let socketDescriptor = try bindTestUnixSocket(
+            at: socketDirectory.appendingPathComponent("ipc.sock").path
+        )
+        defer { Darwin.close(socketDescriptor) }
+
+        let executable = root.appendingPathComponent("fake-codex")
+        try Data(
+            """
+            #!/bin/sh
+            output=""
+            while [ "$#" -gt 0 ]; do
+              if [ "$1" = "--output-last-message" ]; then
+                shift
+                output="$1"
+              fi
+              shift
+            done
+            printf 'configuration copied' > "$output"
+            """.utf8
+        ).write(to: executable)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executable.path
+        )
+        let runner = CLIAutomationRunner(
+            homeDirectory: home,
+            runtimeRootDirectory: runtime
+        )
+
+        let result = try await runner.run(
+            AutomationRunRequest(
+                runID: AutomationRunID(rawValue: UUID()),
+                automationID: AutomationID(rawValue: UUID()),
+                agent: .codex,
+                executablePath: executable.path,
+                workspacePath: workspace.path,
+                prompt: "Review",
+                maximumDurationMinutes: 1
+            )
+        )
+
+        #expect(result.finalOutput == "configuration copied")
+    }
+
     @Test("every supported Agent adapter extracts one structured final answer")
     func supportedAgentFinalAnswers() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -555,4 +630,40 @@ struct AutomationRunnerTests {
             ).isEmpty
         )
     }
+}
+
+private func bindTestUnixSocket(at path: String) throws -> Int32 {
+    let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard descriptor >= 0 else {
+        throw CocoaError(.fileWriteUnknown)
+    }
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    let bytes = Array(path.utf8CString)
+    guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
+        Darwin.close(descriptor)
+        throw CocoaError(.fileWriteInvalidFileName)
+    }
+    withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+        bytes.withUnsafeBufferPointer { source in
+            UnsafeMutableRawPointer(pointer)
+                .assumingMemoryBound(to: CChar.self)
+                .update(from: source.baseAddress!, count: bytes.count)
+        }
+    }
+    let result = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(
+                descriptor,
+                $0,
+                socklen_t(MemoryLayout<sockaddr_un>.size)
+            )
+        }
+    }
+    guard result == 0 else {
+        Darwin.close(descriptor)
+        throw CocoaError(.fileWriteUnknown)
+    }
+    return descriptor
 }

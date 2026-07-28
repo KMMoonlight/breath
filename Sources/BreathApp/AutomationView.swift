@@ -26,6 +26,20 @@ func automationAgentUnavailableReason(
     return option.availability.unavailableReason
 }
 
+enum AutomationRunTimePresentation: Equatable {
+    case fixed(Date)
+    case relative(Date)
+}
+
+func automationRunTimePresentation(
+    for run: AutomationRun
+) -> AutomationRunTimePresentation {
+    if run.status.isTerminal {
+        return .fixed(run.endedAt ?? run.queuedAt)
+    }
+    return .relative(run.queuedAt)
+}
+
 private enum AutomationViewLayout {
     static let compactWidth: CGFloat = 760
     static let listMinimumWidth: CGFloat = 310
@@ -813,8 +827,14 @@ private struct AutomationDetailView: View {
                                             localizer.string("未查看")
                                         )
                                 }
-                                Text(run.queuedAt, style: .relative)
-                                    .foregroundStyle(.secondary)
+                                switch automationRunTimePresentation(for: run) {
+                                case .fixed(let date):
+                                    Text(date, style: .time)
+                                        .foregroundStyle(.secondary)
+                                case .relative(let date):
+                                    Text(date, style: .relative)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                             .contentShape(Rectangle())
                             .padding(.horizontal, 10)
