@@ -54,13 +54,22 @@ struct ExplanationPresentationTests {
         #expect(!git.contains("description:Text("))
     }
 
-    @Test("info help uses 300ms popovers while control help remains native")
+    @Test("info help uses 300ms plain tooltips while control help remains native")
     func hoverHelpIsConsistentAccessibleAndDocumented() throws {
         let component = try source("ExplanationHelp.swift")
         let compactComponent = component.filter { !$0.isWhitespace }
         #expect(component.contains("Task.sleep(for: .milliseconds(300))"))
-        #expect(component.contains(".popover(isPresented:"))
+        #expect(component.contains("NSPanel("))
+        #expect(!component.contains(".popover("))
         #expect(component.contains(".hoverTooltip(explanation)"))
+        #expect(component.contains("below anchorRect: NSRect"))
+        #expect(
+            component.contains(
+                "anchorRect.minY - size.height - Self.anchorGap"
+            )
+        )
+        #expect(component.contains("TooltipBubble(text: text, width: width)"))
+        #expect(!component.contains("// TEMP DEBUG"))
         #expect(component.contains(".accessibilityHint(explanation)"))
         #expect(component.contains("struct ExplanationLabel"))
         #expect(!component.contains("struct ExplanationHelp"))
@@ -111,6 +120,9 @@ struct ExplanationPresentationTests {
         #expect(guidelines.contains("静态解释文字，不得作为正文、页脚或空状态描述直接展示"))
         #expect(guidelines.contains("统一放在 `info.circle` 信息图标的悬浮提示中"))
         #expect(guidelines.contains("解释提示统一在指针停留 300ms 后出现"))
+        #expect(
+            guidelines.contains("不使用系统 Popover 的液态玻璃样式")
+        )
         #expect(guidelines.contains("`info.circle` 不得单独、悬空展示"))
         #expect(guidelines.contains("组成同一个 `ExplanationLabel`"))
         #expect(guidelines.contains("以该图标作为弹出锚点"))

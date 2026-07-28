@@ -180,6 +180,34 @@ struct ManagedWorktreeServiceTests {
         )
     }
 
+    @Test("inventory ignores a retained repository after it is deleted")
+    func inventoryIgnoresDeletedRetainedRepository() async throws {
+        let fixture = try GitWorktreeFixture()
+        defer { fixture.remove() }
+        let workspace = Workspace(
+            id: WorkspaceID(rawValue: UUID()),
+            path: fixture.workspaceURL.path,
+            displayName: "client"
+        )
+        let service = ManagedWorktreeService(
+            managedRootURL: fixture.managedRootURL
+        )
+        let didPreserve = try await service.preserveInventoryRepository(
+            for: workspace,
+            knownWorktrees: []
+        )
+        try FileManager.default.removeItem(at: fixture.repositoryURL)
+
+        let inventory = await service.inventory(
+            workspaces: [],
+            knownWorktrees: []
+        )
+
+        #expect(didPreserve)
+        #expect(inventory.items.isEmpty)
+        #expect(inventory.warnings.isEmpty)
+    }
+
     @Test("a retained inventory branch can be deleted")
     func deletesRetainedInventoryBranch() async throws {
         let fixture = try GitWorktreeFixture()

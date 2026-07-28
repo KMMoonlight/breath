@@ -374,9 +374,7 @@ struct BreathSettingsView: View {
                         options: TerminalColorTheme.compatible(with: resolvedAppearance).map {
                             (localizer.string($0.displayName), $0)
                         },
-                        accessibilityLabel: localizer.string("颜色主题"),
-                        searchPlaceholder: localizer.string("搜索主题"),
-                        noResultsTitle: localizer.string("没有匹配的主题")
+                        accessibilityLabel: localizer.string("颜色主题")
                     )
                 }
                 TerminalThemeCodePreview(
@@ -1617,125 +1615,150 @@ struct BreathSettingsView: View {
 }
 
 private struct TerminalThemePicker: View {
-    @Environment(\.colorScheme) private var colorScheme
     @Binding var selection: TerminalColorTheme
     let options: [(title: String, value: TerminalColorTheme)]
     let accessibilityLabel: String
-    let searchPlaceholder: String
-    let noResultsTitle: String
-
-    @State private var isPresented = false
-    @State private var query = ""
-
-    private var selectedTitle: String {
-        options.first(where: { $0.value == selection })?.title
-            ?? selection.displayName
-    }
-
-    private var filteredOptions: [(title: String, value: TerminalColorTheme)] {
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedQuery.isEmpty else { return options }
-        return options.filter {
-            $0.title.localizedCaseInsensitiveContains(trimmedQuery)
-        }
-    }
 
     var body: some View {
-        Button {
-            isPresented.toggle()
-        } label: {
-            HStack(spacing: 8) {
-                themePreview(selection)
-                Text(selectedTitle)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 10)
-            .frame(
-                width: SettingsLayout.controlColumnWidth,
-                height: SettingsLayout.controlHeight
-            )
-            .background {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.08))
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        ThemePopUpButton(selection: $selection, options: options)
+        .frame(
+            width: SettingsLayout.controlColumnWidth,
+            height: SettingsLayout.controlHeight
+        )
         .accessibilityLabel(accessibilityLabel)
-        .popover(isPresented: $isPresented, arrowEdge: .trailing) {
-            VStack(spacing: 10) {
-                TextField(searchPlaceholder, text: $query)
-                    .textFieldStyle(.roundedBorder)
+    }
+}
 
-                if filteredOptions.isEmpty {
-                    ContentUnavailableView.search(text: query)
-                        .accessibilityLabel(noResultsTitle)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 2) {
-                            ForEach(filteredOptions, id: \.value) { option in
-                                Button {
-                                    selection = option.value
-                                    isPresented = false
-                                } label: {
-                                    HStack(spacing: 10) {
-                                        themePreview(option.value)
-                                        Text(option.title)
-                                            .lineLimit(1)
-                                        Spacer(minLength: 8)
-                                        if option.value == selection {
-                                            Image(systemName: "checkmark")
-                                                .foregroundStyle(.tint)
-                                        }
-                                    }
-                                    .padding(.horizontal, 8)
-                                    .frame(maxWidth: .infinity, minHeight: 30)
-                                    .contentShape(Rectangle())
-                                    .background(
-                                        option.value == selection
-                                            ? Color.accentColor.opacity(0.12)
-                                            : Color.clear,
-                                        in: RoundedRectangle(
-                                            cornerRadius: 6,
-                                            style: .continuous
-                                        )
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                }
-            }
-            .padding(12)
-            .frame(width: 320, height: 420)
-        }
-        .onChange(of: isPresented) { _, presented in
-            if !presented {
-                query = ""
-            }
-        }
+/// Plain native pop-up button. Every option stays in the menu, so the
+/// system's own selection anchoring, scrolling, and type-ahead apply.
+private struct ThemePopUpButton: NSViewRepresentable {
+    @Binding var selection: TerminalColorTheme
+    let options: [(title: String, value: TerminalColorTheme)]
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(selection: $selection)
     }
 
-    private func themePreview(_ theme: TerminalColorTheme) -> some View {
-        let palette = theme.palette
-        return HStack(spacing: 0) {
-            Rectangle().fill(palette.background.swiftUIColor)
-            Rectangle().fill(palette.ansiColors[1].swiftUIColor)
-            Rectangle().fill(palette.ansiColors[2].swiftUIColor)
-            Rectangle().fill(palette.foreground.swiftUIColor)
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero, pullsDown: false)
+        button.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        button.autoenablesItems = false
+        context.coordinator.attach(to: button)
+        context.coordinator.update(options: options, selection: selection)
+        return button
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        context.coordinator.update(options: options, selection: selection)
+    }
+
+    @MainActor final class Coordinator: NSObject {
+        private let selectionBinding: Binding<TerminalColorTheme>
+
+        private weak var button: NSPopUpButton?
+        private var options: [(title: String, value: TerminalColorTheme)] = []
+        private var lastOptionsKey = ""
+        private var imageCache: [String: NSImage] = [:]
+
+        init(selection: Binding<TerminalColorTheme>) {
+            selectionBinding = selection
         }
-        .frame(width: 34, height: 14)
-        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .stroke(Color.primary.opacity(0.16), lineWidth: 0.5)
+
+        func attach(to button: NSPopUpButton) {
+            self.button = button
         }
-        .accessibilityHidden(true)
+
+        func update(
+            options: [(title: String, value: TerminalColorTheme)],
+            selection: TerminalColorTheme
+        ) {
+            self.options = options
+            let optionsKey = options.map(\.value.rawValue).joined(separator: "\n")
+            if optionsKey != lastOptionsKey {
+                lastOptionsKey = optionsKey
+                rebuildMenu()
+            }
+            syncSelection(selection)
+        }
+
+        private func rebuildMenu() {
+            guard let button else { return }
+            button.removeAllItems()
+            let selection = selectionBinding.wrappedValue
+            for option in options {
+                let item = NSMenuItem(
+                    title: option.title,
+                    action: #selector(selectTheme(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = option.value.rawValue
+                item.image = swatchImage(for: option.value)
+                item.state = option.value == selection ? .on : .off
+                item.isEnabled = true
+                button.menu?.addItem(item)
+            }
+        }
+
+        private func syncSelection(_ selection: TerminalColorTheme) {
+            guard let button, let menu = button.menu else { return }
+            let item = menu.items.first {
+                ($0.representedObject as? String) == selection.rawValue
+            }
+            button.select(item)
+            for entry in menu.items {
+                entry.state = entry === item ? .on : .off
+            }
+        }
+
+        @objc private func selectTheme(_ sender: NSMenuItem) {
+            guard let rawValue = sender.representedObject as? String,
+                  let theme = TerminalColorTheme(rawValue: rawValue)
+            else { return }
+            selectionBinding.wrappedValue = theme
+        }
+
+        private func swatchImage(for theme: TerminalColorTheme) -> NSImage {
+            if let cached = imageCache[theme.rawValue] { return cached }
+            let palette = theme.palette
+            let stripes = [
+                palette.background,
+                palette.ansiColors[1],
+                palette.ansiColors[2],
+                palette.foreground,
+            ]
+            let image = NSImage(
+                size: NSSize(width: 30, height: 12),
+                flipped: false
+            ) { rect in
+                let clip = NSBezierPath(
+                    roundedRect: rect.insetBy(dx: 0.5, dy: 0.5),
+                    xRadius: 2.5,
+                    yRadius: 2.5
+                )
+                clip.addClip()
+                let stripeWidth = rect.width / CGFloat(stripes.count)
+                for (index, color) in stripes.enumerated() {
+                    NSColor(
+                        calibratedRed: CGFloat(color.red) / 255,
+                        green: CGFloat(color.green) / 255,
+                        blue: CGFloat(color.blue) / 255,
+                        alpha: 1
+                    ).setFill()
+                    NSRect(
+                        x: rect.minX + stripeWidth * CGFloat(index),
+                        y: rect.minY,
+                        width: stripeWidth + 0.5,
+                        height: rect.height
+                    ).fill()
+                }
+                NSColor.separatorColor.setStroke()
+                clip.stroke()
+                return true
+            }
+            imageCache[theme.rawValue] = image
+            return image
+        }
     }
 }
 

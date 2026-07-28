@@ -633,7 +633,8 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
         var repositories: [String: InventoryRepository] = [:]
 
         do {
-            for repository in try loadInventoryRepositories() {
+            for repository in try loadInventoryRepositories()
+            where retainedInventoryRepositoryExists(repository) {
                 repositories[
                     standardizedPath(repository.gitCommonDirectory)
                 ] = repository
@@ -955,6 +956,15 @@ struct ManagedWorktreeService: ManagedWorktreeManaging, Sendable {
             items: items.sorted(by: inventorySort),
             warnings: warnings
         )
+    }
+
+    private func retainedInventoryRepositoryExists(
+        _ repository: InventoryRepository
+    ) -> Bool {
+        let fileManager = FileManager.default
+        return fileManager.fileExists(
+            atPath: repository.gitCommonDirectory
+        ) || fileManager.fileExists(atPath: repository.repositoryPath)
     }
 
     func create(
