@@ -23,7 +23,11 @@ if [ -e "$APP" ] || [ -e "$ARCHIVE" ]; then
     exit 2
 fi
 
-mkdir -p "$OUTPUT_DIR" "$APP/Contents/MacOS" "$APP/Contents/Frameworks"
+mkdir -p \
+    "$OUTPUT_DIR" \
+    "$APP/Contents/MacOS" \
+    "$APP/Contents/Frameworks" \
+    "$APP/Contents/Resources"
 
 swift build \
     --package-path "$ROOT" \
@@ -46,6 +50,7 @@ ditto "$ARM_BIN/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/Breath"
 
 ditto "$ROOT/Resources/Info.plist.in" "$APP/Contents/Info.plist"
+ditto "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :SUFeedURL $SPARKLE_FEED_URL" "$APP/Contents/Info.plist"
