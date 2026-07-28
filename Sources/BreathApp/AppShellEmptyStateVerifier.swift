@@ -168,6 +168,20 @@ enum AppShellEmptyStateVerifier {
             "empty terminal canvas contains visible placeholder content: \(canvasInspection)",
             into: &failures
         )
+        let emptyAutomationFixture = try AppShellFixture(snapshot: .empty)
+        _ = try emptyAutomationFixture.renderedText(
+            AutomationView(model: emptyAutomationFixture.model),
+            size: NSSize(width: 1_024, height: 700)
+        )
+        require(
+            emptyAutomationFixture.capturedColorsMatch(
+                at: CGPoint(x: 0.25, y: 0.55),
+                and: CGPoint(x: 0.75, y: 0.55)
+            ),
+            "the empty Automation list rendered an opaque sidebar background",
+            into: &failures
+        )
+        emptyAutomationFixture.close()
 
         let activeWorkSessionSnapshot = makeSnapshotWithActiveWorkSession()
         try fixture.use(activeWorkSessionSnapshot)
@@ -477,6 +491,42 @@ private final class AppShellFixture {
         }
         capturedImage = image
         return try recognizeText(in: image)
+    }
+
+    func capturedColorsMatch(
+        at firstPoint: CGPoint,
+        and secondPoint: CGPoint,
+        tolerance: Int = 6
+    ) -> Bool {
+        guard let image = capturedImage,
+              let data = image.dataProvider?.data,
+              let bytes = CFDataGetBytePtr(data)
+        else {
+            return false
+        }
+        let bytesPerPixel = max(1, image.bitsPerPixel / 8)
+        guard bytesPerPixel >= 3 else { return false }
+
+        func offset(for point: CGPoint) -> Int {
+            let x = min(
+                image.width - 1,
+                max(0, Int(point.x * CGFloat(image.width)))
+            )
+            let y = min(
+                image.height - 1,
+                max(0, Int(point.y * CGFloat(image.height)))
+            )
+            return y * image.bytesPerRow + x * bytesPerPixel
+        }
+
+        let firstOffset = offset(for: firstPoint)
+        let secondOffset = offset(for: secondPoint)
+        return (0..<3).allSatisfy { component in
+            abs(
+                Int(bytes[firstOffset + component])
+                    - Int(bytes[secondOffset + component])
+            ) <= tolerance
+        }
     }
 
     func inspectBlankTerminalCanvas() throws -> SolidCanvasInspection {

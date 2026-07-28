@@ -191,6 +191,7 @@ struct AutomationView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
                 .accessibilityLabel(
                     localizer.string(AutomationAccessibility.list)
                 )
@@ -206,6 +207,7 @@ struct AutomationView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
                 .accessibilityLabel(
                     localizer.string(AutomationAccessibility.list)
                 )
