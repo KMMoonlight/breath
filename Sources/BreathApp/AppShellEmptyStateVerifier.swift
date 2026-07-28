@@ -105,6 +105,32 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
         require(
+            automationAccessibilityText.contains("尚未创建自动化"),
+            "an empty Automation library was replaced by a Workspace prerequisite",
+            into: &failures
+        )
+        require(
+            fixture.pressAccessibilityElement(
+                named: AutomationAccessibility.create
+            ),
+            "Automation creation was disabled without a Workspace",
+            into: &failures
+        )
+        let automationEditorAccessibilityText = fixture.accessibilityText()
+        require(
+            automationEditorAccessibilityText.contains("所属工作区")
+                && automationEditorAccessibilityText.contains(
+                    "没有可选工作区"
+                ),
+            "the Automation editor did not expose an empty Workspace picker",
+            into: &failures
+        )
+        require(
+            fixture.pressAccessibilityElement(named: "取消"),
+            "the empty Automation editor could not be dismissed",
+            into: &failures
+        )
+        require(
             fixture.pressAccessibilityElement(named: WorkbenchAccessibility.openWorkspace),
             "activity bar workspace action could not be pressed through accessibility",
             into: &failures

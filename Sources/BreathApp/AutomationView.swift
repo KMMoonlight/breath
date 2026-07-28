@@ -147,7 +147,6 @@ struct AutomationView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
-            .disabled(model.snapshot.workspaces.isEmpty)
             .accessibilityLabel(
                 localizer.string(AutomationAccessibility.create)
             )
@@ -160,7 +159,7 @@ struct AutomationView: View {
     private func listPanel(navigatesToDetail: Bool) -> some View {
         VStack(spacing: 0) {
             TextField(
-                localizer.string("搜索名称、Prompt 或工作区"),
+                localizer.string("搜索名称或 Prompt"),
                 text: $searchText
             )
             .textFieldStyle(.roundedBorder)
@@ -172,26 +171,7 @@ struct AutomationView: View {
 
             Divider()
 
-            if model.snapshot.workspaces.isEmpty {
-                ContentUnavailableView {
-                    Label(
-                        localizer.string("没有可用的工作区"),
-                        systemImage: "folder.badge.questionmark"
-                    )
-                } description: {
-                    Text(
-                        localizer.string("先在工作区页面添加一个项目目录。")
-                    )
-                } actions: {
-                    Button(localizer.string("添加工作区")) {
-                        chooseWorkspace()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityLabel(
-                        localizer.string("为自动化添加工作区")
-                    )
-                }
-            } else if model.automationSnapshot.automations.isEmpty {
+            if model.automationSnapshot.automations.isEmpty {
                 ContentUnavailableView {
                     Label(
                         localizer.string("尚未创建自动化"),
@@ -216,7 +196,7 @@ struct AutomationView: View {
                         systemImage: "magnifyingglass"
                     )
                 } description: {
-                    Text(localizer.string("尝试其他名称、Prompt 或工作区。"))
+                    Text(localizer.string("尝试其他名称或 Prompt。"))
                 } actions: {
                     Button(localizer.string("清除搜索")) {
                         searchText = ""
@@ -400,8 +380,6 @@ struct AutomationView: View {
         return model.automationSnapshot.automations.filter { automation in
             automation.name.localizedLowercase.contains(query)
                 || automation.prompt.localizedLowercase.contains(query)
-                || automation.workspaceDisplayName.localizedLowercase
-                    .contains(query)
         }
     }
 
@@ -495,17 +473,6 @@ struct AutomationView: View {
             "“%@”及其最近运行结果将被永久删除。",
             automation.name
         )
-    }
-
-    private func chooseWorkspace() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = localizer.string("添加")
-        panel.message = localizer.string("选择一个项目目录")
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        model.addWorkspace(url)
     }
 
     private func perform(_ operation: @escaping @MainActor () async throws -> Void) {
@@ -1205,9 +1172,14 @@ private struct AutomationEditorSheet: View {
             Form {
                 TextField(localizer.string("名称"), text: $name)
                 Picker(
-                    localizer.string("工作区"),
+                    localizer.string("所属工作区"),
                     selection: $workspaceID
                 ) {
+                    if model.snapshot.workspaces.isEmpty {
+                        Text(localizer.string("没有可选工作区"))
+                            .tag(nil as WorkspaceID?)
+                            .disabled(true)
+                    }
                     ForEach(model.snapshot.workspaces) { workspace in
                         Text(workspace.displayName)
                             .tag(workspace.id as WorkspaceID?)
