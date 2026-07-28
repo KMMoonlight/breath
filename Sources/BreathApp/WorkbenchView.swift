@@ -1,4 +1,5 @@
 import AppKit
+import BreathAutomation
 import BreathCore
 import BreathTerminal
 import SwiftUI
@@ -9,15 +10,15 @@ enum WorkbenchAccessibility {
     static let openWorkspace = "打开工作区"
     static let openSettings = "打开设置"
     static let openGitWorkbench = "打开 Git 工作台"
-    static let openTaskView = "打开任务视图"
+    static let openAutomation = "打开自动化"
     static let openSkills = "打开 Skills"
     static let openAgentQuota = "打开额度"
-    static let taskViewPanel = "任务视图面板"
+    static let automationPanel = "自动化面板"
 }
 
 private enum WorkbenchDetailMode: Equatable {
     case workspace
-    case tasks
+    case automation
     case skills
     case agentQuota
     case settings
@@ -309,11 +310,23 @@ struct WorkbenchView: View {
             }
 
             activityBarButton(
-                systemName: "checklist",
-                accessibilityLabel: WorkbenchAccessibility.openTaskView,
-                isSelected: detailMode == .tasks
+                accessibilityLabel: automationAccessibilityLabel,
+                isSelected: detailMode == .automation,
+                action: { detailMode = .automation }
             ) {
-                detailMode = .tasks
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "clock.arrow.2.circlepath")
+                    if model.automationSnapshot.unreadCount > 0 {
+                        Text(automationBadgeText)
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 3)
+                            .frame(minWidth: 14, minHeight: 14)
+                            .background(.red, in: Capsule())
+                            .offset(x: 8, y: -7)
+                            .accessibilityHidden(true)
+                    }
+                }
             }
 
             if GitWorkbenchReleaseGate.isEnabled {
@@ -1038,10 +1051,8 @@ struct WorkbenchView: View {
             SkillsView(service: model.skillsService)
         } else if detailMode == .agentQuota {
             AgentQuotaView(service: model.agentQuotaService)
-        } else if detailMode == .tasks {
-            Color(nsColor: .windowBackgroundColor)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(localizer.string(WorkbenchAccessibility.taskViewPanel))
+        } else if detailMode == .automation {
+            AutomationView(model: model)
         } else if GitWorkbenchReleaseGate.isEnabled,
                   detailMode == .gitWorkbench
         {
@@ -1063,6 +1074,22 @@ struct WorkbenchView: View {
         } else {
             sessionDetail
         }
+    }
+
+    private var automationBadgeText: String {
+        let count = model.automationSnapshot.unreadCount
+        return count > 99 ? "99+" : "\(count)"
+    }
+
+    private var automationAccessibilityLabel: String {
+        let count = model.automationSnapshot.unreadCount
+        guard count > 0 else {
+            return localizer.string(WorkbenchAccessibility.openAutomation)
+        }
+        return localizer.format(
+            "打开自动化，%d 个未查看结果",
+            count
+        )
     }
 
     @ViewBuilder

@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import ApplicationServices
+import BreathAutomation
 import BreathCore
 import SwiftUI
 import Vision
@@ -79,24 +80,28 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
         require(
-            accessibilityText.contains(WorkbenchAccessibility.openTaskView),
-            "activity bar task action lost its accessibility label: \(accessibilityText)",
+            accessibilityText.contains(WorkbenchAccessibility.openAutomation),
+            "activity bar automation action lost its accessibility label: \(accessibilityText)",
             into: &failures
         )
         require(
-            fixture.pressAccessibilityElement(named: WorkbenchAccessibility.openTaskView),
-            "activity bar task action could not be pressed through accessibility",
+            fixture.pressAccessibilityElement(named: WorkbenchAccessibility.openAutomation),
+            "activity bar automation action could not be pressed through accessibility",
             into: &failures
         )
-        let taskAccessibilityText = fixture.accessibilityText()
+        let automationAccessibilityText = fixture.accessibilityText()
         require(
-            taskAccessibilityText.contains(WorkbenchAccessibility.taskViewPanel),
-            "task action did not open the empty task panel",
+            automationAccessibilityText.contains(
+                WorkbenchAccessibility.automationPanel
+            ),
+            "automation action did not open the automation panel",
             into: &failures
         )
         require(
-            !taskAccessibilityText.contains(WorkbenchAccessibility.addWorkspace),
-            "workspace sidebar remained visible beside the task page",
+            !automationAccessibilityText.contains(
+                WorkbenchAccessibility.addWorkspace
+            ),
+            "workspace sidebar remained visible beside the automation page",
             into: &failures
         )
         require(
@@ -205,6 +210,49 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
 
+        let automationSnapshot = makeAutomationSnapshot(
+            workspace: noWorkSessionsSnapshot.workspaces[0]
+        )
+        try fixture.use(
+            noWorkSessionsSnapshot,
+            automationSnapshot: automationSnapshot
+        )
+        let automationWideText = try fixture.renderedText(
+            AutomationView(model: fixture.model)
+        )
+        require(
+            automationWideText.contains("检查依赖边界")
+                && automationWideText.contains("最近运行")
+                && automationWideText.contains("成功"),
+            "wide automation library did not render its list and detail: \(automationWideText)",
+            into: &failures
+        )
+        let automationSampleAccessibilityText = fixture.accessibilityText()
+        require(
+            automationSampleAccessibilityText.contains(
+                AutomationAccessibility.panel
+            )
+                && automationSampleAccessibilityText.contains(
+                    AutomationAccessibility.search
+                ),
+            "automation page lost its accessibility structure: \(automationSampleAccessibilityText)",
+            into: &failures
+        )
+        let automationCompactText = try fixture.renderedText(
+            AutomationView(model: fixture.model),
+            size: NSSize(width: 680, height: 700)
+        )
+        require(
+            automationCompactText.contains("检查模块依赖"),
+            "compact automation library did not keep its navigation list readable: \(automationCompactText)",
+            into: &failures
+        )
+        require(
+            fixture.terminalLaunchCount == 0,
+            "rendering Automation launched a terminal",
+            into: &failures
+        )
+
         let settingsText = try fixture.renderedText(
             BreathSettingsView(model: fixture.model, selectedTab: .archives)
         )
@@ -272,6 +320,48 @@ enum AppShellEmptyStateVerifier {
             selectedWorkSessionID: selectedSessionID
         )
     }
+
+    private static func makeAutomationSnapshot(
+        workspace: Workspace
+    ) -> AutomationSnapshot {
+        let automationID = AutomationID(rawValue: UUID())
+        let timestamp = Date(timeIntervalSince1970: 1_800_000_000)
+        return AutomationSnapshot(
+            automations: [
+                Automation(
+                    id: automationID,
+                    name: "检查依赖边界",
+                    workspaceID: workspace.id,
+                    workspaceDisplayName: workspace.displayName,
+                    workspacePath: workspace.path,
+                    prompt: "检查模块依赖，并给出需要优先处理的风险。",
+                    agent: .codex,
+                    trigger: .cron("0 9 * * 1-5"),
+                    maximumDurationMinutes: 60,
+                    isEnabled: true,
+                    createdAt: timestamp,
+                    updatedAt: timestamp
+                ),
+            ],
+            runs: [
+                AutomationRun(
+                    id: AutomationRunID(rawValue: UUID()),
+                    automationID: automationID,
+                    status: .succeeded,
+                    triggerSource: .scheduled,
+                    queuedAt: timestamp,
+                    startedAt: timestamp,
+                    endedAt: timestamp.addingTimeInterval(8),
+                    effectiveDuration: 8,
+                    agent: .codex,
+                    model: "gpt-5",
+                    finalOutput: "# 项目检查\n\n依赖边界清晰。",
+                    isViewed: false
+                ),
+            ],
+            concurrencyLimit: 2
+        )
+    }
 }
 
 @MainActor
@@ -302,10 +392,13 @@ private final class AppShellFixture {
         )
     }
 
-    func renderedText<V: View>(_ view: V) throws -> String {
+    func renderedText<V: View>(
+        _ view: V,
+        size: NSSize = NSSize(width: 1_024, height: 700)
+    ) throws -> String {
         window?.close()
         let hostingView = NSHostingView(rootView: view)
-        hostingView.frame = NSRect(x: 0, y: 0, width: 1_024, height: 700)
+        hostingView.frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(
             contentRect: hostingView.frame,
             styleMask: [.titled],
@@ -319,7 +412,11 @@ private final class AppShellFixture {
         window.layoutIfNeeded()
         hostingView.layoutSubtreeIfNeeded()
         hostingView.displayIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        NSAccessibility.post(
+            element: hostingView,
+            notification: .layoutChanged
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         self.window = window
 
         // Render the verifier's own view directly. Screen capture APIs are both
@@ -348,18 +445,28 @@ private final class AppShellFixture {
         )
     }
 
-    func use(_ snapshot: WorkbenchSnapshot) throws {
+    func use(
+        _ snapshot: WorkbenchSnapshot,
+        automationSnapshot: AutomationSnapshot = .empty
+    ) throws {
         window?.close()
         harness = try AppShellTestingHarness(
             snapshot: snapshot,
+            automationSnapshot: automationSnapshot,
             supportDirectory: supportDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         )
     }
 
     func accessibilityText() -> [String] {
-        let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        let application = AXUIElementCreateApplication(
+            ProcessInfo.processInfo.processIdentifier
+        )
         var visited: [AXUIElement] = []
-        return accessibilityText(in: application, depth: 0, visited: &visited)
+        return accessibilityText(
+            in: application,
+            depth: 0,
+            visited: &visited
+        )
     }
 
     func expandDisclosure(named name: String) -> Bool {
@@ -367,7 +474,9 @@ private final class AppShellFixture {
     }
 
     func pressAccessibilityElement(named name: String) -> Bool {
-        let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        let application = AXUIElementCreateApplication(
+            ProcessInfo.processInfo.processIdentifier
+        )
         var visited: [AXUIElement] = []
         guard pressAccessibilityElement(
             named: name,

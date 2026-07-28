@@ -22,6 +22,16 @@ var targets: [Target] = [
         ]
     ),
     .target(
+        name: "BreathAutomation",
+        dependencies: [
+            "BreathAgents",
+            "BreathCore",
+        ],
+        linkerSettings: [
+            .linkedFramework("IOKit"),
+        ]
+    ),
+    .target(
         name: "BreathSkills",
         dependencies: [
             "BreathAgents",
@@ -32,6 +42,7 @@ var targets: [Target] = [
     .target(
         name: "BreathPersistence",
         dependencies: [
+            "BreathAutomation",
             "BreathSkills",
             "BreathCore",
             .product(name: "GRDB", package: "GRDB.swift"),
@@ -71,6 +82,7 @@ targets += [
         name: "BreathApp",
         dependencies: [
             "BreathAgents",
+            "BreathAutomation",
             "BreathCore",
             "BreathPersistence",
             "BreathSkills",
@@ -88,8 +100,20 @@ targets += [
         dependencies: ["BreathCore"]
     ),
     .testTarget(
+        name: "BreathAutomationTests",
+        dependencies: [
+            "BreathAutomation",
+            "BreathCore",
+        ]
+    ),
+    .testTarget(
         name: "BreathPersistenceTests",
-        dependencies: ["BreathAgents", "BreathCore", "BreathPersistence"]
+        dependencies: [
+            "BreathAgents",
+            "BreathAutomation",
+            "BreathCore",
+            "BreathPersistence",
+        ]
     ),
     .testTarget(
         name: "BreathAgentsTests",
@@ -130,6 +154,7 @@ let package = Package(
     products: [
         .library(name: "BreathCore", targets: ["BreathCore"]),
         .library(name: "BreathAgents", targets: ["BreathAgents"]),
+        .library(name: "BreathAutomation", targets: ["BreathAutomation"]),
         .library(name: "BreathSkills", targets: ["BreathSkills"]),
         .library(name: "BreathPersistence", targets: ["BreathPersistence"]),
         .library(name: "BreathTerminal", targets: ["BreathTerminal"]),

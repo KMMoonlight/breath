@@ -1,10 +1,11 @@
+import BreathAutomation
 import BreathCore
 import BreathSkills
 import Foundation
 import GRDB
 
 public final class SQLiteWorkbenchRepository: WorkbenchRepository, SettingsRepository,
-    SkillInstallationRecordRepository, @unchecked Sendable
+    SkillInstallationRecordRepository, AutomationRepository, @unchecked Sendable
 {
     private let databaseQueue: DatabaseQueue
 
@@ -27,6 +28,12 @@ public final class SQLiteWorkbenchRepository: WorkbenchRepository, SettingsRepos
         migrator.registerMigration("createSkillInstallationRecord") { database in
             try database.create(table: "skillInstallationRecord") { table in
                 table.column("installationPath", .text).primaryKey()
+                table.column("payload", .blob).notNull()
+            }
+        }
+        migrator.registerMigration("createAutomationSnapshot") { database in
+            try database.create(table: "automationSnapshot") { table in
+                table.column("id", .integer).primaryKey()
                 table.column("payload", .blob).notNull()
             }
         }
@@ -120,6 +127,32 @@ public final class SQLiteWorkbenchRepository: WorkbenchRepository, SettingsRepos
             try database.execute(
                 sql: "DELETE FROM skillInstallationRecord WHERE installationPath = ?",
                 arguments: [installationDirectory.path]
+            )
+        }
+    }
+
+    public func loadAutomationSnapshot() async throws -> AutomationSnapshot {
+        try await databaseQueue.read { database in
+            guard let payload = try Data.fetchOne(
+                database,
+                sql: "SELECT payload FROM automationSnapshot WHERE id = 1"
+            ) else {
+                return .empty
+            }
+            return try JSONDecoder().decode(AutomationSnapshot.self, from: payload)
+        }
+    }
+
+    public func saveAutomationSnapshot(_ snapshot: AutomationSnapshot) async throws {
+        let payload = try JSONEncoder().encode(snapshot)
+        try await databaseQueue.write { database in
+            try database.execute(
+                sql: """
+                    INSERT INTO automationSnapshot (id, payload)
+                    VALUES (1, ?)
+                    ON CONFLICT(id) DO UPDATE SET payload = excluded.payload
+                    """,
+                arguments: [payload]
             )
         }
     }

@@ -174,6 +174,7 @@ public struct AgentAdapterDescriptor: Equatable, Sendable {
     public let userConfigurationPath: String
     public let hookRegistrations: [AgentHookRegistration]
     public let globalSkills: AgentGlobalSkillsCapability?
+    public let automation: AgentAutomationCapability?
 
     public init(
         kind: AgentKind,
@@ -182,7 +183,8 @@ public struct AgentAdapterDescriptor: Equatable, Sendable {
         integrationMechanism: AgentIntegrationMechanism,
         userConfigurationPath: String,
         hookRegistrations: [AgentHookRegistration],
-        globalSkills: AgentGlobalSkillsCapability? = nil
+        globalSkills: AgentGlobalSkillsCapability? = nil,
+        automation: AgentAutomationCapability? = nil
     ) {
         self.kind = kind
         self.displayName = displayName
@@ -191,6 +193,103 @@ public struct AgentAdapterDescriptor: Equatable, Sendable {
         self.userConfigurationPath = userConfigurationPath
         self.hookRegistrations = hookRegistrations
         self.globalSkills = globalSkills
+        self.automation = automation
+    }
+}
+
+public enum AgentAutomationInvocation: String, Equatable, Sendable {
+    case codex
+    case claudeCode
+    case geminiCLI
+    case githubCopilotCLI
+    case qwenCode
+    case cursorAgent
+    case factoryDroid
+    case openCode
+    case pi
+}
+
+public struct AgentAutomationCapability: Equatable, Sendable {
+    public let minimumVersion: String
+    public let invocation: AgentAutomationInvocation
+
+    public init(
+        minimumVersion: String,
+        invocation: AgentAutomationInvocation
+    ) {
+        self.minimumVersion = minimumVersion
+        self.invocation = invocation
+    }
+
+    public var usesFinalOutputFile: Bool {
+        invocation == .codex
+    }
+
+    public func arguments(
+        prompt: String,
+        finalOutputPath: String
+    ) -> [String] {
+        switch invocation {
+        case .codex:
+            [
+                "exec",
+                "--sandbox", "read-only",
+                "--ephemeral",
+                "--skip-git-repo-check",
+                "--color", "never",
+                "--output-last-message", finalOutputPath,
+                prompt,
+            ]
+        case .claudeCode:
+            [
+                "-p", prompt,
+                "--output-format", "json",
+                "--permission-mode", "dontAsk",
+                "--no-session-persistence",
+            ]
+        case .geminiCLI:
+            [
+                "-p", prompt,
+                "--output-format", "json",
+                "--approval-mode", "plan",
+                "--skip-trust",
+            ]
+        case .githubCopilotCLI:
+            [
+                "-p", prompt,
+                "--output-format", "json",
+                "--allow-all-tools",
+                "--no-ask-user",
+            ]
+        case .qwenCode:
+            [
+                "-p", prompt,
+                "--output-format", "json",
+                "--approval-mode", "plan",
+            ]
+        case .cursorAgent:
+            [
+                "-p", prompt,
+                "--output-format", "json",
+            ]
+        case .factoryDroid:
+            [
+                "exec", prompt,
+                "--output-format", "json",
+            ]
+        case .openCode:
+            [
+                "run",
+                "--format", "json",
+                prompt,
+            ]
+        case .pi:
+            [
+                "-p", prompt,
+                "--mode", "json",
+                "--no-session",
+            ]
+        }
     }
 }
 
@@ -214,6 +313,10 @@ public struct AgentAdapterRegistry: Sendable {
                 defaultConfigurationRootRelativePath: ".codex",
                 additionalDiscoveryRootRelativePaths: [".agents/skills"],
                 activationHint: "Start a new Codex session to load changed Skills."
+            ),
+            automation: AgentAutomationCapability(
+                minimumVersion: "0.144.3",
+                invocation: .codex
             )
         ),
         AgentAdapterDescriptor(
@@ -229,6 +332,10 @@ public struct AgentAdapterRegistry: Sendable {
                 configurationRootEnvironmentVariable: "CLAUDE_CONFIG_DIR",
                 defaultConfigurationRootRelativePath: ".claude",
                 activationHint: "Start a new Claude Code session to load changed Skills."
+            ),
+            automation: AgentAutomationCapability(
+                minimumVersion: "2.1.7",
+                invocation: .claudeCode
             )
         ),
         AgentAdapterDescriptor(
@@ -248,6 +355,10 @@ public struct AgentAdapterRegistry: Sendable {
                 configurationRootEnvironmentVariable: "GEMINI_CLI_HOME",
                 defaultConfigurationRootRelativePath: ".gemini",
                 activationHint: "Start a new Gemini CLI session to load changed Skills."
+            ),
+            automation: AgentAutomationCapability(
+                minimumVersion: "0.37.2",
+                invocation: .geminiCLI
             )
         ),
         AgentAdapterDescriptor(
@@ -267,6 +378,10 @@ public struct AgentAdapterRegistry: Sendable {
                 configurationRootEnvironmentVariable: "COPILOT_HOME",
                 defaultConfigurationRootRelativePath: ".copilot",
                 activationHint: "Start a new GitHub Copilot CLI session to load changed Skills."
+            ),
+            automation: AgentAutomationCapability(
+                minimumVersion: "1.0.45",
+                invocation: .githubCopilotCLI
             )
         ),
         AgentAdapterDescriptor(
@@ -280,6 +395,10 @@ public struct AgentAdapterRegistry: Sendable {
                 configurationRootEnvironmentVariable: "QWEN_CLI_HOME",
                 defaultConfigurationRootRelativePath: ".qwen",
                 activationHint: "Start a new Qwen Code session to load changed Skills."
+            ),
+            automation: AgentAutomationCapability(
+                minimumVersion: "0.16.2",
+                invocation: .qwenCode
             )
         ),
         AgentAdapterDescriptor(
@@ -298,6 +417,10 @@ public struct AgentAdapterRegistry: Sendable {
                 configurationRootEnvironmentVariable: "CURSOR_AGENT_HOME",
                 defaultConfigurationRootRelativePath: ".cursor",
                 activationHint: "Start a new Cursor Agent session to load changed Skills."
+            ),
+            automation: AgentAutomationCapability(
+                minimumVersion: "2026.01.16",
+                invocation: .cursorAgent
             )
         ),
         AgentAdapterDescriptor(
@@ -311,6 +434,10 @@ public struct AgentAdapterRegistry: Sendable {
                 configurationRootEnvironmentVariable: "FACTORY_HOME",
                 defaultConfigurationRootRelativePath: ".factory",
                 activationHint: "Start a new Factory Droid session to load changed Skills."
+            ),
+            automation: AgentAutomationCapability(
+                minimumVersion: "未版本化（2026-07 Headless 文档）",
+                invocation: .factoryDroid
             )
         ),
         AgentAdapterDescriptor(
@@ -331,6 +458,10 @@ public struct AgentAdapterRegistry: Sendable {
                 defaultConfigurationRootRelativePath: ".config",
                 skillsRelativePath: "opencode/skills",
                 activationHint: "Start a new OpenCode session to load changed Skills."
+            ),
+            automation: AgentAutomationCapability(
+                minimumVersion: "1.15.11",
+                invocation: .openCode
             )
         ),
         AgentAdapterDescriptor(
@@ -348,6 +479,10 @@ public struct AgentAdapterRegistry: Sendable {
                 configurationRootEnvironmentVariable: "PI_CODING_AGENT_DIR",
                 defaultConfigurationRootRelativePath: ".pi/agent",
                 activationHint: "Start a new Pi session to load changed Skills."
+            ),
+            automation: AgentAutomationCapability(
+                minimumVersion: "未版本化（2026-07 Headless 文档）",
+                invocation: .pi
             )
         ),
     ])

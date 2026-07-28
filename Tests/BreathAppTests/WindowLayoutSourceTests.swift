@@ -538,7 +538,7 @@ struct WindowLayoutSourceTests {
         #expect(!modelSource.contains("func copyDiagnostic("))
     }
 
-    @Test("global Skills stays reachable beside Tasks without a selected workspace")
+    @Test("global Skills stays reachable beside Automation without a selected workspace")
     func globalSkillsNavigationIsIndependent() throws {
         let root = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
@@ -571,8 +571,8 @@ struct WindowLayoutSourceTests {
         let workspace = try #require(
             activityBar.range(of: "WorkbenchAccessibility.openWorkspace")
         )
-        let tasks = try #require(
-            activityBar.range(of: "WorkbenchAccessibility.openTaskView")
+        let automation = try #require(
+            activityBar.range(of: "accessibilityLabel: automationAccessibilityLabel")
         )
         let git = try #require(
             activityBar.range(of: "WorkbenchAccessibility.openGitWorkbench")
@@ -583,8 +583,8 @@ struct WindowLayoutSourceTests {
         let settings = try #require(
             activityBar.range(of: "WorkbenchAccessibility.openSettings")
         )
-        #expect(workspace.lowerBound < tasks.lowerBound)
-        #expect(tasks.lowerBound < git.lowerBound)
+        #expect(workspace.lowerBound < automation.lowerBound)
+        #expect(automation.lowerBound < git.lowerBound)
         #expect(git.lowerBound < skills.lowerBound)
         #expect(skills.lowerBound < settings.lowerBound)
 
@@ -1248,17 +1248,17 @@ struct WindowLayoutSourceTests {
             contentsOf: root.appendingPathComponent("Sources/BreathApp/BreathApp.swift"),
             encoding: .utf8
         )
-        let taskPanelStart = try #require(
-            source.range(of: "if detailMode == .tasks")
+        let automationPanelStart = try #require(
+            source.range(of: "if detailMode == .automation")
         )
         let gitWorkbenchDetailStart = try #require(
             source.range(
                 of: "} else if GitWorkbenchReleaseGate.isEnabled,",
-                range: taskPanelStart.upperBound..<source.endIndex
+                range: automationPanelStart.upperBound..<source.endIndex
             )
         )
-        let taskPanel = source[
-            taskPanelStart.lowerBound..<gitWorkbenchDetailStart.lowerBound
+        let automationPanel = source[
+            automationPanelStart.lowerBound..<gitWorkbenchDetailStart.lowerBound
         ]
         let activityBarStart = try #require(
             source.range(of: "private var activityBar: some View")
@@ -1306,7 +1306,7 @@ struct WindowLayoutSourceTests {
         #expect(source.contains("private var activityBar: some View"))
         #expect(!source.contains("@Environment(\\.openSettings) private var openSettings"))
         #expect(!source.contains("openSettings()"))
-        #expect(source.contains("detailMode = .tasks"))
+        #expect(source.contains("detailMode = .automation"))
         #expect(activityBar.contains("GitBranchIcon()"))
         #expect(!activityBar.contains("systemName: \"arrow.triangle.branch\""))
         #expect(source.contains("width: WorkbenchLayout.activityBarIconSize"))
@@ -1314,7 +1314,7 @@ struct WindowLayoutSourceTests {
         #expect(activityBar.contains("WorkbenchAccessibility.openGitWorkbench"))
         #expect(!activityBar.contains("isEnabled: model.currentWorkspaceID != nil"))
         #expect(activityBar.contains("openGitWorkbench"))
-        #expect(activityBar.contains("WorkbenchAccessibility.openTaskView"))
+        #expect(activityBar.contains("automationAccessibilityLabel"))
         #expect(source.contains("case gitWorkbench"))
         #expect(source.contains("@State private var selectedGitWorkspace: Workspace?"))
         #expect(!source.contains("case gitWorkbench(WorkspaceID?)"))
@@ -1449,9 +1449,7 @@ struct WindowLayoutSourceTests {
         #expect(gitSource.contains("@State private var height: Double"))
         #expect(!gitSource.contains("value: $model.metadata.layout.leftWidth"))
         #expect(!gitSource.contains("model.metadata.layout.consoleHeight = min("))
-        #expect(taskPanel.contains("Color(nsColor: .windowBackgroundColor)"))
-        #expect(taskPanel.contains("WorkbenchAccessibility.taskViewPanel"))
-        #expect(!taskPanel.contains("Text("))
+        #expect(automationPanel.contains("AutomationView(model: model)"))
     }
 
     @Test("settings omit the sidebar density control")

@@ -38,6 +38,21 @@ struct AgentAdapterRegistryTests {
         ])
         #expect(adapters.allSatisfy { !$0.minimumVersion.isEmpty })
         #expect(adapters.allSatisfy { $0.integrationMechanism != .terminalParsing })
+        #expect(adapters.allSatisfy { $0.automation != nil })
+        #expect(
+            Set(adapters.compactMap(\.automation?.invocation))
+                == Set([
+                    .codex,
+                    .claudeCode,
+                    .geminiCLI,
+                    .githubCopilotCLI,
+                    .qwenCode,
+                    .cursorAgent,
+                    .factoryDroid,
+                    .openCode,
+                    .pi,
+                ])
+        )
     }
 
     @Test("every adapter declares its user-level integration target and lifecycle events")
@@ -53,6 +68,37 @@ struct AgentAdapterRegistryTests {
                     })
                 )
             }
+        }
+    }
+
+    @Test("every automation capability declares its non-interactive command contract")
+    func automationCommandContracts() throws {
+        let expected: [AgentKind: [String]] = [
+            .codex: ["exec", "--sandbox", "read-only", "--ephemeral"],
+            .claudeCode: ["--permission-mode", "dontAsk", "--no-session-persistence"],
+            .geminiCLI: ["--approval-mode", "plan", "--skip-trust"],
+            .githubCopilotCLI: ["--allow-all-tools", "--no-ask-user"],
+            .qwenCode: ["--approval-mode", "plan"],
+            .cursorAgent: ["--output-format", "json"],
+            .factoryDroid: ["exec", "--output-format", "json"],
+            .openCode: ["run", "--format", "json"],
+            .pi: ["--mode", "json", "--no-session"],
+        ]
+
+        for adapter in AgentAdapterRegistry.builtIn.adapters {
+            let capability = try #require(adapter.automation)
+            let arguments = capability.arguments(
+                prompt: "PROMPT",
+                finalOutputPath: "/tmp/final"
+            )
+            for token in expected[adapter.kind] ?? [] {
+                #expect(arguments.contains(token))
+            }
+            #expect(arguments.contains("PROMPT"))
+            #expect(
+                capability.usesFinalOutputFile
+                    == (adapter.kind == .codex)
+            )
         }
     }
 

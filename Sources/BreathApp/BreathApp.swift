@@ -1,5 +1,6 @@
 import AppKit
 import BreathAgents
+import BreathAutomation
 import BreathCore
 import BreathUpdates
 import Darwin
@@ -27,6 +28,19 @@ enum BreathMain {
                 standardInput: input
             )
             return
+        }
+        if CommandLine.arguments.dropFirst().first == "trigger" {
+            let exitCode = AutomationTriggerCommand().run(
+                arguments: Array(CommandLine.arguments.dropFirst()),
+                homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+                standardOutput: { message in
+                    FileHandle.standardOutput.write(Data("\(message)\n".utf8))
+                },
+                standardError: { message in
+                    FileHandle.standardError.write(Data("\(message)\n".utf8))
+                }
+            )
+            exit(exitCode)
         }
         _ = NSApplication.shared.setActivationPolicy(.regular)
         BreathDesktopApp.main()
@@ -240,8 +254,37 @@ private struct OpenSettingsPageCommand: View {
 private final class BreathAppDelegate: NSObject, NSApplicationDelegate {
     weak var model: BreathApplicationModel?
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(workspaceDidWake(_:)),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(workspaceWillSleep(_:)),
+            name: NSWorkspace.willSleepNotification,
+            object: nil
+        )
+    }
+
     func applicationDidBecomeActive(_ notification: Notification) {
         model?.repairDetectedAgentIntegrations()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    @objc
+    private func workspaceDidWake(_ notification: Notification) {
+        model?.resumeAutomationSchedulesAfterWake()
+    }
+
+    @objc
+    private func workspaceWillSleep(_ notification: Notification) {
+        model?.suspendAutomationSchedulesForSleep()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -264,9 +307,15 @@ private final class BreathAppDelegate: NSObject, NSApplicationDelegate {
         )
         let alert = NSAlert()
         alert.messageText = localizer.string("退出 Breath？")
-        alert.informativeText = localizer.string(
-            "Breath 会先保存布局、最后选择和 Agent 会话标识，再停止所有终端进程。"
-        )
+        if model?.hasActiveAutomationRuns == true {
+            alert.informativeText = localizer.string(
+                "Breath 会保存布局，取消已排队的自动化，中断正在运行的自动化，并停止所有终端进程。"
+            )
+        } else {
+            alert.informativeText = localizer.string(
+                "Breath 会先保存布局、最后选择和 Agent 会话标识，再停止所有终端进程。"
+            )
+        }
         alert.alertStyle = .warning
         alert.addButton(withTitle: localizer.string("退出"))
         alert.addButton(withTitle: localizer.string("取消"))

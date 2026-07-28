@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import BreathAutomation
 import BreathCore
 import BreathTerminal
 import Foundation
@@ -9,7 +10,11 @@ struct AppShellTestingHarness {
     let model: BreathApplicationModel
     let terminalEngine: AppShellTestingTerminalEngine
 
-    init(snapshot: WorkbenchSnapshot, supportDirectory: URL) throws {
+    init(
+        snapshot: WorkbenchSnapshot,
+        automationSnapshot: AutomationSnapshot = .empty,
+        supportDirectory: URL
+    ) throws {
         let terminalEngine = AppShellTestingTerminalEngine()
         self.terminalEngine = terminalEngine
         model = try BreathApplicationModel(
@@ -17,7 +22,10 @@ struct AppShellTestingHarness {
             supportDirectory: supportDirectory,
             terminalEngineOverride: terminalEngine
         )
-        model.prepareForAppShellTesting(snapshot: snapshot)
+        model.prepareForAppShellTesting(
+            snapshot: snapshot,
+            automationSnapshot: automationSnapshot
+        )
     }
 }
 

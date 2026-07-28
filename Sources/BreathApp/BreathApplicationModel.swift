@@ -1,14 +1,25 @@
 import AppKit
 import BreathAgents
+import BreathAutomation
 import BreathCore
 import BreathPersistence
 import BreathSkills
 import BreathTerminal
 import Foundation
 
+struct AutomationAgentOption: Identifiable {
+    let adapter: AgentAdapterDescriptor
+    let availability: AutomationAgentAvailability
+
+    var id: AgentKind { adapter.kind }
+}
+
 @MainActor
 final class BreathApplicationModel: ObservableObject {
     @Published private(set) var snapshot: WorkbenchSnapshot = .empty
+    @Published private(set) var automationSnapshot: AutomationSnapshot = .empty
+    @Published private(set) var automationCLIInstallationStatus:
+        AutomationCLIInstallationStatus = .notInstalled
     @Published var settings: SettingsSnapshot = .default
     @Published private(set) var effectiveTerminalColorTheme: TerminalColorTheme = .dark
     @Published private(set) var enabledAgents: Set<AgentKind> = []
@@ -36,6 +47,9 @@ final class BreathApplicationModel: ObservableObject {
     private let repository: SQLiteWorkbenchRepository
     private let runtime: TerminalEngineRuntime
     private let workbench: Workbench
+    private let automationService: AutomationService
+    private let automationTriggerServer: UnixAutomationTriggerServer
+    private let automationCLIInstaller: AutomationCLIInstaller
     private let managedWorktreeService: ManagedWorktreeService
     private let eventServer: UnixAgentEventServer
     private let eventSink: AgentEventSink
@@ -51,6 +65,8 @@ final class BreathApplicationModel: ObservableObject {
     private var startupSucceeded = false
     private var startupError: String?
     private var startupTask: Task<Void, Never>?
+    private var automationStartupTask: Task<Void, Never>?
+    private var automationServiceStarted = false
     private var networkProxyPasswordSaveTask: Task<Void, Never>?
     private var resolvedAppearance: ResolvedApplicationAppearance = .dark
 
@@ -107,8 +123,60 @@ final class BreathApplicationModel: ObservableObject {
         )
         let socketURL = supportDirectory.appendingPathComponent("agent-events.sock")
         let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
-        repository = try SQLiteWorkbenchRepository(
+        let resolvedRepository = try SQLiteWorkbenchRepository(
             databaseURL: supportDirectory.appendingPathComponent("breath.sqlite")
+        )
+        repository = resolvedRepository
+        let resolvedAutomationService = AutomationService(
+            repository: resolvedRepository,
+            runner: CLIAutomationRunner(
+                homeDirectory: homeDirectory,
+                runtimeRootDirectory: supportDirectory.appendingPathComponent(
+                    "automation-runs",
+                    isDirectory: true
+                ),
+                processEnvironment: {
+                    networkSessionManager.processEnvironment(
+                        basedOn: ProcessInfo.processInfo.environment
+                    )
+                }
+            ),
+            startingGitCommit: {
+                AutomationGitCommitResolver.resolve(workspacePath: $0)
+            }
+        )
+        automationService = resolvedAutomationService
+        automationTriggerServer = UnixAutomationTriggerServer(
+            socketURL: supportDirectory.appendingPathComponent("automation.sock")
+        ) { shortcode in
+            do {
+                let runID = try await resolvedAutomationService.trigger(
+                    shortcode: shortcode
+                )
+                let status = await resolvedAutomationService.snapshot().runs
+                    .first(where: { $0.id == runID })?.status
+                if status == .queued {
+                    return AutomationTriggerResponse(
+                        status: .queued,
+                        message: "Automation queued"
+                    )
+                }
+                return AutomationTriggerResponse(
+                    status: .accepted,
+                    message: "Automation started"
+                )
+            } catch {
+                return AutomationTriggerResponse(
+                    status: .rejected,
+                    message: (error as? LocalizedError)?.errorDescription
+                        ?? "Automation trigger rejected"
+                )
+            }
+        }
+        automationCLIInstaller = AutomationCLIInstaller(
+            homeDirectory: homeDirectory,
+            applicationExecutableURL: Bundle.main.executableURL
+                ?? URL(fileURLWithPath: CommandLine.arguments[0])
         )
         skillsService = GlobalSkillsService(
             homeDirectory: homeDirectory,
@@ -123,7 +191,7 @@ final class BreathApplicationModel: ObservableObject {
                     )
                 }
             ),
-            recordRepository: repository,
+            recordRepository: resolvedRepository,
             githubProvider: GitHubHTTPSkillProvider(
                 sessionProvider: { networkSessionManager.session }
             ),
@@ -181,8 +249,13 @@ final class BreathApplicationModel: ObservableObject {
     }
 
 #if DEBUG
-    func prepareForAppShellTesting(snapshot: WorkbenchSnapshot) {
+    func prepareForAppShellTesting(
+        snapshot: WorkbenchSnapshot,
+        automationSnapshot: AutomationSnapshot = .empty
+    ) {
         self.snapshot = snapshot
+        self.automationSnapshot = automationSnapshot
+        automationCLIInstallationStatus = automationCLIInstaller.status()
         isReady = true
         isRestoringSelectedSession = false
         startupSucceeded = true
@@ -192,6 +265,122 @@ final class BreathApplicationModel: ObservableObject {
 
     var canPerformCommands: Bool {
         isReady && !isRestoringSelectedSession && !isPreparingForTermination
+    }
+
+    var hasActiveAutomationRuns: Bool {
+        automationSnapshot.runs.contains { $0.status == .running }
+    }
+
+    var availableAutomationAgents: [AgentAdapterDescriptor] {
+        automationAgentOptions
+            .filter { $0.availability.isAvailable }
+            .map(\.adapter)
+    }
+
+    var automationAgentOptions: [AutomationAgentOption] {
+        let availabilities = automationAgentAvailabilities(
+            from: agentCLIStatuses
+        )
+        return adapters.compactMap { adapter in
+            guard let availability = availabilities[adapter.kind],
+                  availability.isInstalled
+            else {
+                return nil
+            }
+            return AutomationAgentOption(
+                adapter: adapter,
+                availability: availability
+            )
+        }
+    }
+
+    func createAutomation(_ draft: AutomationDraft) async throws -> AutomationID {
+        try await automationService.create(draft)
+    }
+
+    func updateAutomation(
+        _ automationID: AutomationID,
+        with draft: AutomationDraft
+    ) async throws {
+        try await automationService.update(automationID, with: draft)
+    }
+
+    func setAutomationEnabled(
+        _ isEnabled: Bool,
+        for automationID: AutomationID
+    ) async throws {
+        try await automationService.setEnabled(isEnabled, for: automationID)
+    }
+
+    func deleteAutomation(_ automationID: AutomationID) async throws {
+        try await automationService.delete(automationID)
+    }
+
+    func runAutomationNow(
+        _ automationID: AutomationID
+    ) async throws -> AutomationRunID {
+        try await automationService.trigger(automationID, source: .manual)
+    }
+
+    func cancelAutomationRun(_ runID: AutomationRunID) async throws {
+        try await automationService.cancel(runID)
+    }
+
+    func markAutomationRunViewed(_ runID: AutomationRunID) async throws {
+        try await automationService.markViewed(runID)
+    }
+
+    func setAutomationConcurrencyLimit(_ limit: Int) async throws {
+        try await automationService.setConcurrencyLimit(limit)
+    }
+
+    func regenerateAutomationShortcode(
+        for automationID: AutomationID
+    ) async throws -> String {
+        try await automationService.regenerateShortcode(for: automationID)
+    }
+
+    func installAutomationCLI() {
+        do {
+            try automationCLIInstaller.install()
+            automationCLIInstallationStatus = automationCLIInstaller.status()
+        } catch {
+            lastError = error.localizedDescription
+            automationCLIInstallationStatus = automationCLIInstaller.status()
+        }
+    }
+
+    func reconcileAutomationSchedulesAfterResume() {
+        guard automationServiceStarted else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await automationService.reconcileSchedules(
+                    at: Date(),
+                    reason: .resumed
+                )
+            } catch {
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
+    func suspendAutomationSchedulesForSleep() {
+        guard automationServiceStarted else { return }
+        Task {
+            await automationService.suspendForSystemSleep()
+        }
+    }
+
+    func resumeAutomationSchedulesAfterWake() {
+        guard automationServiceStarted else { return }
+        Task {
+            do {
+                try await automationService.resumeAfterSystemWake(at: Date())
+            } catch {
+                lastError = error.localizedDescription
+            }
+        }
     }
 
     func updateTerminalInputFocus(
@@ -234,31 +423,40 @@ final class BreathApplicationModel: ObservableObject {
                     await self?.refreshSnapshot()
                 }
                 settings = try await repository.loadSettings()
-                do {
-                    networkProxyPassword = try await networkProxyPasswordStore
-                        .loadPassword()
-                } catch {
+                try await workbench.restoreSnapshotFromRepository()
+                await refreshSnapshot()
+                isReady = true
+                if settings.networkProxy.mode == .manual,
+                   !settings.networkProxy.username.isEmpty
+                {
+                    do {
+                        networkProxyPassword =
+                            try await networkProxyPasswordStore.loadPassword()
+                    } catch {
+                        networkProxyPassword = ""
+                        lastError =
+                            "读取代理密码失败：\(error.localizedDescription)"
+                    }
+                } else {
                     networkProxyPassword = ""
-                    lastError = "读取代理密码失败：\(error.localizedDescription)"
                 }
                 networkSessionManager.update(
                     settings: settings.networkProxy,
                     password: networkProxyPassword
                 )
-                refreshAgentCLIStatuses()
                 let terminalSettings = resolveTerminalSettings()
                 await runtime.apply(settings: terminalSettings)
-                try await workbench.restoreSnapshotFromRepository()
-                await refreshSnapshot()
-                isReady = true
+                refreshAgentCLIStatuses()
                 await Task.yield()
                 try await workbench.materializeSelectedWorkSession()
                 await refreshSnapshot()
                 startupSucceeded = true
                 startupError = nil
+                startAutomationService()
             } catch {
                 startupError = error.localizedDescription
                 lastError = startupError
+                startAutomationService()
             }
         }
     }
@@ -648,15 +846,13 @@ final class BreathApplicationModel: ObservableObject {
             guard let self else { return }
             agentCLIStatuses = localStatuses
             await skillsService.updateTargetAvailability(
-                Dictionary(uniqueKeysWithValues: adapters.map { adapter in
-                    (
-                        adapter.kind,
-                        SkillInstallationTargetAvailabilityResolver.resolve(
-                            adapter: adapter,
-                            status: localStatuses[adapter.kind]
-                        )
-                    )
-                })
+                skillTargetAvailabilities(from: localStatuses)
+            )
+            try? await automationService.updateEnvironment(
+                workspaces: snapshot.workspaces,
+                agentAvailabilities: automationAgentAvailabilities(
+                    from: localStatuses
+                )
             )
 
             await withTaskGroup(of: (AgentKind, String, String?).self) { group in
@@ -738,11 +934,19 @@ final class BreathApplicationModel: ObservableObject {
         await networkProxyPasswordSaveTask?.value
         if !started { start() }
         await startupTask?.value
+        await automationStartupTask?.value
+        automationTriggerServer.stop()
         guard startupSucceeded else {
+            if automationServiceStarted {
+                try? await automationService.prepareForTermination()
+            }
             await workbench.stopAllTerminalsWithoutSaving()
             return true
         }
         do {
+            if automationServiceStarted {
+                try await automationService.prepareForTermination()
+            }
             try await workbench.prepareForCleanExit()
             return true
         } catch {
@@ -818,6 +1022,162 @@ final class BreathApplicationModel: ObservableObject {
 
     private func refreshSnapshot() async {
         snapshot = await workbench.snapshot()
+        guard automationServiceStarted else { return }
+        try? await automationService.updateEnvironment(
+            workspaces: snapshot.workspaces,
+            agentAvailabilities: automationAgentAvailabilities(
+                from: agentCLIStatuses
+            )
+        )
+    }
+
+    private func refreshAutomationSnapshot() async {
+        automationSnapshot = await automationService.snapshot()
+    }
+
+    private func startAutomationService() {
+        guard automationStartupTask == nil else { return }
+        automationStartupTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try automationTriggerServer.start()
+            } catch {
+                lastError =
+                    "自动化触发服务启动失败：\(error.localizedDescription)"
+            }
+            automationCLIInstallationStatus =
+                automationCLIInstaller.status()
+            do {
+                let localAgentStatuses =
+                    await detectLocalAgentCLIStatuses()
+                agentCLIStatuses = localAgentStatuses
+                await skillsService.updateTargetAvailability(
+                    skillTargetAvailabilities(
+                        from: localAgentStatuses
+                    )
+                )
+                await automationService.setSnapshotChangeHandler {
+                    [weak self] in
+                    await self?.refreshAutomationSnapshot()
+                }
+                try await automationService.start(
+                    workspaces: snapshot.workspaces,
+                    agentAvailabilities: automationAgentAvailabilities(
+                        from: localAgentStatuses
+                    )
+                )
+                automationServiceStarted = true
+                await refreshAutomationSnapshot()
+            } catch {
+                lastError = "自动化服务启动失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func detectLocalAgentCLIStatuses() async
+        -> [AgentKind: AgentCLIInstallationStatus]
+    {
+        let detector = installedAgentCLIDetector
+        let adapters = self.adapters
+        return await Task.detached(priority: .userInitiated) {
+            await withTaskGroup(
+                of: (AgentKind, AgentCLIInstallationStatus).self,
+                returning: [AgentKind: AgentCLIInstallationStatus].self
+            ) { group in
+                for adapter in adapters {
+                    group.addTask {
+                        (
+                            adapter.kind,
+                            detector.installationStatus(for: adapter)
+                        )
+                    }
+                }
+                var statuses: [AgentKind: AgentCLIInstallationStatus] = [:]
+                for await (kind, status) in group {
+                    statuses[kind] = status
+                }
+                return statuses
+            }
+        }.value
+    }
+
+    private func skillTargetAvailabilities(
+        from statuses: [AgentKind: AgentCLIInstallationStatus]
+    ) -> [AgentKind: SkillInstallationTargetAvailability] {
+        Dictionary(uniqueKeysWithValues: adapters.map { adapter in
+            (
+                adapter.kind,
+                SkillInstallationTargetAvailabilityResolver.resolve(
+                    adapter: adapter,
+                    status: statuses[adapter.kind]
+                )
+            )
+        })
+    }
+
+    private func automationAgentAvailabilities(
+        from statuses: [AgentKind: AgentCLIInstallationStatus]
+    ) -> [AgentKind: AutomationAgentAvailability] {
+        Dictionary(uniqueKeysWithValues: adapters.compactMap { adapter in
+            guard let automationCapability = adapter.automation else {
+                return nil
+            }
+            let executablePath = installedAgentCLIDetector
+                .executableURL(for: adapter.kind)?.path
+            let availability: AutomationAgentAvailability
+            switch statuses[adapter.kind] {
+            case .installed(let version?, _):
+                if InstalledAgentCLIDetector.isVersion(
+                    version,
+                    olderThan: automationCapability.minimumVersion
+                ) {
+                    availability = .unavailable(
+                        reason: "\(adapter.displayName) \(version) 低于自动化最低支持版本 \(automationCapability.minimumVersion)。",
+                        isInstalled: true,
+                        currentVersion: version
+                    )
+                } else if let executablePath {
+                    availability = .available(
+                        executablePath: executablePath,
+                        currentVersion: version
+                    )
+                } else {
+                    availability = .unavailable(
+                        reason: "未找到 \(adapter.displayName) 的可执行文件。",
+                        isInstalled: false,
+                        currentVersion: version
+                    )
+                }
+            case .installed(version: nil, updateAvailable: _):
+                if InstalledAgentCLIDetector.hasSemanticVersion(
+                    automationCapability.minimumVersion
+                ) {
+                    availability = .unavailable(
+                        reason: "\(adapter.displayName) 已安装，但无法验证版本。",
+                        isInstalled: true,
+                        currentVersion: nil
+                    )
+                } else if let executablePath {
+                    availability = .available(
+                        executablePath: executablePath,
+                        currentVersion: nil
+                    )
+                } else {
+                    availability = .unavailable(
+                        reason: "未找到 \(adapter.displayName) 的可执行文件。",
+                        isInstalled: false,
+                        currentVersion: nil
+                    )
+                }
+            case .notInstalled, nil:
+                availability = .unavailable(
+                    reason: "未安装 \(adapter.displayName)。",
+                    isInstalled: false,
+                    currentVersion: nil
+                )
+            }
+            return (adapter.kind, availability)
+        })
     }
 
     @discardableResult
