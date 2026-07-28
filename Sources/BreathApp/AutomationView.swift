@@ -171,49 +171,22 @@ struct AutomationView: View {
 
             Divider()
 
-            if model.automationSnapshot.automations.isEmpty {
-                ContentUnavailableView {
-                    Label(
-                        localizer.string("尚未创建自动化"),
-                        systemImage: "clock.arrow.2.circlepath"
-                    )
-                } description: {
-                    Text(
-                        localizer.string(
-                            "保存固定 Prompt，并让已安装的 Agent 按规则运行。"
-                        )
-                    )
-                } actions: {
-                    Button(localizer.string("新建自动化")) {
-                        showsCreator = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-            } else if filteredAutomations.isEmpty {
-                ContentUnavailableView {
-                    Label(
-                        localizer.string("没有匹配的自动化"),
-                        systemImage: "magnifyingglass"
-                    )
-                } description: {
-                    Text(localizer.string("尝试其他名称或 Prompt。"))
-                } actions: {
-                    Button(localizer.string("清除搜索")) {
-                        searchText = ""
-                    }
-                }
-            } else if navigatesToDetail {
+            if navigatesToDetail {
                 List {
-                    ForEach(filteredAutomations) { automation in
-                        HStack(spacing: 8) {
-                            NavigationLink(value: automation.id) {
-                                automationRow(
-                                    automation,
-                                    includesActions: false
-                                )
+                    if filteredAutomations.isEmpty {
+                        compactEmptyListRow
+                    } else {
+                        ForEach(filteredAutomations) { automation in
+                            HStack(spacing: 8) {
+                                NavigationLink(value: automation.id) {
+                                    automationRow(
+                                        automation,
+                                        includesActions: false
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                automationRowActions(automation)
                             }
-                            .buttonStyle(.plain)
-                            automationRowActions(automation)
                         }
                     }
                 }
@@ -223,9 +196,13 @@ struct AutomationView: View {
                 )
             } else {
                 List(selection: $selectedAutomationID) {
-                    ForEach(filteredAutomations) { automation in
-                        automationRow(automation)
-                            .tag(automation.id)
+                    if filteredAutomations.isEmpty {
+                        compactEmptyListRow
+                    } else {
+                        ForEach(filteredAutomations) { automation in
+                            automationRow(automation)
+                                .tag(automation.id)
+                        }
                     }
                 }
                 .listStyle(.sidebar)
@@ -234,7 +211,30 @@ struct AutomationView: View {
                 )
             }
         }
+        .frame(
+            maxWidth: .infinity,
+            maxHeight: .infinity,
+            alignment: .top
+        )
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    @ViewBuilder
+    private var compactEmptyListRow: some View {
+        if !model.automationSnapshot.automations.isEmpty {
+            HStack(spacing: 8) {
+                Text(localizer.string("没有匹配的自动化"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Button(localizer.string("清除搜索")) {
+                    searchText = ""
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+            }
+            .listRowSeparator(.hidden)
+        }
     }
 
     private func automationRow(

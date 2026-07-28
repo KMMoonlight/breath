@@ -104,9 +104,27 @@ enum AppShellEmptyStateVerifier {
             "workspace sidebar remained visible beside the automation page",
             into: &failures
         )
+        let automationSearchFrame = fixture.accessibilityFrame(
+            named: AutomationAccessibility.search
+        )
+        let automationCreateFrame = fixture.accessibilityFrame(
+            named: AutomationAccessibility.create
+        )
         require(
-            automationAccessibilityText.contains("尚未创建自动化"),
-            "an empty Automation library was replaced by a Workspace prerequisite",
+            automationSearchFrame.flatMap { searchFrame in
+                automationCreateFrame.map { createFrame in
+                    abs(searchFrame.midY - createFrame.midY) < 160
+                }
+            } == true,
+            "the Automation list collapsed away from the top toolbar",
+            into: &failures
+        )
+        require(
+            !automationAccessibilityText.contains("尚未创建自动化")
+                && !automationAccessibilityText.contains(
+                    "保存固定 Prompt，并让已安装的 Agent 按规则运行。"
+                ),
+            "the empty Automation library rendered a large passive prompt",
             into: &failures
         )
         require(
@@ -517,6 +535,56 @@ private final class AppShellFixture {
         return true
     }
 
+    func accessibilityFrame(named name: String) -> CGRect? {
+        let application = AXUIElementCreateApplication(
+            ProcessInfo.processInfo.processIdentifier
+        )
+        var visited: [AXUIElement] = []
+        guard let element = accessibilityElement(
+            named: name,
+            in: application,
+            depth: 0,
+            visited: &visited
+        ) else {
+            return nil
+        }
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXPositionAttribute as CFString,
+            &positionValue
+        ) == .success,
+            AXUIElementCopyAttributeValue(
+                element,
+                kAXSizeAttribute as CFString,
+                &sizeValue
+            ) == .success,
+            let positionValue,
+            let sizeValue,
+            CFGetTypeID(positionValue) == AXValueGetTypeID(),
+            CFGetTypeID(sizeValue) == AXValueGetTypeID()
+        else {
+            return nil
+        }
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(
+            positionValue as! AXValue,
+            .cgPoint,
+            &position
+        ),
+            AXValueGetValue(
+                sizeValue as! AXValue,
+                .cgSize,
+                &size
+            )
+        else {
+            return nil
+        }
+        return CGRect(origin: position, size: size)
+    }
+
     func close() {
         window?.close()
         try? FileManager.default.removeItem(at: supportDirectory)
@@ -571,6 +639,34 @@ private final class AppShellFixture {
             children.append(contentsOf: attributeChildren)
         }
         return children
+    }
+
+    private func accessibilityElement(
+        named name: String,
+        in element: AXUIElement,
+        depth: Int,
+        visited: inout [AXUIElement]
+    ) -> AXUIElement? {
+        guard depth < 20,
+              !visited.contains(where: { CFEqual($0, element) })
+        else {
+            return nil
+        }
+        visited.append(element)
+        if accessibilityStrings(for: element).contains(name) {
+            return element
+        }
+        for child in accessibilityChildren(of: element) {
+            if let match = accessibilityElement(
+                named: name,
+                in: child,
+                depth: depth + 1,
+                visited: &visited
+            ) {
+                return match
+            }
+        }
+        return nil
     }
 
     private func pressAccessibilityElement(

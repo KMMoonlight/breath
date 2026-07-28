@@ -15,7 +15,7 @@ Status: ready-for-agent
 ## Acceptance criteria
 
 - [ ] 活动栏原“任务”位置改为“自动化”，没有选中 Workspace 或 Work Session 时仍可进入；选择工作会话后沿用既有规则返回终端
-- [ ] 没有 Workspace 时展示安静的引导空状态并禁用新建；已有 Workspace 且没有自动化时可以开始创建
+- [ ] 没有 Workspace 时仍可浏览自动化库并打开创建表单；“所属工作区”下拉没有可选项，选择前不能保存
 - [ ] 用户可以创建名称、Workspace、固定多行 Prompt、Codex、仅手动触发和最大运行时长完整的自动化；名称、Workspace、Prompt 和 Agent 必填
 - [ ] 自动化使用不展示的唯一 ID，创建后默认启用但不立即运行，并通过公开用例与 GRDB repository 在应用重启后恢复
 - [ ] Codex 只有在已安装、达到兼容版本且具备自动化 Runner 契约时可选择；未安装时不显示，版本过旧时显示禁用原因
@@ -25,7 +25,7 @@ Status: ready-for-agent
 - [ ] Codex 正常退出且产生非空最终回答时标记成功；启动失败、非零退出或空回答时标记失败并只保存清理后的摘要
 - [ ] 详情展示运行状态和 Markdown 最终回答，复制操作返回原始文本，不提供“查看原文”、Diff、Artifact、文件应用或过程日志
 - [ ] 公开自动化用例测试使用临时真实 SQLite 和 Workspace，验证创建、重启恢复、运行结果及项目文件保持不变；Codex Runner 与真实沙盒另有窄契约测试
-- [ ] App Shell 验证覆盖入口替换、无 Workspace 空状态、创建表单、立即运行、结果详情、键盘和 VoiceOver 基本语义
+- [ ] App Shell 验证覆盖入口替换、无 Workspace 时仍可创建、空的所属工作区下拉、立即运行、结果详情、键盘和 VoiceOver 基本语义
 
 ## Blocked by
 
