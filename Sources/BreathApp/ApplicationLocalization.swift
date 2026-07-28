@@ -23,7 +23,7 @@ struct ApplicationLocalizer {
     }
 
     func string(_ key: String) -> String {
-        guard let path = Bundle.module.path(
+        guard let path = BreathResources.bundle.path(
             forResource: localizationIdentifier,
             ofType: "lproj"
         ), let bundle = Bundle(path: path)

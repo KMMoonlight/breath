@@ -30,4 +30,11 @@ Sparkle 自动检查更新，但 `SUAutomaticallyUpdate` 为 `false`，安装仍
 
 ## 本地打包
 
-先运行 `scripts/build-libghostty.sh`，再设置 `VERSION`、`SPARKLE_FEED_URL` 和 `SPARKLE_PUBLIC_KEY` 执行 `scripts/package-app.sh`。未设置 `CODE_SIGN_IDENTITY` 时只生成供本机验证的 ad-hoc 签名包；正式发行必须使用 Developer ID 并设置 `NOTARIZE=1`。
+开发验证直接运行 `scripts/build-app.sh`。脚本会在缺少
+`GhosttyKit.xcframework` 时自动构建它，随后生成 ad-hoc 签名的
+Universal `.app` 和 `.zip`；本地包不会启动 Sparkle 更新检查。
+
+需要模拟正式发布参数时，先运行 `scripts/build-libghostty.sh`，再设置
+`VERSION`、`SPARKLE_FEED_URL` 和 `SPARKLE_PUBLIC_KEY` 执行
+`scripts/package-app.sh`。未设置 `CODE_SIGN_IDENTITY` 时只生成供本机验证的
+ad-hoc 签名包；正式发行必须使用 Developer ID 并设置 `NOTARIZE=1`。

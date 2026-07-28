@@ -1,5 +1,5 @@
 .build/
+dist/
 .swiftpm/configuration/mirrors.json
 Vendor/GhosttyKit.xcframework/
 .DS_Store
-

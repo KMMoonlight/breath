@@ -256,7 +256,7 @@ private final class BreathAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
 #if DEBUG
-        if let iconURL = Bundle.module.url(
+        if let iconURL = BreathResources.bundle.url(
             forResource: "AppIcon",
             withExtension: "png"
         ) {

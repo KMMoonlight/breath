@@ -4,7 +4,7 @@ import SwiftUI
 
 struct AgentBrandIcon: View {
     private static let iconCount: CGFloat = 9
-    private static let sprite = Bundle.module
+    private static let sprite = BreathResources.bundle
         .url(forResource: "AgentBrandIcons", withExtension: "svg")
         .flatMap(NSImage.init(contentsOf:))
 
