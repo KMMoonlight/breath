@@ -2230,11 +2230,11 @@ struct NativeSplitView<First: View, Second: View>: NSViewRepresentable {
 @MainActor
 final class NativeSplitNSView:
     NSSplitView,
-    NSSplitViewDelegate,
     SplitDividerTrackingState
 {
     private let firstHostingView = NativeSplitHostingView(rootView: AnyView(EmptyView()))
     private let secondHostingView = NativeSplitHostingView(rootView: AnyView(EmptyView()))
+    private lazy var splitViewDelegate = NativeSplitNSViewDelegate(owner: self)
     private var minimumPosition = NativeSplitPosition.fraction(0)
     private var maximumPosition = NativeSplitPosition.fraction(1)
     private var minimumSecondLength: CGFloat = 0
@@ -2257,7 +2257,7 @@ final class NativeSplitNSView:
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         dividerStyle = .thin
-        delegate = self
+        delegate = splitViewDelegate
         firstHostingView.wantsLayer = true
         firstHostingView.layer?.masksToBounds = true
         secondHostingView.wantsLayer = true
@@ -2570,6 +2570,53 @@ final class NativeSplitNSView:
             candidate = view.superview
         }
         return false
+    }
+}
+
+@MainActor
+private final class NativeSplitNSViewDelegate: NSObject, NSSplitViewDelegate {
+    private weak var owner: NativeSplitNSView?
+
+    init(owner: NativeSplitNSView) {
+        self.owner = owner
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainMinCoordinate proposedMinimumPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        owner?.splitView(
+            splitView,
+            constrainMinCoordinate: proposedMinimumPosition,
+            ofSubviewAt: dividerIndex
+        ) ?? proposedMinimumPosition
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainMaxCoordinate proposedMaximumPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        owner?.splitView(
+            splitView,
+            constrainMaxCoordinate: proposedMaximumPosition,
+            ofSubviewAt: dividerIndex
+        ) ?? proposedMaximumPosition
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        effectiveRect proposedEffectiveRect: NSRect,
+        forDrawnRect drawnRect: NSRect,
+        ofDividerAt dividerIndex: Int
+    ) -> NSRect {
+        owner?.splitView(
+            splitView,
+            effectiveRect: proposedEffectiveRect,
+            forDrawnRect: drawnRect,
+            ofDividerAt: dividerIndex
+        ) ?? proposedEffectiveRect
     }
 }
 

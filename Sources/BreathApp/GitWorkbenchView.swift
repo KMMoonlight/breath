@@ -3936,7 +3936,6 @@ private struct GitThreeColumnLayout<Left: View, Center: View, Right: View>: NSVi
 @MainActor
 final class GitThreeColumnNSView:
     NSSplitView,
-    NSSplitViewDelegate,
     SplitDividerTrackingState
 {
     private enum Metrics {
@@ -3950,6 +3949,7 @@ final class GitThreeColumnNSView:
     private let leftHostingView = NativeSplitHostingView(rootView: AnyView(EmptyView()))
     private let centerHostingView = NativeSplitHostingView(rootView: AnyView(EmptyView()))
     private let rightHostingView = NativeSplitHostingView(rootView: AnyView(EmptyView()))
+    private lazy var splitViewDelegate = GitThreeColumnNSViewDelegate(owner: self)
     private var pendingWidths: (left: CGFloat, center: CGFloat)?
     private var pendingContent: (left: AnyView, center: AnyView, right: AnyView)?
     private var isApplyingPositions = false
@@ -3969,7 +3969,7 @@ final class GitThreeColumnNSView:
         super.init(frame: frameRect)
         isVertical = true
         dividerStyle = .thin
-        delegate = self
+        delegate = splitViewDelegate
         for hostingView in [leftHostingView, centerHostingView, rightHostingView] {
             hostingView.wantsLayer = true
             hostingView.layer?.masksToBounds = true
@@ -4290,6 +4290,60 @@ final class GitThreeColumnNSView:
             candidate = view.superview
         }
         return false
+    }
+}
+
+@MainActor
+private final class GitThreeColumnNSViewDelegate: NSObject, NSSplitViewDelegate {
+    private weak var owner: GitThreeColumnNSView?
+
+    init(owner: GitThreeColumnNSView) {
+        self.owner = owner
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainMinCoordinate proposedMinimumPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        owner?.splitView(
+            splitView,
+            constrainMinCoordinate: proposedMinimumPosition,
+            ofSubviewAt: dividerIndex
+        ) ?? proposedMinimumPosition
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainMaxCoordinate proposedMaximumPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        owner?.splitView(
+            splitView,
+            constrainMaxCoordinate: proposedMaximumPosition,
+            ofSubviewAt: dividerIndex
+        ) ?? proposedMaximumPosition
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        effectiveRect proposedEffectiveRect: NSRect,
+        forDrawnRect drawnRect: NSRect,
+        ofDividerAt dividerIndex: Int
+    ) -> NSRect {
+        owner?.splitView(
+            splitView,
+            effectiveRect: proposedEffectiveRect,
+            forDrawnRect: drawnRect,
+            ofDividerAt: dividerIndex
+        ) ?? proposedEffectiveRect
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        canCollapseSubview subview: NSView
+    ) -> Bool {
+        owner?.splitView(splitView, canCollapseSubview: subview) ?? false
     }
 }
 

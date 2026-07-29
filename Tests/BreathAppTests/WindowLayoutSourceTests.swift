@@ -63,6 +63,40 @@ private struct RecreatedTerminalHostRepresentable: NSViewRepresentable {
 
 @Suite("Main window layout source guard")
 struct WindowLayoutSourceTests {
+    @Test("native split views validate sidebar commands without recursion")
+    func nativeSplitViewsValidateSidebarCommandsWithoutRecursion() throws {
+        let packageDirectory = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let executable = packageDirectory.appendingPathComponent(".build/debug/Breath")
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+            Issue.record("missing Breath debug executable at \(executable.path)")
+            return
+        }
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["--verify-split-view-responder-chain"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let message = String(data: data, encoding: .utf8) ?? ""
+
+        #expect(
+            process.terminationReason == .exit
+                && process.terminationStatus == 0,
+            Comment(
+                rawValue: message.isEmpty
+                    ? "split-view responder verifier terminated abnormally"
+                    : message
+            )
+        )
+    }
+
     @Test("recreating a split resynchronizes the Ghostty surface viewport")
     @MainActor
     func recreatedSplitResynchronizesGhosttySurfaceViewport() async throws {

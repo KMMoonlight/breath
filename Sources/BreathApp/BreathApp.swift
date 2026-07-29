@@ -11,6 +11,9 @@ enum BreathMain {
     @MainActor
     static func main() {
 #if DEBUG
+        if CommandLine.arguments.dropFirst().first == "--verify-split-view-responder-chain" {
+            exit(SplitViewResponderChainVerifier.run())
+        }
         if CommandLine.arguments.dropFirst().first == "--verify-quiet-empty-states" {
             let resultURL: URL? = CommandLine.arguments.firstIndex(of: "--result-file").flatMap { index in
                 let pathIndex = CommandLine.arguments.index(after: index)
@@ -52,6 +55,22 @@ enum BreathMain {
         BreathDesktopApp.main()
     }
 }
+
+#if DEBUG
+@MainActor
+private enum SplitViewResponderChainVerifier {
+    static func run() -> Int32 {
+        let selector = NSSelectorFromString("toggleSidebar:")
+        let splitViews: [NSSplitView] = [
+            NativeSplitNSView(frame: .zero),
+            GitThreeColumnNSView(frame: .zero),
+        ]
+        return splitViews.allSatisfy { !$0.responds(to: selector) }
+            ? EXIT_SUCCESS
+            : EXIT_FAILURE
+    }
+}
+#endif
 
 private struct BreathDesktopApp: App {
     @NSApplicationDelegateAdaptor(BreathAppDelegate.self) private var appDelegate
