@@ -11,6 +11,11 @@ public protocol TerminalEngine: Sendable {
     func setInputSubmittedHandler(
         _ handler: @escaping @Sendable (TerminalPaneID) async -> Void
     ) async
+    func openNoteAgent(_ launch: NoteAgentTerminalLaunch) async throws
+    func closeNoteAgent(_ terminalID: NoteAgentTerminalID) async
+    func setNoteAgentProcessExitHandler(
+        _ handler: @escaping @Sendable (NoteAgentTerminalID) -> Void
+    ) async
 }
 
 public extension TerminalEngine {
@@ -21,6 +26,24 @@ public extension TerminalEngine {
     func setInputSubmittedHandler(
         _ handler: @escaping @Sendable (TerminalPaneID) async -> Void
     ) async {}
+
+    func openNoteAgent(_ launch: NoteAgentTerminalLaunch) async throws {
+        throw TerminalEngineCapabilityError.noteAgentUnsupported
+    }
+
+    func closeNoteAgent(_ terminalID: NoteAgentTerminalID) async {}
+
+    func setNoteAgentProcessExitHandler(
+        _ handler: @escaping @Sendable (NoteAgentTerminalID) -> Void
+    ) async {}
+}
+
+public enum TerminalEngineCapabilityError: LocalizedError, Equatable {
+    case noteAgentUnsupported
+
+    public var errorDescription: String? {
+        "当前终端引擎不支持笔记 Agent。"
+    }
 }
 
 public enum TerminalPasteSafety {
@@ -38,12 +61,28 @@ public protocol TerminalViewProviding: AnyObject {
         _ event: NSEvent,
         for paneID: TerminalPaneID
     ) -> Bool
+    func view(for noteAgentTerminalID: NoteAgentTerminalID) -> NSView?
+    func handleShortcutKeyDown(
+        _ event: NSEvent,
+        for noteAgentTerminalID: NoteAgentTerminalID
+    ) -> Bool
 }
 
 public extension TerminalViewProviding {
     func handleShortcutKeyDown(
         _ event: NSEvent,
         for paneID: TerminalPaneID
+    ) -> Bool {
+        false
+    }
+
+    func view(for noteAgentTerminalID: NoteAgentTerminalID) -> NSView? {
+        nil
+    }
+
+    func handleShortcutKeyDown(
+        _ event: NSEvent,
+        for noteAgentTerminalID: NoteAgentTerminalID
     ) -> Bool {
         false
     }

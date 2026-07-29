@@ -13,4 +13,15 @@ enum BreathResources {
         }
         return .module
     }()
+
+    static var notesEditorHTMLURL: URL? {
+        bundle.url(
+            forResource: "editor",
+            withExtension: "html",
+            subdirectory: "NotesEditor"
+        ) ?? bundle.url(
+            forResource: "editor",
+            withExtension: "html"
+        )
+    }
 }

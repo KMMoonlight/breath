@@ -1,6 +1,7 @@
 import AppKit
 import BreathAutomation
 import BreathCore
+import BreathNotes
 import BreathTerminal
 import SwiftUI
 
@@ -8,6 +9,7 @@ enum WorkbenchAccessibility {
     static let addWorkspace = "添加工作区"
     static let noSelectedWorkSession = "没有选中的工作会话"
     static let openWorkspace = "打开工作区"
+    static let openNotes = "打开笔记"
     static let openSettings = "打开设置"
     static let openGitWorkbench = "打开 Git 工作台"
     static let openAutomation = "打开自动化"
@@ -18,6 +20,7 @@ enum WorkbenchAccessibility {
 
 private enum WorkbenchDetailMode: Equatable {
     case workspace
+    case notes
     case automation
     case skills
     case agentQuota
@@ -72,6 +75,9 @@ struct WorkbenchView: View {
             .onChange(of: colorScheme) { _, _ in
                 model.synchronizeTerminalAppearance(resolvedAppearance)
             }
+            .onChange(of: detailMode, initial: true) { _, mode in
+                model.setNotesActive(mode == .notes)
+            }
             .onChange(of: model.snapshot) { previousSnapshot, snapshot in
                 updateWorkspaceExpansion(from: previousSnapshot, to: snapshot)
                 offerRemovalForUnavailableWorkspace()
@@ -95,16 +101,20 @@ struct WorkbenchView: View {
             .onReceive(
                 NotificationCenter.default.publisher(for: .breathSelectWorkSessionTab)
             ) { notification in
+                guard detailMode != .notes else { return }
                 guard let tab = notification.object as? WorkSessionTabShortcut else { return }
                 selectWorkSessionTab(at: tab.selectionIndex)
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathSelectPreviousPane)) { _ in
+                guard detailMode != .notes else { return }
                 focusAdjacentPane(previous: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathSelectNextPane)) { _ in
+                guard detailMode != .notes else { return }
                 focusAdjacentPane(previous: false)
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathCloseTerminalTarget)) { _ in
+                guard detailMode != .notes else { return }
                 closeTerminalTarget()
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathGitCommit)) { _ in
@@ -304,6 +314,14 @@ struct WorkbenchView: View {
                 isSelected: detailMode == .workspace
             ) {
                 detailMode = .workspace
+            }
+
+            activityBarButton(
+                systemName: "note.text",
+                accessibilityLabel: WorkbenchAccessibility.openNotes,
+                isSelected: detailMode == .notes
+            ) {
+                detailMode = .notes
             }
 
             activityBarButton(
@@ -1042,6 +1060,8 @@ struct WorkbenchView: View {
     private var detail: some View {
         if detailMode == .settings {
             BreathSettingsView(model: model)
+        } else if detailMode == .notes {
+            NotesView(applicationModel: model)
         } else if detailMode == .skills {
             SkillsView(service: model.skillsService)
         } else if detailMode == .agentQuota {

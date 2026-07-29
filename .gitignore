@@ -3,3 +3,4 @@ dist/
 .swiftpm/configuration/mirrors.json
 Vendor/GhosttyKit.xcframework/
 .DS_Store
+Web/NotesEditor/node_modules/

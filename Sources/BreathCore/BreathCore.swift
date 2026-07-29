@@ -32,6 +32,32 @@ public struct TerminalPaneID: RawRepresentable, Hashable, Codable, Sendable {
     }
 }
 
+public struct NoteAgentConversationID:
+    RawRepresentable,
+    Hashable,
+    Codable,
+    Sendable
+{
+    public let rawValue: UUID
+
+    public init(rawValue: UUID) {
+        self.rawValue = rawValue
+    }
+}
+
+public struct NoteAgentTerminalID:
+    RawRepresentable,
+    Hashable,
+    Codable,
+    Sendable
+{
+    public let rawValue: UUID
+
+    public init(rawValue: UUID) {
+        self.rawValue = rawValue
+    }
+}
+
 public struct Workspace: Equatable, Codable, Sendable, Identifiable {
     public let id: WorkspaceID
     public let path: String
@@ -141,15 +167,31 @@ public struct AgentBinding: Equatable, Codable, Sendable {
     }
 }
 
+public enum AgentEventScope: Equatable, Sendable {
+    case terminalPane(
+        workspaceID: WorkspaceID,
+        workSessionID: WorkSessionID,
+        paneID: TerminalPaneID
+    )
+    case noteLibrary(
+        noteLibraryID: UUID,
+        conversationID: NoteAgentConversationID,
+        terminalID: NoteAgentTerminalID
+    )
+}
+
 public struct AgentEvent: Equatable, Codable, Sendable {
     public let applicationInstanceID: ApplicationInstanceID
     public let agent: AgentKind
     public let version: String?
     public let lifecycle: AgentLifecycle
     public let occurredAt: Date
-    public let workspaceID: WorkspaceID
-    public let workSessionID: WorkSessionID
-    public let paneID: TerminalPaneID
+    public let workspaceID: WorkspaceID?
+    public let workSessionID: WorkSessionID?
+    public let paneID: TerminalPaneID?
+    public let noteLibraryID: UUID?
+    public let noteAgentConversationID: NoteAgentConversationID?
+    public let noteAgentTerminalID: NoteAgentTerminalID?
     public let sessionID: String?
     public let nativeTitle: String?
     public let workingDirectory: String
@@ -175,9 +217,62 @@ public struct AgentEvent: Equatable, Codable, Sendable {
         self.workspaceID = workspaceID
         self.workSessionID = workSessionID
         self.paneID = paneID
+        noteLibraryID = nil
+        noteAgentConversationID = nil
+        noteAgentTerminalID = nil
         self.sessionID = sessionID
         self.nativeTitle = nativeTitle
         self.workingDirectory = workingDirectory
+    }
+
+    public init(
+        applicationInstanceID: ApplicationInstanceID,
+        agent: AgentKind,
+        version: String? = nil,
+        lifecycle: AgentLifecycle,
+        occurredAt: Date,
+        noteLibraryID: UUID,
+        noteAgentConversationID: NoteAgentConversationID,
+        noteAgentTerminalID: NoteAgentTerminalID,
+        sessionID: String? = nil,
+        nativeTitle: String? = nil,
+        workingDirectory: String
+    ) {
+        self.applicationInstanceID = applicationInstanceID
+        self.agent = agent
+        self.version = version
+        self.lifecycle = lifecycle
+        self.occurredAt = occurredAt
+        workspaceID = nil
+        workSessionID = nil
+        paneID = nil
+        self.noteLibraryID = noteLibraryID
+        self.noteAgentConversationID = noteAgentConversationID
+        self.noteAgentTerminalID = noteAgentTerminalID
+        self.sessionID = sessionID
+        self.nativeTitle = nativeTitle
+        self.workingDirectory = workingDirectory
+    }
+
+    public var scope: AgentEventScope? {
+        if let workspaceID, let workSessionID, let paneID {
+            return .terminalPane(
+                workspaceID: workspaceID,
+                workSessionID: workSessionID,
+                paneID: paneID
+            )
+        }
+        if let noteLibraryID,
+           let noteAgentConversationID,
+           let noteAgentTerminalID
+        {
+            return .noteLibrary(
+                noteLibraryID: noteLibraryID,
+                conversationID: noteAgentConversationID,
+                terminalID: noteAgentTerminalID
+            )
+        }
+        return nil
     }
 }
 
@@ -577,6 +672,28 @@ public struct TerminalLaunch: Equatable, Sendable {
         environment: [String: String]
     ) {
         self.paneID = paneID
+        self.workingDirectory = workingDirectory
+        self.executable = executable
+        self.arguments = arguments
+        self.environment = environment
+    }
+}
+
+public struct NoteAgentTerminalLaunch: Equatable, Sendable {
+    public let terminalID: NoteAgentTerminalID
+    public let workingDirectory: String
+    public let executable: String
+    public let arguments: [String]
+    public let environment: [String: String]
+
+    public init(
+        terminalID: NoteAgentTerminalID,
+        workingDirectory: String,
+        executable: String,
+        arguments: [String],
+        environment: [String: String]
+    ) {
+        self.terminalID = terminalID
         self.workingDirectory = workingDirectory
         self.executable = executable
         self.arguments = arguments
@@ -1745,14 +1862,23 @@ public actor Workbench {
         guard event.applicationInstanceID == applicationInstanceID else {
             throw WorkbenchError.agentEventTargetMismatch
         }
+        guard case let .terminalPane(
+            workspaceID,
+            workSessionID,
+            paneID
+        ) = event.scope else {
+            throw WorkbenchError.agentEventTargetMismatch
+        }
         guard let sessionIndex = currentSnapshot.workSessions.firstIndex(where: {
-            $0.id == event.workSessionID && $0.workspaceID == event.workspaceID
+            $0.id == workSessionID && $0.workspaceID == workspaceID
         }) else {
             throw WorkbenchError.agentEventTargetMismatch
         }
 
         let currentLayout = currentSnapshot.workSessions[sessionIndex].layout
-        guard let currentPane = currentLayout.panes.first(where: { $0.id == event.paneID }) else {
+        guard let currentPane = currentLayout.panes.first(where: {
+            $0.id == paneID
+        }) else {
             throw WorkbenchError.agentEventTargetMismatch
         }
         if let lastEventAt = currentPane.agentBinding?.lastEventAt,
@@ -1772,7 +1898,7 @@ public actor Workbench {
         }
 
         let previousSnapshot = currentSnapshot
-        guard let updatedLayout = currentLayout.updatingPane(id: event.paneID, transform: { pane in
+        guard let updatedLayout = currentLayout.updatingPane(id: paneID, transform: { pane in
             var binding: AgentBinding
             if let current = pane.agentBinding, current.agent == event.agent {
                 binding = current

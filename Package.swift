@@ -15,6 +15,10 @@ var targets: [Target] = [
     .target(name: "BreathCore"),
     .target(name: "BreathTestSupport"),
     .target(
+        name: "BreathNotes",
+        dependencies: ["BreathCore"]
+    ),
+    .target(
         name: "BreathAgents",
         dependencies: [
             "BreathCore",
@@ -43,6 +47,7 @@ var targets: [Target] = [
         name: "BreathPersistence",
         dependencies: [
             "BreathAutomation",
+            "BreathNotes",
             "BreathSkills",
             "BreathCore",
             .product(name: "GRDB", package: "GRDB.swift"),
@@ -84,6 +89,7 @@ targets += [
             "BreathAgents",
             "BreathAutomation",
             "BreathCore",
+            "BreathNotes",
             "BreathPersistence",
             "BreathSkills",
             "BreathTerminal",
@@ -94,11 +100,19 @@ targets += [
         linkerSettings: [
             .linkedFramework("Network"),
             .linkedFramework("Security"),
+            .linkedFramework("WebKit"),
         ]
     ),
     .testTarget(
         name: "BreathCoreTests",
         dependencies: ["BreathCore"]
+    ),
+    .testTarget(
+        name: "BreathNotesTests",
+        dependencies: [
+            "BreathNotes",
+            "BreathPersistence",
+        ]
     ),
     .testTarget(
         name: "BreathAutomationTests",
@@ -113,7 +127,9 @@ targets += [
             "BreathAgents",
             "BreathAutomation",
             "BreathCore",
+            "BreathNotes",
             "BreathPersistence",
+            .product(name: "GRDB", package: "GRDB.swift"),
         ]
     ),
     .testTarget(
@@ -154,6 +170,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "BreathCore", targets: ["BreathCore"]),
+        .library(name: "BreathNotes", targets: ["BreathNotes"]),
         .library(name: "BreathAgents", targets: ["BreathAgents"]),
         .library(name: "BreathAutomation", targets: ["BreathAutomation"]),
         .library(name: "BreathSkills", targets: ["BreathSkills"]),

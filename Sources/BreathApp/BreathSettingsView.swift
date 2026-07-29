@@ -1,6 +1,7 @@
 import AppKit
 import BreathAgents
 import BreathCore
+import BreathNotes
 import CoreText
 import SwiftUI
 
@@ -8,6 +9,7 @@ enum BreathSettingsTab: Hashable, CaseIterable {
     case application
     case network
     case terminal
+    case notes
     case git
     case worktrees
     case agentIntegrations
@@ -21,6 +23,7 @@ private extension BreathSettingsTab {
         case .application: "应用配置"
         case .network: "网络"
         case .terminal: "终端配置"
+        case .notes: "笔记"
         case .git: "Git"
         case .worktrees: "Worktree"
         case .agentIntegrations: "Agent 集成"
@@ -34,6 +37,7 @@ private extension BreathSettingsTab {
         case .application: "paintbrush"
         case .network: "network"
         case .terminal: "terminal"
+        case .notes: "note.text"
         case .git: "point.topleft.down.to.point.bottomright.curvepath"
         case .worktrees: "arrow.triangle.branch"
         case .agentIntegrations: "point.3.connected.trianglepath.dotted"
@@ -287,6 +291,8 @@ struct BreathSettingsView: View {
             networkSettings
         case .terminal:
             terminalSettings
+        case .notes:
+            notesSettings
         case .git:
             gitSettings
         case .worktrees:
@@ -396,6 +402,10 @@ struct BreathSettingsView: View {
                 )
             }
         }
+    }
+
+    private var notesSettings: some View {
+        NotesSettingsPane(applicationModel: model)
     }
 
     private var networkSettings: some View {
@@ -1611,6 +1621,226 @@ struct BreathSettingsView: View {
             get: { archiveToDelete != nil },
             set: { if !$0 { archiveToDelete = nil } }
         )
+    }
+}
+
+private struct NotesSettingsPane: View {
+    @Environment(\.applicationLanguage) private var applicationLanguage
+    @ObservedObject var applicationModel: BreathApplicationModel
+    @ObservedObject var model: NotesApplicationModel
+    @State private var pendingLibraryURL: URL?
+
+    init(applicationModel: BreathApplicationModel) {
+        self.applicationModel = applicationModel
+        model = applicationModel.notesModel
+    }
+
+    var body: some View {
+        List {
+            Section(localizer.string("笔记库")) {
+                LabeledContent(localizer.string("路径")) {
+                    Text(
+                        model.snapshot.library?.rootPath
+                            ?? localizer.string("尚未选择")
+                    )
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                LabeledContent(localizer.string("状态")) {
+                    Label(
+                        model.isLibraryAvailable
+                            ? localizer.string("可访问")
+                            : localizer.string("不可访问"),
+                        systemImage: model.isLibraryAvailable
+                            ? "checkmark.circle.fill"
+                            : "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(
+                        model.isLibraryAvailable ? .green : .orange
+                    )
+                }
+                HStack {
+                    Button(
+                        localizer.string("选择其他目录…"),
+                        action: chooseLibrary
+                    )
+                    Button(localizer.string("重建全文索引")) {
+                        model.rebuildSearchIndex()
+                    }
+                    .disabled(!model.isLibraryAvailable)
+                }
+            }
+
+            Section(localizer.string("Markdown 主题")) {
+                LabeledContent(localizer.string("浅色外观")) {
+                    themeMenu(
+                        selection: lightTheme,
+                        options: NoteMarkdownTheme.lightThemes
+                    )
+                }
+                LabeledContent(localizer.string("深色外观")) {
+                    themeMenu(
+                        selection: darkTheme,
+                        options: NoteMarkdownTheme.darkThemes
+                    )
+                }
+                Text(
+                    localizer.string(
+                        "六套 Typora 风格主题均随 Breath 离线发布；不支持导入、自定义 CSS 或自动更新。"
+                    )
+                )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section(localizer.string("写作")) {
+                Toggle(
+                    localizer.string("显示代码块行号"),
+                    isOn: showsCodeLineNumbers
+                )
+                Toggle(
+                    localizer.string("正文拼写检查"),
+                    isOn: spellCheckEnabled
+                )
+                Text(
+                    localizer.string(
+                        "拼写检查只显示系统下划线，不启用自动更正；代码、链接、数学和 Mermaid 内容会被排除。"
+                    )
+                )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(SettingsLayout.contentInset)
+        .alert(
+            localizer.string("更换笔记库？"),
+            isPresented: Binding(
+                get: { pendingLibraryURL != nil },
+                set: { if !$0 { pendingLibraryURL = nil } }
+            )
+        ) {
+            Button(localizer.string("取消"), role: .cancel) {
+                pendingLibraryURL = nil
+            }
+            Button(
+                localizer.string("结束对话并更换"),
+                role: .destructive
+            ) {
+                guard let url = pendingLibraryURL else { return }
+                pendingLibraryURL = nil
+                Task {
+                    if applicationModel.noteAgentModel.status != .idle {
+                        await applicationModel.noteAgentModel.endConversation()
+                    }
+                    model.selectLibrary(
+                        url,
+                        discardUnsavedChanges: model.hasDirtyDocuments
+                    )
+                }
+            }
+        } message: {
+            Text(
+                localizer.string(
+                    "继续会丢弃未保存的笔记并结束旧笔记库中的 Agent 对话。"
+                )
+            )
+        }
+    }
+
+    private var localizer: ApplicationLocalizer {
+        ApplicationLocalizer(language: applicationLanguage)
+    }
+
+    private func themeMenu(
+        selection: Binding<NoteMarkdownTheme>,
+        options: [NoteMarkdownTheme]
+    ) -> some View {
+        Menu {
+            ForEach(options, id: \.self) { theme in
+                Button {
+                    selection.wrappedValue = theme
+                } label: {
+                    HStack {
+                        Text(theme.displayName)
+                        if selection.wrappedValue == theme {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Text(selection.wrappedValue.displayName)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(width: 180, height: SettingsLayout.controlHeight)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .accessibilityLabel(localizer.string("Markdown 主题"))
+    }
+
+    private var lightTheme: Binding<NoteMarkdownTheme> {
+        Binding(
+            get: { model.snapshot.preferences.lightTheme },
+            set: { value in
+                model.updatePreferences { $0.lightTheme = value }
+            }
+        )
+    }
+
+    private var darkTheme: Binding<NoteMarkdownTheme> {
+        Binding(
+            get: { model.snapshot.preferences.darkTheme },
+            set: { value in
+                model.updatePreferences { $0.darkTheme = value }
+            }
+        )
+    }
+
+    private var showsCodeLineNumbers: Binding<Bool> {
+        Binding(
+            get: { model.snapshot.preferences.showsCodeLineNumbers },
+            set: { value in
+                model.updatePreferences {
+                    $0.showsCodeLineNumbers = value
+                }
+            }
+        )
+    }
+
+    private var spellCheckEnabled: Binding<Bool> {
+        Binding(
+            get: { model.snapshot.preferences.spellCheckEnabled },
+            set: { value in
+                model.updatePreferences { $0.spellCheckEnabled = value }
+            }
+        )
+    }
+
+    private func chooseLibrary() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = localizer.string("选择笔记库")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if model.hasDirtyDocuments
+            || applicationModel.noteAgentModel.status != .idle
+        {
+            pendingLibraryURL = url
+        } else {
+            model.selectLibrary(url)
+        }
     }
 }
 

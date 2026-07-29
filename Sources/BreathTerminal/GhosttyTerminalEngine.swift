@@ -93,7 +93,10 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
     private let synchronizeRendering: Bool
     private var settings: TerminalSettings
     private var views: [TerminalPaneID: GhosttySurfaceView] = [:]
+    private var noteAgentViews: [NoteAgentTerminalID: GhosttySurfaceView] = [:]
     private var processExitHandler: (@Sendable (TerminalPaneID) -> Void)?
+    private var noteAgentProcessExitHandler:
+        (@Sendable (NoteAgentTerminalID) -> Void)?
     private var inputSubmittedHandler: (@Sendable (TerminalPaneID) async -> Void)?
     public let usesLibghostty = true
 
@@ -124,7 +127,10 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         if views[launch.paneID] != nil { return }
         let view = try GhosttySurfaceView(
             app: host.app,
-            launch: launch,
+            workingDirectory: launch.workingDirectory,
+            executable: launch.executable,
+            arguments: launch.arguments,
+            environment: launch.environment,
             fontSize: Float(settings.fontSize),
             agentSocketURL: agentSocketURL
         )
@@ -152,8 +158,43 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         views[launch.paneID] = view
     }
 
+    public func openNoteAgent(
+        _ launch: NoteAgentTerminalLaunch
+    ) async throws {
+        if noteAgentViews[launch.terminalID] != nil { return }
+        let view = try GhosttySurfaceView(
+            app: host.app,
+            workingDirectory: launch.workingDirectory,
+            executable: launch.executable,
+            arguments: launch.arguments,
+            environment: launch.environment,
+            fontSize: Float(settings.fontSize),
+            agentSocketURL: agentSocketURL
+        )
+        view.processExitHandler = { [weak self, weak view] in
+            guard let self, let view,
+                  self.noteAgentViews[launch.terminalID] === view
+            else { return }
+            view.processExitHandler = nil
+            view.inputSubmittedHandler = nil
+            self.noteAgentViews.removeValue(forKey: launch.terminalID)
+            view.closeSurface()
+            self.noteAgentProcessExitHandler?(launch.terminalID)
+        }
+        noteAgentViews[launch.terminalID] = view
+    }
+
     public func close(_ paneID: TerminalPaneID) async {
         guard let view = views.removeValue(forKey: paneID) else { return }
+        view.processExitHandler = nil
+        view.inputSubmittedHandler = nil
+        view.closeSurface()
+    }
+
+    public func closeNoteAgent(_ terminalID: NoteAgentTerminalID) async {
+        guard let view = noteAgentViews.removeValue(forKey: terminalID) else {
+            return
+        }
         view.processExitHandler = nil
         view.inputSubmittedHandler = nil
         view.closeSurface()
@@ -177,6 +218,12 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         views[paneID]
     }
 
+    public func view(
+        for noteAgentTerminalID: NoteAgentTerminalID
+    ) -> NSView? {
+        noteAgentViews[noteAgentTerminalID]
+    }
+
     func surfacePixelSize(for paneID: TerminalPaneID) -> CGSize? {
         guard let surface = views[paneID]?.surface else { return nil }
         let size = ghostty_surface_size(surface)
@@ -193,6 +240,14 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         views[paneID]?.handleShortcutKeyDown(event) ?? false
     }
 
+    public func handleShortcutKeyDown(
+        _ event: NSEvent,
+        for noteAgentTerminalID: NoteAgentTerminalID
+    ) -> Bool {
+        noteAgentViews[noteAgentTerminalID]?
+            .handleShortcutKeyDown(event) ?? false
+    }
+
     public func setProcessExitHandler(
         _ handler: @escaping @Sendable (TerminalPaneID) -> Void
     ) async {
@@ -203,6 +258,12 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         _ handler: @escaping @Sendable (TerminalPaneID) async -> Void
     ) async {
         inputSubmittedHandler = handler
+    }
+
+    public func setNoteAgentProcessExitHandler(
+        _ handler: @escaping @Sendable (NoteAgentTerminalID) -> Void
+    ) async {
+        noteAgentProcessExitHandler = handler
     }
 
     static func writeConfiguration(
@@ -500,18 +561,21 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
 
     init(
         app: ghostty_app_t,
-        launch: TerminalLaunch,
+        workingDirectory: String,
+        executable: String,
+        arguments: [String],
+        environment: [String: String],
         fontSize: Float,
         agentSocketURL: URL
     ) throws {
         // libghostty allocates its initial Metal surface during construction;
         // a zero-sized host view causes that allocation to fail.
         super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
-        self.workingDirectory = launch.workingDirectory
+        self.workingDirectory = workingDirectory
 
-        var environment = launch.environment
+        var environment = environment
         environment["BREATH_AGENT_SOCKET"] = agentSocketURL.path
-        let command = ([launch.executable] + launch.arguments)
+        let command = ([executable] + arguments)
             .map(Self.shellQuote)
             .joined(separator: " ")
         var config = ghostty_surface_config_new()
@@ -529,8 +593,8 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
         // children of a libghostty surface, so each one uses window context.
         config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
 
-        let created: ghostty_surface_t? = launch.workingDirectory.withCString { workingDirectory in
-            config.working_directory = workingDirectory
+        let created: ghostty_surface_t? = workingDirectory.withCString { directory in
+            config.working_directory = directory
             return command.withCString { command in
                 config.command = command
                 return Self.withEnvironment(environment) { variables in
@@ -958,6 +1022,7 @@ public enum GhosttyTerminalError: Error, Equatable {
 @MainActor
 public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding, @unchecked Sendable {
     private var views: [TerminalPaneID: NSView] = [:]
+    private var noteAgentViews: [NoteAgentTerminalID: NSView] = [:]
     public let usesLibghostty = false
 
     public init(
@@ -977,10 +1042,30 @@ public final class GhosttyTerminalEngine: TerminalEngine, TerminalViewProviding,
         views.removeValue(forKey: paneID)
     }
 
+    public func openNoteAgent(
+        _ launch: NoteAgentTerminalLaunch
+    ) async throws {
+        let label = NSTextField(
+            labelWithString: "请先运行 scripts/build-libghostty.sh"
+        )
+        label.alignment = .center
+        noteAgentViews[launch.terminalID] = label
+    }
+
+    public func closeNoteAgent(_ terminalID: NoteAgentTerminalID) async {
+        noteAgentViews.removeValue(forKey: terminalID)
+    }
+
     public func apply(settings: TerminalSettings) async {}
 
     public func view(for paneID: TerminalPaneID) -> NSView? {
         views[paneID]
+    }
+
+    public func view(
+        for noteAgentTerminalID: NoteAgentTerminalID
+    ) -> NSView? {
+        noteAgentViews[noteAgentTerminalID]
     }
 
     func surfacePixelSize(for paneID: TerminalPaneID) -> CGSize? {

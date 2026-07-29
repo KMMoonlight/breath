@@ -25,8 +25,49 @@ public struct AgentHookEventFactory: Sendable {
         guard let applicationInstanceID = identifier(
             ApplicationInstanceID.init(rawValue:),
             value: environment["BREATH_APPLICATION_INSTANCE_ID"]
+        ) else {
+            return nil
+        }
+
+        let metadata = try metadata(from: rawPayload)
+        let nativeTitle = metadata.title ?? codexThreadTitle(
+            agent: agent,
+            sessionID: metadata.sessionID,
+            environment: environment
+        )
+        let workingDirectory = metadata.workingDirectory
+            ?? environment["PWD"]
+            ?? ""
+
+        if let noteLibraryID = identifier(
+            { $0 },
+            value: environment["BREATH_NOTE_LIBRARY_ID"]
         ),
-            let workspaceID = identifier(
+           let conversationID = identifier(
+               NoteAgentConversationID.init(rawValue:),
+               value: environment["BREATH_NOTE_AGENT_CONVERSATION_ID"]
+           ),
+           let terminalID = identifier(
+               NoteAgentTerminalID.init(rawValue:),
+               value: environment["BREATH_NOTE_AGENT_TERMINAL_ID"]
+           )
+        {
+            return AgentEvent(
+                applicationInstanceID: applicationInstanceID,
+                agent: agent,
+                version: environment["BREATH_AGENT_VERSION"],
+                lifecycle: lifecycle,
+                occurredAt: now(),
+                noteLibraryID: noteLibraryID,
+                noteAgentConversationID: conversationID,
+                noteAgentTerminalID: terminalID,
+                sessionID: metadata.sessionID,
+                nativeTitle: nativeTitle,
+                workingDirectory: workingDirectory
+            )
+        }
+
+        guard let workspaceID = identifier(
             WorkspaceID.init(rawValue:),
             value: environment["BREATH_WORKSPACE_ID"]
         ),
@@ -41,13 +82,6 @@ public struct AgentHookEventFactory: Sendable {
         else {
             return nil
         }
-
-        let metadata = try metadata(from: rawPayload)
-        let nativeTitle = metadata.title ?? codexThreadTitle(
-            agent: agent,
-            sessionID: metadata.sessionID,
-            environment: environment
-        )
         return AgentEvent(
             applicationInstanceID: applicationInstanceID,
             agent: agent,
@@ -59,9 +93,7 @@ public struct AgentHookEventFactory: Sendable {
             paneID: paneID,
             sessionID: metadata.sessionID,
             nativeTitle: nativeTitle,
-            workingDirectory: metadata.workingDirectory
-                ?? environment["PWD"]
-                ?? ""
+            workingDirectory: workingDirectory
         )
     }
 

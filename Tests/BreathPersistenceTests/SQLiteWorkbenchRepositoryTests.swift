@@ -1,8 +1,10 @@
 import BreathAgents
 import BreathCore
+import BreathNotes
 import BreathPersistence
 import BreathSkills
 import Foundation
+import GRDB
 import Testing
 
 @Suite("SQLite workbench repository")
@@ -169,6 +171,145 @@ struct SQLiteWorkbenchRepositoryTests {
         let attributes = try FileManager.default.attributesOfItem(atPath: databaseURL.path)
         let mode = try #require(attributes[.posixPermissions] as? NSNumber).intValue
         #expect(mode & 0o777 == 0o600)
+    }
+
+    @Test("an existing pre-Notes database migrates without touching note files")
+    func preNotesDatabaseMigration() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "breath-notes-migration-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let databaseURL = root.appendingPathComponent("breath.sqlite")
+        let noteURL = root.appendingPathComponent("source.md")
+        let noteBytes = Data([0xEF, 0xBB, 0xBF]) + Data("# Source\r\n".utf8)
+        try noteBytes.write(to: noteURL)
+
+        let legacyDatabase = try DatabaseQueue(path: databaseURL.path)
+        try await legacyDatabase.write { database in
+            try database.create(table: "grdb_migrations") { table in
+                table.column("identifier", .text).notNull().primaryKey()
+            }
+            for identifier in [
+                "createWorkbenchSnapshot",
+                "createSettingsSnapshot",
+                "createSkillInstallationRecord",
+                "createAutomationSnapshot",
+            ] {
+                try database.execute(
+                    sql: "INSERT INTO grdb_migrations (identifier) VALUES (?)",
+                    arguments: [identifier]
+                )
+            }
+            try database.create(table: "workbenchSnapshot") { table in
+                table.column("id", .integer).primaryKey()
+                table.column("payload", .blob).notNull()
+            }
+            try database.create(table: "settingsSnapshot") { table in
+                table.column("id", .integer).primaryKey()
+                table.column("payload", .blob).notNull()
+            }
+            try database.create(table: "skillInstallationRecord") { table in
+                table.column("installationPath", .text).primaryKey()
+                table.column("payload", .blob).notNull()
+            }
+            try database.create(table: "automationSnapshot") { table in
+                table.column("id", .integer).primaryKey()
+                table.column("payload", .blob).notNull()
+            }
+        }
+
+        let repository = try SQLiteWorkbenchRepository(
+            databaseURL: databaseURL
+        )
+        #expect(try await repository.loadNotesState() == .empty)
+        #expect(try Data(contentsOf: noteURL) == noteBytes)
+    }
+
+    @Test("a corrupt Notes state is isolated without blocking a clean restart")
+    func corruptNotesStateIsolation() async throws {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "breath-corrupt-notes-\(UUID().uuidString).sqlite"
+            )
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+        let repository = try SQLiteWorkbenchRepository(
+            databaseURL: databaseURL
+        )
+        let database = try DatabaseQueue(path: databaseURL.path)
+        try await database.write { db in
+            try db.execute(
+                sql: "INSERT INTO notesState (id, payload) VALUES (1, ?)",
+                arguments: [Data("not-json".utf8)]
+            )
+        }
+
+        #expect(try await repository.loadNotesState() == .empty)
+        #expect(try await repository.loadNotesState() == .empty)
+    }
+
+    @Test("one corrupt recovery draft does not erase healthy Notes state")
+    func corruptRecoveryDraftIsolation() async throws {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "breath-corrupt-draft-\(UUID().uuidString).sqlite"
+            )
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+        let repository = try SQLiteWorkbenchRepository(
+            databaseURL: databaseURL
+        )
+        let library = NoteLibrary(
+            id: NoteLibraryID(rawValue: UUID()),
+            rootPath: "/tmp/notes"
+        )
+        let state = NotesPersistedState(
+            library: library,
+            openDocumentPaths: ["good.md", "bad.md"],
+            recoveryDrafts: [
+                "good.md": NoteRecoveryDraft(
+                    relativePath: "good.md",
+                    content: "healthy edit",
+                    savedContent: "saved",
+                    hadUTF8BOM: false
+                ),
+                "bad.md": NoteRecoveryDraft(
+                    relativePath: "bad.md",
+                    content: "will corrupt",
+                    savedContent: "saved",
+                    hadUTF8BOM: false
+                ),
+            ]
+        )
+        var object = try #require(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(state)
+            ) as? [String: Any]
+        )
+        var drafts = try #require(
+            object["recoveryDrafts"] as? [String: Any]
+        )
+        drafts["bad.md"] = ["relativePath": "bad.md", "content": 42]
+        object["recoveryDrafts"] = drafts
+        let payload = try JSONSerialization.data(withJSONObject: object)
+        let database = try DatabaseQueue(path: databaseURL.path)
+        try await database.write { db in
+            try db.execute(
+                sql: "INSERT INTO notesState (id, payload) VALUES (1, ?)",
+                arguments: [payload]
+            )
+        }
+
+        let recovered = try await repository.loadNotesState()
+        #expect(recovered.library == library)
+        #expect(recovered.openDocumentPaths == ["good.md", "bad.md"])
+        #expect(recovered.recoveryDrafts["good.md"]?.content == "healthy edit")
+        #expect(recovered.recoveryDrafts["bad.md"] == nil)
+        #expect(try await repository.loadNotesState() == recovered)
     }
 
     @Test("agent hook content is discarded before workbench persistence")

@@ -2,6 +2,7 @@ import AppKit
 import BreathAgents
 import BreathAutomation
 import BreathCore
+import BreathNotes
 import BreathUpdates
 import Darwin
 import SwiftUI
@@ -104,7 +105,11 @@ private struct BreathDesktopApp: App {
                     BreathShortcutCatalog.newWorkSession,
                     priority: model.shortcutPriority
                 )
-                .disabled(!model.canPerformCommands || model.currentWorkspaceID == nil)
+                .disabled(
+                    !model.canPerformCommands
+                        || model.currentWorkspaceID == nil
+                        || model.isNotesActive
+                )
 
                 Divider()
 
@@ -119,8 +124,9 @@ private struct BreathDesktopApp: App {
                     priority: model.shortcutPriority
                 )
                 .disabled(
-                    !model.canPerformCommands
-                        || model.snapshot.selectedWorkSessionID == nil
+                        !model.canPerformCommands
+                            || model.snapshot.selectedWorkSessionID == nil
+                            || model.isNotesActive
                 )
             }
             CommandMenu(localizer.string("导航")) {
@@ -140,6 +146,7 @@ private struct BreathDesktopApp: App {
                     .disabled(
                         !model.canPerformCommands
                             || !model.canSelectWorkSessionTab(at: tab.selectionIndex)
+                            || model.isNotesActive
                     )
                 }
 
@@ -155,7 +162,11 @@ private struct BreathDesktopApp: App {
                     BreathShortcutCatalog.previousPane,
                     priority: model.shortcutPriority
                 )
-                .disabled(!model.canPerformCommands || !model.canNavigateSplitPanes)
+                .disabled(
+                    !model.canPerformCommands
+                        || !model.canNavigateSplitPanes
+                        || model.isNotesActive
+                )
 
                 Button(localizer.string("下一个分屏")) {
                     NotificationCenter.default.post(
@@ -167,7 +178,11 @@ private struct BreathDesktopApp: App {
                     BreathShortcutCatalog.nextPane,
                     priority: model.shortcutPriority
                 )
-                .disabled(!model.canPerformCommands || !model.canNavigateSplitPanes)
+                .disabled(
+                    !model.canPerformCommands
+                        || !model.canNavigateSplitPanes
+                        || model.isNotesActive
+                )
             }
             CommandGroup(replacing: .appSettings) {
                 OpenSettingsPageCommand(
@@ -340,7 +355,12 @@ private final class BreathAppDelegate: NSObject, NSApplicationDelegate {
         )
         let alert = NSAlert()
         alert.messageText = localizer.string("退出 Breath？")
-        if model?.hasActiveAutomationRuns == true {
+        let hasDirtyNotes = model?.notesModel.hasDirtyDocuments == true
+        if hasDirtyNotes {
+            alert.informativeText = localizer.string(
+                "存在未保存的笔记。你可以先全部保存，或丢弃这些内存修改后退出；笔记 Agent 和其他终端会在确认退出后停止。"
+            )
+        } else if model?.hasActiveAutomationRuns == true {
             alert.informativeText = localizer.string(
                 "Breath 会保存布局，取消已排队的自动化，中断正在运行的自动化，并停止所有终端进程。"
             )
@@ -350,8 +370,14 @@ private final class BreathAppDelegate: NSObject, NSApplicationDelegate {
             )
         }
         alert.alertStyle = .warning
-        alert.addButton(withTitle: localizer.string("退出"))
-        alert.addButton(withTitle: localizer.string("取消"))
+        if hasDirtyNotes {
+            alert.addButton(withTitle: localizer.string("全部保存并退出"))
+            alert.addButton(withTitle: localizer.string("不保存并退出"))
+            alert.addButton(withTitle: localizer.string("取消"))
+        } else {
+            alert.addButton(withTitle: localizer.string("退出"))
+            alert.addButton(withTitle: localizer.string("取消"))
+        }
         switch model?.settings.application.appearance {
         case .dark:
             alert.window.appearance = NSAppearance(named: .darkAqua)
@@ -360,15 +386,30 @@ private final class BreathAppDelegate: NSObject, NSApplicationDelegate {
         case .system, nil:
             alert.window.appearance = sender.keyWindow?.effectiveAppearance
         }
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            return .terminateCancel
+        let response = alert.runModal()
+        let noteDecision: NoteCloseDecision
+        if hasDirtyNotes {
+            switch response {
+            case .alertFirstButtonReturn:
+                noteDecision = .save
+            case .alertSecondButtonReturn:
+                noteDecision = .discard
+            default:
+                return .terminateCancel
+            }
+        } else {
+            guard response == .alertFirstButtonReturn else {
+                return .terminateCancel
+            }
+            noteDecision = .discard
         }
         guard let model else {
             return .terminateNow
         }
         Task { @MainActor in
-            await GitOperationRegistry.shared.prepareForTermination()
-            let ready = await model.prepareForTermination()
+            let ready = await model.prepareForTermination(
+                noteDecision: noteDecision
+            )
             sender.reply(toApplicationShouldTerminate: ready)
         }
         return .terminateLater

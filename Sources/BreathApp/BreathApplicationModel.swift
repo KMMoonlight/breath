@@ -2,6 +2,7 @@ import AppKit
 import BreathAgents
 import BreathAutomation
 import BreathCore
+import BreathNotes
 import BreathPersistence
 import BreathSkills
 import BreathTerminal
@@ -37,11 +38,14 @@ final class BreathApplicationModel: ObservableObject {
     @Published private(set) var isRestoringSelectedSession = false
     @Published private(set) var isPreparingForTermination = false
     @Published private(set) var shortcutPriority = BreathShortcutPriority()
+    @Published private(set) var isNotesActive = false
     @Published var lastError: String?
 
     let terminalEngine: any TerminalEngine & TerminalViewProviding
     let skillsService: GlobalSkillsService
     let agentQuotaService: AgentQuotaService
+    let notesModel: NotesApplicationModel
+    let noteAgentModel: NoteAgentApplicationModel
     let adapters = AgentAdapterRegistry.builtIn.adapters
 
     private let repository: SQLiteWorkbenchRepository
@@ -61,6 +65,7 @@ final class BreathApplicationModel: ObservableObject {
     private let networkProxyPasswordStore: any NetworkProxyPasswordStoring
     private let agentCLILatestVersionChecker: AgentCLILatestVersionChecker
     private let homeDirectory: URL
+    private let applicationInstanceID: ApplicationInstanceID
     private var started = false
     private var startupSucceeded = false
     private var startupError: String?
@@ -123,10 +128,15 @@ final class BreathApplicationModel: ObservableObject {
         )
         let socketURL = supportDirectory.appendingPathComponent("agent-events.sock")
         let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
+        self.applicationInstanceID = applicationInstanceID
         let resolvedRepository = try SQLiteWorkbenchRepository(
             databaseURL: supportDirectory.appendingPathComponent("breath.sqlite")
         )
         repository = resolvedRepository
+        let resolvedNotesModel = NotesApplicationModel(
+            service: NotesService(repository: resolvedRepository)
+        )
+        notesModel = resolvedNotesModel
         let resolvedAutomationService = AutomationService(
             repository: resolvedRepository,
             runner: CLIAutomationRunner(
@@ -199,14 +209,33 @@ final class BreathApplicationModel: ObservableObject {
                 sessionProvider: { networkSessionManager.session }
             )
         )
+        let resolvedTerminalEngine:
+            any TerminalEngine & TerminalViewProviding
         if let terminalEngineOverride {
-            terminalEngine = terminalEngineOverride
+            resolvedTerminalEngine = terminalEngineOverride
         } else {
-            terminalEngine = try GhosttyTerminalEngine(
+            resolvedTerminalEngine = try GhosttyTerminalEngine(
                 configurationDirectory: supportDirectory.appendingPathComponent("terminal", isDirectory: true),
                 agentSocketURL: socketURL
             )
         }
+        terminalEngine = resolvedTerminalEngine
+        noteAgentModel = NoteAgentApplicationModel(
+            terminalEngine: resolvedTerminalEngine,
+            notesModel: resolvedNotesModel,
+            applicationInstanceID: applicationInstanceID,
+            availableAdapters: {
+                AgentAdapterRegistry.builtIn.adapters.filter {
+                    resolvedAgentCLIDetector.isInstalled($0.kind)
+                        && resolvedAgentCLIDetector.supportsMinimumVersion(
+                            of: $0
+                        )
+                }
+            },
+            executableURL: {
+                resolvedAgentCLIDetector.executableURL(for: $0)
+            }
+        )
         runtime = TerminalEngineRuntime(engine: terminalEngine)
         managedWorktreeService = ManagedWorktreeService(
             managedRootURL: supportDirectory.appendingPathComponent(
@@ -239,8 +268,13 @@ final class BreathApplicationModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 do {
-                    try await self.workbench.handleAgentEvent(event)
-                    await self.refreshSnapshot()
+                    if case .noteLibrary = event.scope {
+                        try await self.noteAgentModel.handleAgentEvent(event)
+                        self.notesModel.refresh()
+                    } else {
+                        try await self.workbench.handleAgentEvent(event)
+                        await self.refreshSnapshot()
+                    }
                 } catch {
                     self.lastError = error.localizedDescription
                 }
@@ -265,6 +299,10 @@ final class BreathApplicationModel: ObservableObject {
 
     var canPerformCommands: Bool {
         isReady && !isRestoringSelectedSession && !isPreparingForTermination
+    }
+
+    func setNotesActive(_ isActive: Bool) {
+        isNotesActive = isActive
     }
 
     var hasActiveAutomationRuns: Bool {
@@ -423,6 +461,8 @@ final class BreathApplicationModel: ObservableObject {
                     await self?.refreshSnapshot()
                 }
                 settings = try await repository.loadSettings()
+                await notesModel.restore()
+                await noteAgentModel.start()
                 try await workbench.restoreSnapshotFromRepository()
                 await refreshSnapshot()
                 isReady = true
@@ -845,6 +885,7 @@ final class BreathApplicationModel: ObservableObject {
             }.value
             guard let self else { return }
             agentCLIStatuses = localStatuses
+            noteAgentModel.refreshAvailability()
             await skillsService.updateTargetAvailability(
                 skillTargetAvailabilities(from: localStatuses)
             )
@@ -928,19 +969,35 @@ final class BreathApplicationModel: ObservableObject {
         }
     }
 
-    func prepareForTermination() async -> Bool {
+    func prepareForTermination(
+        noteDecision: NoteCloseDecision = .cancel
+    ) async -> Bool {
         guard !isPreparingForTermination else { return false }
         isPreparingForTermination = true
         await networkProxyPasswordSaveTask?.value
         if !started { start() }
         await startupTask?.value
         await automationStartupTask?.value
+        guard await notesModel.validateTermination(
+            decision: noteDecision
+        ) else {
+            isPreparingForTermination = false
+            return false
+        }
+        await GitOperationRegistry.shared.prepareForTermination()
         automationTriggerServer.stop()
         guard startupSucceeded else {
             if automationServiceStarted {
                 try? await automationService.prepareForTermination()
             }
             await workbench.stopAllTerminalsWithoutSaving()
+            guard await notesModel.prepareForTermination(
+                decision: noteDecision
+            ) else {
+                isPreparingForTermination = false
+                return false
+            }
+            await noteAgentModel.stopForApplicationTermination()
             return true
         }
         do {
@@ -948,6 +1005,13 @@ final class BreathApplicationModel: ObservableObject {
                 try await automationService.prepareForTermination()
             }
             try await workbench.prepareForCleanExit()
+            guard await notesModel.prepareForTermination(
+                decision: noteDecision
+            ) else {
+                isPreparingForTermination = false
+                return false
+            }
+            await noteAgentModel.stopForApplicationTermination()
             return true
         } catch {
             isPreparingForTermination = false
