@@ -1681,6 +1681,16 @@ private struct AutomationEditorSheet: View {
     }
 }
 
+#if DEBUG
+@MainActor
+func automationEditorVerificationView(
+    model: BreathApplicationModel
+) -> some View {
+    AutomationEditorSheet(model: model, automation: nil) { _ in }
+        .applicationLanguage(model.settings.application.language)
+}
+#endif
+
 private func triggerSummary(
     _ trigger: AutomationTrigger,
     localizer: ApplicationLocalizer

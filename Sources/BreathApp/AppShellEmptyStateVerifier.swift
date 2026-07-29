@@ -128,11 +128,29 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
         require(
-            fixture.pressAccessibilityElement(
+            fixture.accessibilityElementSupportsPress(
                 named: AutomationAccessibility.create
             ),
             "Automation creation was disabled without a Workspace",
             into: &failures
+        )
+        require(
+            fixture.pressAccessibilityElement(
+                named: WorkbenchAccessibility.openWorkspace
+            ),
+            "activity bar workspace action could not be pressed through accessibility",
+            into: &failures
+        )
+        require(
+            fixture.accessibilityText().contains(
+                WorkbenchAccessibility.addWorkspace
+            ),
+            "workspace action did not restore the workspace sidebar",
+            into: &failures
+        )
+        _ = try fixture.renderedText(
+            automationEditorVerificationView(model: fixture.model),
+            size: NSSize(width: 640, height: 700)
         )
         let automationEditorAccessibilityText = fixture.accessibilityText()
         require(
@@ -159,18 +177,8 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
         require(
-            fixture.pressAccessibilityElement(named: "取消"),
-            "the empty Automation editor could not be dismissed",
-            into: &failures
-        )
-        require(
-            fixture.pressAccessibilityElement(named: WorkbenchAccessibility.openWorkspace),
-            "activity bar workspace action could not be pressed through accessibility",
-            into: &failures
-        )
-        require(
-            fixture.accessibilityText().contains(WorkbenchAccessibility.addWorkspace),
-            "workspace action did not restore the workspace sidebar",
+            fixture.accessibilityElementSupportsPress(named: "取消"),
+            "the empty Automation editor lost its dismiss action",
             into: &failures
         )
         require(
@@ -600,17 +608,15 @@ private final class AppShellFixture {
         return true
     }
 
+    func accessibilityElementSupportsPress(named name: String) -> Bool {
+        guard let element = accessibilityElement(named: name) else {
+            return false
+        }
+        return pressTarget(for: element) != nil
+    }
+
     func accessibilityFrame(named name: String) -> CGRect? {
-        let application = AXUIElementCreateApplication(
-            ProcessInfo.processInfo.processIdentifier
-        )
-        var visited: [AXUIElement] = []
-        guard let element = accessibilityElement(
-            named: name,
-            in: application,
-            depth: 0,
-            visited: &visited
-        ) else {
+        guard let element = accessibilityElement(named: name) else {
             return nil
         }
         var positionValue: CFTypeRef?
@@ -648,6 +654,19 @@ private final class AppShellFixture {
             return nil
         }
         return CGRect(origin: position, size: size)
+    }
+
+    private func accessibilityElement(named name: String) -> AXUIElement? {
+        let application = AXUIElementCreateApplication(
+            ProcessInfo.processInfo.processIdentifier
+        )
+        var visited: [AXUIElement] = []
+        return accessibilityElement(
+            named: name,
+            in: application,
+            depth: 0,
+            visited: &visited
+        )
     }
 
     func close() {
@@ -761,14 +780,24 @@ private final class AppShellFixture {
     }
 
     private func pressElementOrAncestor(_ element: AXUIElement) -> Bool {
+        guard let target = pressTarget(for: element) else {
+            return false
+        }
+        return AXUIElementPerformAction(
+            target,
+            kAXPressAction as CFString
+        ) == .success
+    }
+
+    private func pressTarget(for element: AXUIElement) -> AXUIElement? {
         var candidate = element
         for _ in 0..<6 {
             var actionNames: CFArray?
             if AXUIElementCopyActionNames(candidate, &actionNames) == .success,
                let actionNames = actionNames as? [String],
-               actionNames.contains(kAXPressAction),
-               AXUIElementPerformAction(candidate, kAXPressAction as CFString) == .success {
-                return true
+               actionNames.contains(kAXPressAction)
+            {
+                return candidate
             }
             var parent: CFTypeRef?
             guard AXUIElementCopyAttributeValue(
@@ -779,11 +808,11 @@ private final class AppShellFixture {
                 let parent,
                 CFGetTypeID(parent) == AXUIElementGetTypeID()
             else {
-                return false
+                return nil
             }
             candidate = parent as! AXUIElement
         }
-        return false
+        return nil
     }
 }
 
