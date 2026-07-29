@@ -31,6 +31,116 @@ enum AutomationRunTimePresentation: Equatable {
     case relative(Date)
 }
 
+#if DEBUG
+@MainActor
+final class AutomationViewVerificationProbe: @unchecked Sendable {
+    private var creationEditorPresented: Binding<Bool>?
+    private var presentCreationEditorAction: (() -> Void)?
+    private var creationActionIsEnabled = false
+    private var cancelEditorAction: (() -> Void)?
+    private(set) var didCancelEditor = false
+    private(set) var workspaceAccessExplanation: String?
+
+    fileprivate func install(
+        creationEditorPresented: Binding<Bool>
+    ) {
+        self.creationEditorPresented = creationEditorPresented
+    }
+
+    fileprivate func installPresentCreationEditorAction(
+        _ action: @escaping () -> Void,
+        isEnabled: Bool
+    ) {
+        presentCreationEditorAction = action
+        creationActionIsEnabled = isEnabled
+    }
+
+    fileprivate func updateCreationActionIsEnabled(_ isEnabled: Bool) {
+        creationActionIsEnabled = isEnabled
+    }
+
+    fileprivate func installCancelEditorAction(
+        _ action: @escaping () -> Void
+    ) {
+        cancelEditorAction = action
+    }
+
+    func presentCreationEditor() -> Bool {
+        guard creationActionIsEnabled,
+              let presentCreationEditorAction
+        else {
+            return false
+        }
+        presentCreationEditorAction()
+        return true
+    }
+
+    func dismissCreationEditor() -> Bool {
+        guard let creationEditorPresented else { return false }
+        creationEditorPresented.wrappedValue = false
+        return true
+    }
+
+    var isCreationEditorPresented: Bool {
+        creationEditorPresented?.wrappedValue ?? false
+    }
+
+    func cancelEditor() -> Bool {
+        guard let cancelEditorAction else { return false }
+        cancelEditorAction()
+        return true
+    }
+
+    fileprivate func recordEditorCancellation() {
+        didCancelEditor = true
+    }
+
+    fileprivate func recordWorkspaceAccessExplanation(_ text: String) {
+        workspaceAccessExplanation = text
+    }
+}
+
+private struct AutomationCreationActionVerification: View {
+    @Environment(\.isEnabled) private var isEnabled
+    let probe: AutomationViewVerificationProbe
+    let action: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                probe.installPresentCreationEditorAction(
+                    action,
+                    isEnabled: isEnabled
+                )
+            }
+            .onChange(of: isEnabled) { _, newValue in
+                probe.updateCreationActionIsEnabled(newValue)
+            }
+    }
+}
+
+private struct AutomationViewVerificationProbeEnvironmentKey:
+    EnvironmentKey
+{
+    static let defaultValue: AutomationViewVerificationProbe? = nil
+}
+
+private extension EnvironmentValues {
+    var automationViewVerificationProbe:
+        AutomationViewVerificationProbe?
+    {
+        get {
+            self[AutomationViewVerificationProbeEnvironmentKey.self]
+        }
+        set {
+            self[AutomationViewVerificationProbeEnvironmentKey.self] =
+                newValue
+        }
+    }
+}
+#endif
+
 func automationRunTimePresentation(
     for run: AutomationRun
 ) -> AutomationRunTimePresentation {
@@ -52,6 +162,9 @@ private enum AutomationViewLayout {
 
 struct AutomationView: View {
     @ObservedObject var model: BreathApplicationModel
+#if DEBUG
+    private let verificationProbe: AutomationViewVerificationProbe?
+#endif
     @Environment(\.applicationLanguage) private var language
     @State private var selectedAutomationID: AutomationID?
     @State private var selectedRunID: AutomationRunID?
@@ -59,6 +172,23 @@ struct AutomationView: View {
     @State private var showsCreator = false
     @State private var automationToEdit: Automation?
     @State private var automationToDelete: Automation?
+
+    init(model: BreathApplicationModel) {
+        self.model = model
+#if DEBUG
+        verificationProbe = nil
+#endif
+    }
+
+#if DEBUG
+    init(
+        model: BreathApplicationModel,
+        verificationProbe: AutomationViewVerificationProbe
+    ) {
+        self.model = model
+        self.verificationProbe = verificationProbe
+    }
+#endif
 
     var body: some View {
         VStack(spacing: 0) {
@@ -93,24 +223,38 @@ struct AutomationView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(localizer.string(AutomationAccessibility.panel))
-        .onAppear { selectFirstVisibleAutomationIfNeeded() }
+        .onAppear {
+            selectFirstVisibleAutomationIfNeeded()
+#if DEBUG
+            verificationProbe?.install(
+                creationEditorPresented: $showsCreator
+            )
+#endif
+        }
         .onChange(of: filteredAutomations.map(\.id)) { _, _ in
             selectFirstVisibleAutomationIfNeeded()
         }
         .sheet(isPresented: $showsCreator) {
-            AutomationEditorSheet(model: model, automation: nil) { id in
-                selectedAutomationID = id
-                showsCreator = false
-            }
+            AutomationEditorSheet(
+                model: model,
+                automation: nil,
+                onSaved: { id in
+                    selectedAutomationID = id
+                    dismissCreationEditor()
+                },
+                onCancel: dismissCreationEditor
+            )
         }
         .sheet(item: $automationToEdit) { automation in
             AutomationEditorSheet(
                 model: model,
-                automation: automation
-            ) { id in
-                selectedAutomationID = id
-                automationToEdit = nil
-            }
+                automation: automation,
+                onSaved: { id in
+                    selectedAutomationID = id
+                    dismissEditor()
+                },
+                onCancel: dismissEditor
+            )
         }
         .confirmationDialog(
             localizer.string("删除自动化？"),
@@ -135,7 +279,10 @@ struct AutomationView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        let creationAction = {
+            presentCreationEditor()
+        }
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(localizer.string("自动化"))
                 .font(.headline)
             Text(
@@ -167,9 +314,7 @@ struct AutomationView: View {
             }
             .menuStyle(.borderlessButton)
             .controlSize(.small)
-            Button {
-                showsCreator = true
-            } label: {
+            Button(action: creationAction) {
                 Label(
                     localizer.string("新建自动化"),
                     systemImage: "plus"
@@ -180,10 +325,32 @@ struct AutomationView: View {
             .accessibilityLabel(
                 localizer.string(AutomationAccessibility.create)
             )
+#if DEBUG
+            .background {
+                if let verificationProbe {
+                    AutomationCreationActionVerification(
+                        probe: verificationProbe,
+                        action: creationAction
+                    )
+                }
+            }
+#endif
         }
         .pageToolbarLeadingPadding()
         .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
         .frame(height: WorkbenchLayout.pageToolbarHeight)
+    }
+
+    private func presentCreationEditor() {
+        showsCreator = true
+    }
+
+    private func dismissCreationEditor() {
+        showsCreator = false
+    }
+
+    private func dismissEditor() {
+        automationToEdit = nil
     }
 
     private func listPanel(navigatesToDetail: Bool) -> some View {
@@ -1078,8 +1245,12 @@ private struct AutomationEditorSheet: View {
     @ObservedObject var model: BreathApplicationModel
     let automation: Automation?
     let onSaved: (AutomationID) -> Void
-    @Environment(\.dismiss) private var dismiss
+    let onCancel: () -> Void
     @Environment(\.applicationLanguage) private var language
+#if DEBUG
+    @Environment(\.automationViewVerificationProbe)
+    private var verificationProbe
+#endif
     @State private var name: String
     @State private var workspaceID: WorkspaceID?
     @State private var prompt: String
@@ -1098,11 +1269,13 @@ private struct AutomationEditorSheet: View {
     init(
         model: BreathApplicationModel,
         automation: Automation?,
-        onSaved: @escaping (AutomationID) -> Void
+        onSaved: @escaping (AutomationID) -> Void,
+        onCancel: @escaping () -> Void
     ) {
         self.model = model
         self.automation = automation
         self.onSaved = onSaved
+        self.onCancel = onCancel
         let calendar = Calendar.current
         let now = Date()
         let defaultTime = calendar.date(
@@ -1195,11 +1368,7 @@ private struct AutomationEditorSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                ExplanationLabel(
-                    localizer.string(
-                        "Agent 直接读取真实工作区，但 macOS 沙盒会阻止它修改项目文件。"
-                    )
-                ) {
+                ExplanationLabel(workspaceAccessExplanation) {
                     Text(
                         automation == nil
                             ? localizer.string("新建自动化")
@@ -1207,6 +1376,13 @@ private struct AutomationEditorSheet: View {
                     )
                     .font(.headline)
                 }
+#if DEBUG
+                .onAppear {
+                    verificationProbe?.recordWorkspaceAccessExplanation(
+                        workspaceAccessExplanation
+                    )
+                }
+#endif
                 Spacer()
             }
             .padding(16)
@@ -1303,10 +1479,15 @@ private struct AutomationEditorSheet: View {
             Divider()
             HStack {
                 Spacer()
-                Button(localizer.string("取消")) {
-                    dismiss()
-                }
-                .keyboardShortcut(.cancelAction)
+                Button(localizer.string("取消"), action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+#if DEBUG
+                    .onAppear {
+                        verificationProbe?.installCancelEditorAction(
+                            onCancel
+                        )
+                    }
+#endif
                 Button(localizer.string("保存")) {
                     save()
                 }
@@ -1626,6 +1807,12 @@ private struct AutomationEditorSheet: View {
         ApplicationLocalizer(language: language)
     }
 
+    private var workspaceAccessExplanation: String {
+        localizer.string(
+            "Agent 直接读取真实工作区，但 macOS 沙盒会阻止它修改项目文件。"
+        )
+    }
+
     private func triggerChoiceLabel(_ choice: AutomationTriggerChoice) -> String {
         switch choice {
         case .manual: localizer.string("手动")
@@ -1684,10 +1871,19 @@ private struct AutomationEditorSheet: View {
 #if DEBUG
 @MainActor
 func automationEditorVerificationView(
-    model: BreathApplicationModel
+    model: BreathApplicationModel,
+    probe: AutomationViewVerificationProbe
 ) -> some View {
-    AutomationEditorSheet(model: model, automation: nil) { _ in }
+    AutomationEditorSheet(
+        model: model,
+        automation: nil,
+        onSaved: { _ in },
+        onCancel: {
+            probe.recordEditorCancellation()
+        }
+    )
         .applicationLanguage(model.settings.application.language)
+        .environment(\.automationViewVerificationProbe, probe)
 }
 #endif
 

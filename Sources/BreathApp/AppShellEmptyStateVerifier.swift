@@ -30,9 +30,9 @@ enum AppShellEmptyStateVerifier {
         let fixture = try AppShellFixture(snapshot: .empty)
         defer { fixture.close() }
         var failures: [String] = []
+        let canInspectAccessibility = AXIsProcessTrusted()
 
         var visibleText = try fixture.renderedText(WorkbenchView(model: fixture.model))
-        let accessibilityText = fixture.accessibilityText()
         var canvasInspection = try fixture.inspectBlankTerminalCanvas()
         require(visibleText.contains("工作区"), "empty workbench did not render its sidebar", into: &failures)
         require(!visibleText.contains("还没有工作区"), "empty workspace title is still visible", into: &failures)
@@ -47,140 +47,110 @@ enum AppShellEmptyStateVerifier {
             "selection description is still visible",
             into: &failures
         )
-        require(
-            !accessibilityText.contains("还没有工作区")
-                && !accessibilityText.contains("添加一个项目目录以打开第一个空终端"),
-            "removed workspace prompt remains in the accessibility tree: \(accessibilityText)",
-            into: &failures
-        )
-        require(
-            !accessibilityText.contains("选择一个工作会话")
-                && !accessibilityText.contains("只会在选中时恢复对应布局"),
-            "removed selection prompt remains in the accessibility tree: \(accessibilityText)",
-            into: &failures
-        )
-        require(
-            accessibilityText.contains(WorkbenchAccessibility.addWorkspace),
-            "add workspace action lost its accessibility label: \(accessibilityText)",
-            into: &failures
-        )
-        require(
-            accessibilityText.contains(WorkbenchAccessibility.noSelectedWorkSession),
-            "blank terminal canvas lost its accessibility status: \(accessibilityText)",
-            into: &failures
-        )
-        require(
-            accessibilityText.contains(WorkbenchAccessibility.openWorkspace),
-            "activity bar workspace action lost its accessibility label: \(accessibilityText)",
-            into: &failures
-        )
-        require(
-            accessibilityText.contains(WorkbenchAccessibility.openSettings),
-            "activity bar settings action lost its accessibility label: \(accessibilityText)",
-            into: &failures
-        )
-        require(
-            accessibilityText.contains(WorkbenchAccessibility.openAutomation),
-            "activity bar automation action lost its accessibility label: \(accessibilityText)",
-            into: &failures
-        )
-        require(
-            fixture.pressAccessibilityElement(named: WorkbenchAccessibility.openAutomation),
-            "activity bar automation action could not be pressed through accessibility",
-            into: &failures
-        )
-        let automationAccessibilityText = fixture.accessibilityText()
-        require(
-            automationAccessibilityText.contains(
-                WorkbenchAccessibility.automationPanel
-            ),
-            "automation action did not open the automation panel",
-            into: &failures
-        )
-        require(
-            !automationAccessibilityText.contains(
-                WorkbenchAccessibility.addWorkspace
-            ),
-            "workspace sidebar remained visible beside the automation page",
-            into: &failures
-        )
-        let automationSearchFrame = fixture.accessibilityFrame(
-            named: AutomationAccessibility.search
-        )
-        let automationCreateFrame = fixture.accessibilityFrame(
-            named: AutomationAccessibility.create
-        )
-        require(
-            automationSearchFrame.flatMap { searchFrame in
-                automationCreateFrame.map { createFrame in
-                    abs(searchFrame.midY - createFrame.midY) < 160
-                }
-            } == true,
-            "the Automation list collapsed away from the top toolbar",
-            into: &failures
-        )
-        require(
-            !automationAccessibilityText.contains("尚未创建自动化")
-                && !automationAccessibilityText.contains(
-                    "保存固定 Prompt，并让已安装的 Agent 按规则运行。"
+        if canInspectAccessibility {
+            let accessibilityText = fixture.accessibilityText()
+            require(
+                !accessibilityText.contains("还没有工作区")
+                    && !accessibilityText.contains("添加一个项目目录以打开第一个空终端"),
+                "removed workspace prompt remains in the accessibility tree: \(accessibilityText)",
+                into: &failures
+            )
+            require(
+                !accessibilityText.contains("选择一个工作会话")
+                    && !accessibilityText.contains("只会在选中时恢复对应布局"),
+                "removed selection prompt remains in the accessibility tree: \(accessibilityText)",
+                into: &failures
+            )
+            require(
+                accessibilityText.contains(WorkbenchAccessibility.addWorkspace),
+                "add workspace action lost its accessibility label: \(accessibilityText)",
+                into: &failures
+            )
+            require(
+                accessibilityText.contains(WorkbenchAccessibility.noSelectedWorkSession),
+                "blank terminal canvas lost its accessibility status: \(accessibilityText)",
+                into: &failures
+            )
+            require(
+                accessibilityText.contains(WorkbenchAccessibility.openWorkspace),
+                "activity bar workspace action lost its accessibility label: \(accessibilityText)",
+                into: &failures
+            )
+            require(
+                accessibilityText.contains(WorkbenchAccessibility.openSettings),
+                "activity bar settings action lost its accessibility label: \(accessibilityText)",
+                into: &failures
+            )
+            require(
+                accessibilityText.contains(WorkbenchAccessibility.openAutomation),
+                "activity bar automation action lost its accessibility label: \(accessibilityText)",
+                into: &failures
+            )
+            require(
+                fixture.pressAccessibilityElement(named: WorkbenchAccessibility.openAutomation),
+                "activity bar automation action could not be pressed through accessibility",
+                into: &failures
+            )
+            let automationAccessibilityText = fixture.accessibilityText()
+            require(
+                automationAccessibilityText.contains(
+                    WorkbenchAccessibility.automationPanel
                 ),
-            "the empty Automation library rendered a large passive prompt",
-            into: &failures
-        )
-        require(
-            fixture.accessibilityElementSupportsPress(
+                "automation action did not open the automation panel",
+                into: &failures
+            )
+            require(
+                !automationAccessibilityText.contains(
+                    WorkbenchAccessibility.addWorkspace
+                ),
+                "workspace sidebar remained visible beside the automation page",
+                into: &failures
+            )
+            let automationSearchFrame = fixture.accessibilityFrame(
+                named: AutomationAccessibility.search
+            )
+            let automationCreateFrame = fixture.accessibilityFrame(
                 named: AutomationAccessibility.create
-            ),
-            "Automation creation was disabled without a Workspace",
-            into: &failures
-        )
-        require(
-            fixture.pressAccessibilityElement(
-                named: WorkbenchAccessibility.openWorkspace
-            ),
-            "activity bar workspace action could not be pressed through accessibility",
-            into: &failures
-        )
-        require(
-            fixture.accessibilityText().contains(
-                WorkbenchAccessibility.addWorkspace
-            ),
-            "workspace action did not restore the workspace sidebar",
-            into: &failures
-        )
-        _ = try fixture.renderedText(
-            automationEditorVerificationView(model: fixture.model),
-            size: NSSize(width: 640, height: 700)
-        )
-        let automationEditorAccessibilityText = fixture.accessibilityText()
-        require(
-            automationEditorAccessibilityText.contains("所属工作区")
-                && automationEditorAccessibilityText.contains(
-                    "没有可选工作区"
-                )
-                && automationEditorAccessibilityText.contains("未命名"),
-            "the Automation editor did not expose its localized defaults",
-            into: &failures
-        )
-        require(
-            automationEditorAccessibilityText.contains(
-                "Agent 直接读取真实工作区，但 macOS 沙盒会阻止它修改项目文件。"
-            ),
-            "the Automation editor title lost its Workspace-access explanation",
-            into: &failures
-        )
-        require(
-            !automationEditorAccessibilityText.contains(
-                "所选 Agent 当前不可用于自动化。"
-            ),
-            "the Automation editor marked an available Agent as unavailable",
-            into: &failures
-        )
-        require(
-            fixture.accessibilityElementSupportsPress(named: "取消"),
-            "the empty Automation editor lost its dismiss action",
-            into: &failures
-        )
+            )
+            require(
+                automationSearchFrame.flatMap { searchFrame in
+                    automationCreateFrame.map { createFrame in
+                        abs(searchFrame.midY - createFrame.midY) < 160
+                    }
+                } == true,
+                "the Automation list collapsed away from the top toolbar",
+                into: &failures
+            )
+            require(
+                !automationAccessibilityText.contains("尚未创建自动化")
+                    && !automationAccessibilityText.contains(
+                        "保存固定 Prompt，并让已安装的 Agent 按规则运行。"
+                    ),
+                "the empty Automation library rendered a large passive prompt",
+                into: &failures
+            )
+            require(
+                fixture.accessibilityElementSupportsPress(
+                    named: AutomationAccessibility.create
+                ),
+                "Automation creation was disabled without a Workspace",
+                into: &failures
+            )
+            require(
+                fixture.pressAccessibilityElement(
+                    named: WorkbenchAccessibility.openWorkspace
+                ),
+                "activity bar workspace action could not be pressed through accessibility",
+                into: &failures
+            )
+            require(
+                fixture.accessibilityText().contains(
+                    WorkbenchAccessibility.addWorkspace
+                ),
+                "workspace action did not restore the workspace sidebar",
+                into: &failures
+            )
+        }
         require(
             fixture.terminalLaunchCount == 0,
             "rendering the empty workbench launched a terminal",
@@ -191,10 +161,20 @@ enum AppShellEmptyStateVerifier {
             "empty terminal canvas contains visible placeholder content: \(canvasInspection)",
             into: &failures
         )
+        let automationVerificationProbe = AutomationViewVerificationProbe()
         let emptyAutomationFixture = try AppShellFixture(snapshot: .empty)
-        _ = try emptyAutomationFixture.renderedText(
-            AutomationView(model: emptyAutomationFixture.model),
+        defer { emptyAutomationFixture.close() }
+        let emptyAutomationText = try emptyAutomationFixture.renderedText(
+            AutomationView(
+                model: emptyAutomationFixture.model,
+                verificationProbe: automationVerificationProbe
+            ),
             size: NSSize(width: 1_024, height: 700)
+        )
+        require(
+            emptyAutomationText.contains("新建自动化"),
+            "the empty Automation page lost its creation action",
+            into: &failures
         )
         require(
             emptyAutomationFixture.capturedColorsMatch(
@@ -204,23 +184,81 @@ enum AppShellEmptyStateVerifier {
             "the empty Automation list rendered an opaque sidebar background",
             into: &failures
         )
-        emptyAutomationFixture.close()
+        require(
+            automationVerificationProbe.presentCreationEditor(),
+            "the empty Automation creation action was not available",
+            into: &failures
+        )
+        require(
+            automationVerificationProbe.isCreationEditorPresented,
+            "the empty Automation creation action did not request the editor",
+            into: &failures
+        )
+        require(
+            automationVerificationProbe.dismissCreationEditor(),
+            "the Automation editor presentation could not be reset",
+            into: &failures
+        )
+        require(
+            !automationVerificationProbe.isCreationEditorPresented,
+            "the Automation editor presentation remained active",
+            into: &failures
+        )
+        let automationEditorText = try emptyAutomationFixture.renderedText(
+            automationEditorVerificationView(
+                model: emptyAutomationFixture.model,
+                probe: automationVerificationProbe
+            ),
+            size: NSSize(width: 640, height: 700)
+        )
+        require(
+            automationEditorText.contains("所属工作区")
+                && automationEditorText.contains("没有可选工作区")
+                && automationEditorText.contains("未命名"),
+            "the real Automation editor lost its localized defaults: \(automationEditorText)",
+            into: &failures
+        )
+        require(
+            !automationEditorText.contains(
+                "所选 Agent 当前不可用于自动化。"
+            ),
+            "the Automation editor marked an available Agent as unavailable",
+            into: &failures
+        )
+        require(
+            automationVerificationProbe.workspaceAccessExplanation
+                == "Agent 直接读取真实工作区，但 macOS 沙盒会阻止它修改项目文件。",
+            "the Automation editor lost its Workspace-access explanation",
+            into: &failures
+        )
+        require(
+            automationVerificationProbe.cancelEditor(),
+            "the Automation editor dismiss action was not available",
+            into: &failures
+        )
+        require(
+            automationVerificationProbe.didCancelEditor,
+            "the Automation editor dismiss action did not run",
+            into: &failures
+        )
 
         let activeWorkSessionSnapshot = makeSnapshotWithActiveWorkSession()
         try fixture.use(activeWorkSessionSnapshot)
         visibleText = try fixture.renderedText(WorkbenchView(model: fixture.model))
         canvasInspection = try fixture.inspectBlankTerminalCanvas()
         require(visibleText.contains("示例项目"), "workspace tree did not render", into: &failures)
-        require(
-            fixture.expandDisclosure(named: "示例项目"),
-            "workspace disclosure could not be expanded through accessibility",
-            into: &failures
-        )
-        require(
-            fixture.accessibilityText().contains("Agent 对话摘要"),
-            "active WorkSession tree content did not render",
-            into: &failures
-        )
+        if canInspectAccessibility {
+            require(
+                fixture.expandDisclosure(named: "示例项目"),
+                "workspace disclosure could not be expanded through accessibility",
+                into: &failures
+            )
+            require(
+                fixture.accessibilityText().contains("Agent 对话摘要"),
+                "active WorkSession tree content did not render",
+                into: &failures
+            )
+        }
         require(!visibleText.contains("选择一个工作会话"), "selection title is visible with a workspace", into: &failures)
         require(
             fixture.model.snapshot == activeWorkSessionSnapshot,
@@ -241,18 +279,22 @@ enum AppShellEmptyStateVerifier {
         let selectedTabsSnapshot = makeSnapshotWithSelectedWorkSessionTabs()
         try fixture.use(selectedTabsSnapshot)
         visibleText = try fixture.renderedText(WorkbenchView(model: fixture.model))
-        let tabAccessibilityText = fixture.accessibilityText()
+        let tabAccessibilityText = canInspectAccessibility
+            ? fixture.accessibilityText()
+            : []
         require(
             visibleText.contains("实现会话") && visibleText.contains("审查会话"),
             "same-workspace WorkSessions did not render as visible tabs: \(visibleText)",
             into: &failures
         )
-        require(
-            tabAccessibilityText.contains(where: { $0.contains("实现会话") })
-                && tabAccessibilityText.contains(where: { $0.contains("审查会话") }),
-            "WorkSession tabs are missing from the accessibility tree: \(tabAccessibilityText)",
-            into: &failures
-        )
+        if canInspectAccessibility {
+            require(
+                tabAccessibilityText.contains(where: { $0.contains("实现会话") })
+                    && tabAccessibilityText.contains(where: { $0.contains("审查会话") }),
+                "WorkSession tabs are missing from the accessibility tree: \(tabAccessibilityText)",
+                into: &failures
+            )
+        }
         require(
             fixture.model.snapshot == selectedTabsSnapshot,
             "rendering WorkSession tabs changed the snapshot",
@@ -308,17 +350,21 @@ enum AppShellEmptyStateVerifier {
             "wide automation library did not render its list and detail: \(automationWideText)",
             into: &failures
         )
-        let automationSampleAccessibilityText = fixture.accessibilityText()
-        require(
-            automationSampleAccessibilityText.contains(
-                AutomationAccessibility.panel
+        let automationSampleAccessibilityText = canInspectAccessibility
+            ? fixture.accessibilityText()
+            : []
+        if canInspectAccessibility {
+            require(
+                automationSampleAccessibilityText.contains(
+                    AutomationAccessibility.panel
+                )
+                    && automationSampleAccessibilityText.contains(
+                        AutomationAccessibility.search
+                    ),
+                "automation page lost its accessibility structure: \(automationSampleAccessibilityText)",
+                into: &failures
             )
-                && automationSampleAccessibilityText.contains(
-                    AutomationAccessibility.search
-                ),
-            "automation page lost its accessibility structure: \(automationSampleAccessibilityText)",
-            into: &failures
-        )
+        }
         let automationCompactText = try fixture.renderedText(
             AutomationView(model: fixture.model),
             size: NSSize(width: 680, height: 700)

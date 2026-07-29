@@ -389,6 +389,50 @@ struct WindowLayoutSourceTests {
         #expect(!detailHeader.contains(".pageToolbarLeadingPadding()"))
     }
 
+    @Test("Automation editor keeps its empty-workspace explanation and dismiss action")
+    func automationEditorKeepsRequiredSemantics() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/AutomationView.swift"
+            ),
+            encoding: .utf8
+        )
+        let editorStart = try #require(
+            source.range(of: "private struct AutomationEditorSheet: View")
+        )
+        let editorEnd = try #require(
+            source.range(
+                of: """
+                #if DEBUG
+                @MainActor
+                func automationEditorVerificationView
+                """,
+                range: editorStart.upperBound..<source.endIndex
+            )
+        )
+        let editor = source[
+            editorStart.lowerBound..<editorEnd.lowerBound
+        ]
+
+        #expect(
+            editor.contains(
+                "Agent 直接读取真实工作区，但 macOS 沙盒会阻止它修改项目文件。"
+            )
+        )
+        #expect(editor.contains("localizer.string(\"所属工作区\")"))
+        #expect(editor.contains("localizer.string(\"没有可选工作区\")"))
+        #expect(
+            editor.contains(
+                "Button(localizer.string(\"取消\"), action: onCancel)"
+            )
+        )
+        #expect(editor.contains(".keyboardShortcut(.cancelAction)"))
+    }
+
     @Test("Work Session Tabs use vertical separators instead of line-through dividers")
     func workSessionTabsUseVerticalSeparators() throws {
         let root = URL(
