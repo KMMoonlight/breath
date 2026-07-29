@@ -56,6 +56,73 @@ struct AgentCLIInstallationStatusTests {
         )
     }
 
+    @Test("selects the newest Agent CLI when multiple installations exist")
+    func newestInstalledCLI() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let outdatedDirectory = temporaryDirectory.appendingPathComponent(
+            "outdated",
+            isDirectory: true
+        )
+        let currentDirectory = temporaryDirectory.appendingPathComponent(
+            "current",
+            isDirectory: true
+        )
+        let prereleaseDirectory = temporaryDirectory.appendingPathComponent(
+            "prerelease",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: outdatedDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: currentDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: prereleaseDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeExecutable(
+            named: AgentKind.codex.cliExecutableName,
+            in: outdatedDirectory,
+            contents: "#!/bin/sh\necho 'codex-cli 0.133.0'\n"
+        )
+        try writeExecutable(
+            named: AgentKind.codex.cliExecutableName,
+            in: currentDirectory,
+            contents: "#!/bin/sh\necho 'codex-cli 0.146.0'\n"
+        )
+        try writeExecutable(
+            named: AgentKind.codex.cliExecutableName,
+            in: prereleaseDirectory,
+            contents: "#!/bin/sh\necho 'codex-cli 0.146.0-beta.1'\n"
+        )
+        let detector = InstalledAgentCLIDetector(
+            searchDirectories: [
+                outdatedDirectory,
+                currentDirectory,
+                prereleaseDirectory,
+            ]
+        )
+        let adapter = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .codex }
+        )
+
+        #expect(
+            detector.executableURL(for: .codex)?.standardizedFileURL
+                == currentDirectory
+                    .appendingPathComponent(AgentKind.codex.cliExecutableName)
+                    .standardizedFileURL
+        )
+        #expect(detector.supportsMinimumVersion(of: adapter))
+        #expect(
+            detector.installationStatus(for: adapter)
+                == .installed(version: "0.146.0", updateAvailable: false)
+        )
+    }
+
     @Test("quota capability respects the supported Agent CLI minimum version")
     func quotaCapabilityRequiresMinimumVersion() throws {
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -179,6 +246,12 @@ struct AgentCLIInstallationStatusTests {
             InstalledAgentCLIDetector.isVersion(
                 "2026.07.09-a3815c0",
                 olderThan: "2026.07.09-b4926d1"
+            )
+        )
+        #expect(
+            !InstalledAgentCLIDetector.isVersion(
+                "2026.07.09-b4926d1",
+                olderThan: "2026.07.09-a3815c0"
             )
         )
     }

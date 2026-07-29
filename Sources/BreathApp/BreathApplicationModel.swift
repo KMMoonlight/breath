@@ -1462,6 +1462,131 @@ struct AgentCLILatestVersionChecker: Sendable {
 }
 
 struct InstalledAgentCLIDetector: Sendable {
+    private struct DetectedExecutable: Sendable {
+        let url: URL
+        let version: AgentCLIVersion?
+    }
+
+    private struct AgentCLIVersion: Comparable, Sendable {
+        let rawValue: String
+        private let coreComponents: [Int]
+        private let prereleaseIdentifiers: [String]?
+
+        init?(rawValue: String) {
+            let withoutBuildMetadata = rawValue.split(
+                separator: "+",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            )[0]
+            let coreAndPrerelease = withoutBuildMetadata.split(
+                separator: "-",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            )
+            let rawCoreComponents = coreAndPrerelease[0].split(
+                separator: ".",
+                omittingEmptySubsequences: false
+            )
+            guard rawCoreComponents.count >= 2 else { return nil }
+
+            var coreComponents: [Int] = []
+            var attachedPrereleaseIdentifiers: [String] = []
+            for component in rawCoreComponents {
+                let digits = component.prefix(while: \Character.isNumber)
+                guard !digits.isEmpty, let value = Int(digits) else {
+                    return nil
+                }
+                coreComponents.append(value)
+                let suffix = component.dropFirst(digits.count)
+                if !suffix.isEmpty {
+                    attachedPrereleaseIdentifiers.append(String(suffix))
+                }
+            }
+
+            let explicitPrereleaseIdentifiers = coreAndPrerelease.count > 1
+                ? coreAndPrerelease[1].split(
+                    separator: ".",
+                    omittingEmptySubsequences: false
+                ).map(String.init)
+                : []
+            let prereleaseIdentifiers = explicitPrereleaseIdentifiers.isEmpty
+                ? attachedPrereleaseIdentifiers
+                : explicitPrereleaseIdentifiers
+
+            self.rawValue = rawValue
+            self.coreComponents = coreComponents
+            self.prereleaseIdentifiers = prereleaseIdentifiers.isEmpty
+                ? nil
+                : prereleaseIdentifiers
+        }
+
+        static func == (lhs: AgentCLIVersion, rhs: AgentCLIVersion) -> Bool {
+            compare(lhs, rhs) == .orderedSame
+        }
+
+        static func < (lhs: AgentCLIVersion, rhs: AgentCLIVersion) -> Bool {
+            compare(lhs, rhs) == .orderedAscending
+        }
+
+        private static func compare(
+            _ lhs: AgentCLIVersion,
+            _ rhs: AgentCLIVersion
+        ) -> ComparisonResult {
+            let componentCount = max(
+                lhs.coreComponents.count,
+                rhs.coreComponents.count
+            )
+            for index in 0..<componentCount {
+                let left = index < lhs.coreComponents.count
+                    ? lhs.coreComponents[index]
+                    : 0
+                let right = index < rhs.coreComponents.count
+                    ? rhs.coreComponents[index]
+                    : 0
+                if left != right {
+                    return left < right ? .orderedAscending : .orderedDescending
+                }
+            }
+
+            switch (lhs.prereleaseIdentifiers, rhs.prereleaseIdentifiers) {
+            case (nil, nil):
+                return .orderedSame
+            case (nil, .some):
+                return .orderedDescending
+            case (.some, nil):
+                return .orderedAscending
+            case let (.some(left), .some(right)):
+                return comparePrerelease(left, right)
+            }
+        }
+
+        private static func comparePrerelease(
+            _ lhs: [String],
+            _ rhs: [String]
+        ) -> ComparisonResult {
+            for index in 0..<min(lhs.count, rhs.count) {
+                guard lhs[index] != rhs[index] else { continue }
+                let leftNumber = Int(lhs[index])
+                let rightNumber = Int(rhs[index])
+                switch (leftNumber, rightNumber) {
+                case let (.some(left), .some(right)):
+                    if left == right { continue }
+                    return left < right
+                        ? .orderedAscending
+                        : .orderedDescending
+                case (.some, nil):
+                    return .orderedAscending
+                case (nil, .some):
+                    return .orderedDescending
+                case (nil, nil):
+                    return lhs[index].compare(rhs[index])
+                }
+            }
+            if lhs.count == rhs.count { return .orderedSame }
+            return lhs.count < rhs.count ? .orderedAscending : .orderedDescending
+        }
+    }
+
     private let searchDirectories: [URL]
 
     init(searchDirectories: [URL]) {
@@ -1483,58 +1608,57 @@ struct InstalledAgentCLIDetector: Sendable {
     }
 
     func isInstalled(_ agent: AgentKind) -> Bool {
-        executableURL(for: agent) != nil
+        !executableURLs(for: agent).isEmpty
     }
 
     func supportsMinimumVersion(
         of adapter: AgentAdapterDescriptor
     ) -> Bool {
-        guard let executableURL = executableURL(for: adapter.kind) else {
+        guard let executable = detectedExecutable(for: adapter.kind) else {
             return false
         }
-        guard Self.hasSemanticVersion(adapter.minimumVersion) else {
+        guard let minimumVersion = Self.parsedVersion(
+            in: adapter.minimumVersion
+        ) else {
             return true
         }
-        guard let output = try? run(executableURL, arguments: ["--version"]),
-              let version = Self.version(in: output)
-        else {
+        guard let version = executable.version else {
             return true
         }
-        return !Self.isVersion(version, olderThan: adapter.minimumVersion)
+        return version >= minimumVersion
     }
 
     func homebrewCaskToken(for agent: AgentKind) -> String? {
-        guard let executableURL = executableURL(for: agent) else { return nil }
-        return homebrewCaskToken(for: agent, executableURL: executableURL)
+        guard let executable = detectedExecutable(for: agent) else { return nil }
+        return homebrewCaskToken(for: agent, executableURL: executable.url)
     }
 
     func installationStatus(
         for adapter: AgentAdapterDescriptor,
         latestVersion: String? = nil
     ) -> AgentCLIInstallationStatus {
-        guard let executableURL = executableURL(for: adapter.kind) else {
+        guard let executable = detectedExecutable(for: adapter.kind) else {
             return .notInstalled
         }
-        guard let output = try? run(executableURL, arguments: ["--version"]),
-              let version = Self.version(in: output)
-        else {
+        guard let version = executable.version else {
             return .installed(version: nil, updateAvailable: false)
         }
+        let targetVersion = Self.parsedVersion(
+            in: latestVersion ?? adapter.minimumVersion
+        )
         return .installed(
-            version: version,
-            updateAvailable: Self.isVersion(
-                version,
-                olderThan: latestVersion ?? adapter.minimumVersion
-            )
+            version: version.rawValue,
+            updateAvailable: targetVersion.map { version < $0 } ?? false
         )
     }
 
     func update(
         _ adapter: AgentAdapterDescriptor
     ) throws -> AgentCLIInstallationStatus {
-        guard let executableURL = executableURL(for: adapter.kind) else {
+        guard let executable = detectedExecutable(for: adapter.kind) else {
             throw AgentCLIInstallationError.notInstalled(adapter.displayName)
         }
+        let executableURL = executable.url
         if adapter.kind == .antigravityCLI {
             throw AgentCLIInstallationError.manualUpdateRequired(
                 name: adapter.displayName,
@@ -1593,9 +1717,41 @@ struct InstalledAgentCLIDetector: Sendable {
     }
 
     func executableURL(for agent: AgentKind) -> URL? {
+        detectedExecutable(for: agent)?.url
+    }
+
+    private func detectedExecutable(
+        for agent: AgentKind
+    ) -> DetectedExecutable? {
+        let executableURLs = executableURLs(for: agent)
+        var selectedExecutable: DetectedExecutable?
+        for executableURL in executableURLs {
+            guard let output = try? run(
+                executableURL,
+                arguments: ["--version"]
+            ), let version = Self.parsedVersion(in: output)
+            else {
+                continue
+            }
+            if let selectedVersion = selectedExecutable?.version,
+               selectedVersion >= version
+            {
+                continue
+            }
+            selectedExecutable = DetectedExecutable(
+                url: executableURL,
+                version: version
+            )
+        }
+        return selectedExecutable ?? executableURLs.first.map {
+            DetectedExecutable(url: $0, version: nil)
+        }
+    }
+
+    private func executableURLs(for agent: AgentKind) -> [URL] {
         searchDirectories
             .map { $0.appendingPathComponent(agent.cliExecutableName) }
-            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+            .filter { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
     private func run(_ executableURL: URL, arguments: [String]) throws -> String {
@@ -1626,51 +1782,34 @@ struct InstalledAgentCLIDetector: Sendable {
         return contents
     }
 
-    private static func version(in output: String) -> String? {
+    private static func parsedVersion(
+        in output: String
+    ) -> AgentCLIVersion? {
         output
             .split(whereSeparator: \Character.isWhitespace)
             .lazy
-            .compactMap { rawToken -> String? in
+            .compactMap { rawToken -> AgentCLIVersion? in
                 var token = String(rawToken)
                     .trimmingCharacters(in: CharacterSet(charactersIn: "()[]{}<>,;:"))
                 if token.first == "v" || token.first == "V" {
                     token.removeFirst()
                 }
-                let components = token.split(separator: ".", omittingEmptySubsequences: false)
-                guard components.count >= 2,
-                      components.allSatisfy({ component in
-                          component.first?.isNumber == true
-                      })
-                else {
-                    return nil
-                }
-                return token
+                return AgentCLIVersion(rawValue: token)
             }
             .first
     }
 
     static func isVersion(_ version: String, olderThan minimumVersion: String) -> Bool {
-        guard let minimum = Self.version(in: minimumVersion) else { return false }
-        let currentComponents = numericComponents(of: version)
-        let minimumComponents = numericComponents(of: minimum)
-        let componentCount = max(currentComponents.count, minimumComponents.count)
-        for index in 0..<componentCount {
-            let current = index < currentComponents.count ? currentComponents[index] : 0
-            let required = index < minimumComponents.count ? minimumComponents[index] : 0
-            if current != required { return current < required }
+        guard let current = parsedVersion(in: version),
+              let minimum = parsedVersion(in: minimumVersion)
+        else {
+            return false
         }
-        return version != minimum
+        return current < minimum
     }
 
     static func hasSemanticVersion(_ value: String) -> Bool {
-        version(in: value) != nil
-    }
-
-    private static func numericComponents(of version: String) -> [Int] {
-        version.split(separator: ".").map { component in
-            let digits = component.prefix(while: \Character.isNumber)
-            return Int(digits) ?? 0
-        }
+        parsedVersion(in: value) != nil
     }
 
     private static func defaultSearchDirectories(
