@@ -1307,7 +1307,7 @@ struct WindowLayoutSourceTests {
         )
         let gitWorkbenchDetailStart = try #require(
             source.range(
-                of: "} else if GitWorkbenchReleaseGate.isEnabled,",
+                of: "} else if detailMode == .gitWorkbench {",
                 range: automationPanelStart.upperBound..<source.endIndex
             )
         )

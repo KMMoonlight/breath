@@ -1,8 +1,8 @@
 # Git 工作台首次交付验收矩阵
 
-Status: implementation-complete-pending-manual-accessibility-acceptance
+Status: implementation-complete-release-enabled-pending-manual-accessibility-acceptance
 
-本矩阵按 PRD 顺序连续覆盖全部 208 条 User Stories。自动验收基于真实临时 Git 仓库、Swift Testing、源码契约、本地化资源检查和静态安全扫描。VoiceOver 辅助功能树与无鼠标复杂流程仍需在获得 macOS Accessibility 权限的机器上完成人工签字；在此之前，Release 构建默认关闭 Git 工作台，Debug 或设置 `BREATH_ENABLE_GIT_WORKBENCH=1` 的内部构建可用于验收。
+本矩阵按 PRD 顺序连续覆盖全部 208 条 User Stories。自动验收基于真实临时 Git 仓库、Swift Testing、源码契约、本地化资源检查和静态安全扫描。VoiceOver 辅助功能树与无鼠标复杂流程仍需在获得 macOS Accessibility 权限的机器上完成人工签字；根据完整功能打包要求，Release 构建现已默认包含 Git 工作台，人工辅助功能验收作为后续发布检查继续保留。
 
 | PRD stories | Issues | 验收证据 | 状态 |
 | --- | --- | --- | --- |
@@ -32,20 +32,20 @@ Status: implementation-complete-pending-manual-accessibility-acceptance
 | Stories 192–197 | 33 | JetBrains macOS 默认快捷键、焦点 Scope、Terminal 隔离、设置冲突和命令面测试 | 自动通过 |
 | Stories 198–202 | 34 | 简中/英文键集合、占位符、原始 Git 数据与错误保留检查 | 自动通过 |
 | Stories 203–207 | 35 | 稳定 accessibility label、非颜色状态、Graph 线性拓扑描述、键盘命令面、Reduce Motion 与字体契约 | 自动通过；VoiceOver/无鼠标人工验收待签字 |
-| Stories 208 | 36 | 本矩阵、36 Issue 门禁、完整回归、范围扫描与内部 Release Gate | 实现完成；首次公开交付待人工辅助功能签字 |
+| Stories 208 | 36 | 本矩阵、36 Issue 门禁、完整回归与范围扫描 | 实现完成；Release 已启用，人工辅助功能验收待签字 |
 
 ## 自动验收记录
 
 - 自动测试聚合结果：169 个测试中 168 个通过。`BreathAppTests` 中除 `WorkbenchEmptyStateTests` 外的 101 个测试全部通过，其余模块 66 个测试全部通过；该空状态套件自身的纯像素测试通过，原生 App 校验测试被当前机器的 Endpoint Security 在 LaunchServices 启动阶段以 SIGKILL 拒绝。Git 工作台新增测试套件全部通过。
 - 全量 `swift test --disable-sandbox --quiet` 完成 169 项测试并仅报告上述 1 项既有原生 App 校验失败，因此完整套件门禁仍未签字。
-- `swift build --disable-sandbox -c release`：通过；公开 Release 默认保持 Git 工作台关闭。
+- `swift build --disable-sandbox -c release`：通过；公开 Release 默认包含 Git 工作台。
 - `plutil -lint`：简体中文与英文 `Localizable.strings` 均通过。
 - 安全范围扫描：不存在裸 `--force` 命令；仅允许 `--force-with-lease`。Git 工作台源码不导入 `BreathAgents`，不包含 Git Worktree 命令或托管平台集成。
 - 专项用例：真实临时仓库覆盖分页历史、特殊文件名与 Rename、冲突恢复、Interactive Rebase、跨 Root 并发与部分成功、stdout/stderr 隔离、凭证脱敏、退出时取消只读并等待写操作。
 
-## 未完成的发布门禁
+## 待完成人工验收
 
 - 当前执行环境的 Orca runtime 启动后立即退出，`orca computer` 无法提供辅助功能树。
 - `AXIsProcessTrusted()` 为 `false`，`osascript` 也被 macOS 拒绝辅助访问，因此无法在本轮代替人工完成 VoiceOver、Merge Tool、复杂 Diff 与全键盘流程签字。
 - 当前机器的 Endpoint Security 会拒绝测试创建的临时 `BreathAppShellVerifier.app`；系统日志记录 `ES_AUTH_RESULT_DENY`，即使复制并 ad-hoc 签名临时 Bundle 也会在启动后被 SIGKILL。该环境限制阻止既有原生空状态校验完成。
-- 以上是首次公开交付门禁，不是未实现的产品代码。Release 构建保持内部 Feature Flag；获得辅助功能权限后应按 Issue 35 完成人工验收，再将 Issue 35/36 标记为完成并移除 Release Gate。
+- 以上不是未实现的产品代码，也不再阻止完整功能打包。获得辅助功能权限后仍应按 Issue 35 完成人工验收，并补充 Issue 35/36 的签字记录。

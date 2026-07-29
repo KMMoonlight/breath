@@ -162,48 +162,46 @@ private struct BreathDesktopApp: App {
                 }
                 .disabled(!updateController.configuration.isReady)
             }
-            if GitWorkbenchReleaseGate.isEnabled {
-                CommandMenu(localizer.string("Git")) {
-                    Button(localizer.string("打开 Git 工作台")) {
-                        NotificationCenter.default.post(
-                            name: .breathOpenGitWorkbench,
-                            object: nil
-                        )
-                    }
-                    .gitKeyboardShortcut(
-                        "git.open",
-                        preferences: gitPreferencesStore.preferences,
-                        requiredScope: .global
+            CommandMenu(localizer.string("Git")) {
+                Button(localizer.string("打开 Git 工作台")) {
+                    NotificationCenter.default.post(
+                        name: .breathOpenGitWorkbench,
+                        object: nil
                     )
-
-                    Divider()
-
-                    Button(localizer.string("Commit")) {
-                        NotificationCenter.default.post(
-                            name: .breathGitCommit,
-                            object: nil
-                        )
-                    }
-                    .gitKeyboardShortcut(
-                        "git.commit",
-                        preferences: gitPreferencesStore.preferences,
-                        requiredScope: .global
-                    )
-                    .disabled(model.currentWorkspaceID == nil)
-
-                    Button(localizer.string("Push")) {
-                        NotificationCenter.default.post(
-                            name: .breathGitPush,
-                            object: nil
-                        )
-                    }
-                    .gitKeyboardShortcut(
-                        "git.push",
-                        preferences: gitPreferencesStore.preferences,
-                        requiredScope: .global
-                    )
-                    .disabled(model.currentWorkspaceID == nil)
                 }
+                .gitKeyboardShortcut(
+                    "git.open",
+                    preferences: gitPreferencesStore.preferences,
+                    requiredScope: .global
+                )
+
+                Divider()
+
+                Button(localizer.string("Commit")) {
+                    NotificationCenter.default.post(
+                        name: .breathGitCommit,
+                        object: nil
+                    )
+                }
+                .gitKeyboardShortcut(
+                    "git.commit",
+                    preferences: gitPreferencesStore.preferences,
+                    requiredScope: .global
+                )
+                .disabled(model.currentWorkspaceID == nil)
+
+                Button(localizer.string("Push")) {
+                    NotificationCenter.default.post(
+                        name: .breathGitPush,
+                        object: nil
+                    )
+                }
+                .gitKeyboardShortcut(
+                    "git.push",
+                    preferences: gitPreferencesStore.preferences,
+                    requiredScope: .global
+                )
+                .disabled(model.currentWorkspaceID == nil)
             }
         }
     }

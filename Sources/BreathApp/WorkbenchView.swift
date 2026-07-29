@@ -87,7 +87,6 @@ struct WorkbenchView: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathOpenGitWorkbench)) { _ in
-                guard GitWorkbenchReleaseGate.isEnabled else { return }
                 openGitWorkbench()
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathOpenSettings)) { _ in
@@ -109,13 +108,11 @@ struct WorkbenchView: View {
                 closeTerminalTarget()
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathGitCommit)) { _ in
-                guard GitWorkbenchReleaseGate.isEnabled else { return }
                 guard let workspace = gitCommandWorkspace else { return }
                 selectGitWorkspace(workspace)
                 gitCoordinator.model(for: workspace).shouldFocusCommitMessage = true
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathGitPush)) { _ in
-                guard GitWorkbenchReleaseGate.isEnabled else { return }
                 guard let workspace = gitCommandWorkspace else { return }
                 selectGitWorkspace(workspace)
                 gitCoordinator.model(for: workspace).shouldPresentPushReview = true
@@ -329,14 +326,12 @@ struct WorkbenchView: View {
                 }
             }
 
-            if GitWorkbenchReleaseGate.isEnabled {
-                activityBarButton(
-                    accessibilityLabel: WorkbenchAccessibility.openGitWorkbench,
-                    isSelected: isGitWorkbenchSelected,
-                    action: openGitWorkbench
-                ) {
-                    GitBranchIcon()
-                }
+            activityBarButton(
+                accessibilityLabel: WorkbenchAccessibility.openGitWorkbench,
+                isSelected: isGitWorkbenchSelected,
+                action: openGitWorkbench
+            ) {
+                GitBranchIcon()
             }
 
             activityBarButton(
@@ -1053,9 +1048,7 @@ struct WorkbenchView: View {
             AgentQuotaView(service: model.agentQuotaService)
         } else if detailMode == .automation {
             AutomationView(model: model)
-        } else if GitWorkbenchReleaseGate.isEnabled,
-                  detailMode == .gitWorkbench
-        {
+        } else if detailMode == .gitWorkbench {
             if let workspace = selectedGitWorkspace {
                 GitWorkbenchView(
                     workspace: workspace,

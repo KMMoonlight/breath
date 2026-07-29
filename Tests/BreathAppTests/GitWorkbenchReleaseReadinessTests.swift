@@ -1,8 +1,8 @@
 import Foundation
 import Testing
 
-@Suite("Git workbench release gate")
-struct GitWorkbenchReleaseGateTests {
+@Suite("Git workbench release readiness")
+struct GitWorkbenchReleaseReadinessTests {
     @Test("all 208 stories are covered exactly once by the acceptance matrix")
     func acceptanceMatrixCoversEveryStory() throws {
         let matrix = try sourceFile(
@@ -34,18 +34,17 @@ struct GitWorkbenchReleaseGateTests {
         #expect(covered == Array(1...208))
     }
 
-    @Test("the public release remains gated until manual acceptance is recorded")
-    func publicReleaseRemainsGated() throws {
-        let gate = try sourceFile(
-            "Sources/BreathApp/GitWorkbenchReleaseGate.swift"
-        )
+    @Test("the packaged release includes the complete Git workbench")
+    func packagedReleaseIncludesGitWorkbench() throws {
         let shell = try sourceFile("Sources/BreathApp/WorkbenchView.swift")
         let app = try sourceFile("Sources/BreathApp/BreathApp.swift")
+        let packageScript = try sourceFile("scripts/package-app.sh")
 
-        #expect(gate.contains("#if DEBUG"))
-        #expect(gate.contains("BREATH_ENABLE_GIT_WORKBENCH"))
-        #expect(shell.contains("GitWorkbenchReleaseGate.isEnabled"))
-        #expect(app.contains("GitWorkbenchReleaseGate.isEnabled"))
+        #expect(!shell.contains("GitWorkbenchReleaseGate"))
+        #expect(!app.contains("GitWorkbenchReleaseGate"))
+        #expect(!packageScript.contains("BREATH_ENABLE_GIT_WORKBENCH"))
+        #expect(shell.contains("WorkbenchAccessibility.openGitWorkbench"))
+        #expect(app.contains("CommandMenu(localizer.string(\"Git\"))"))
     }
 
     @Test("scope exclusions and force-push safety remain enforced")
