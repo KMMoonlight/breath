@@ -6,6 +6,23 @@ public enum AgentHookCommandResult: Equatable, Sendable {
     case ignored
 }
 
+public struct AgentHookInvocation: Equatable, Sendable {
+    public let agent: AgentKind
+    public let lifecycle: AgentLifecycle
+
+    public init?(arguments: [String]) {
+        guard arguments.count >= 4,
+              arguments[1] == "--agent-hook",
+              let agent = AgentKind(rawValue: arguments[2]),
+              let lifecycle = AgentLifecycle(rawValue: arguments[3])
+        else {
+            return nil
+        }
+        self.agent = agent
+        self.lifecycle = lifecycle
+    }
+}
+
 public struct AgentHookCommand: Sendable {
     private let factory: AgentHookEventFactory
     private let sender: any AgentEventSending
@@ -23,13 +40,10 @@ public struct AgentHookCommand: Sendable {
         environment: [String: String],
         standardInput: Data
     ) -> AgentHookCommandResult {
-        guard arguments.count >= 4,
-              arguments[1] == "--agent-hook",
-              let agent = AgentKind(rawValue: arguments[2]),
-              let lifecycle = AgentLifecycle(rawValue: arguments[3]),
+        guard let invocation = AgentHookInvocation(arguments: arguments),
               let event = try? factory.makeEvent(
-                  agent: agent,
-                  lifecycle: lifecycle,
+                  agent: invocation.agent,
+                  lifecycle: invocation.lifecycle,
                   rawPayload: standardInput,
                   environment: environment
               )

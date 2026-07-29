@@ -22,11 +22,17 @@ enum BreathMain {
 #endif
         if CommandLine.arguments.dropFirst().first == "--agent-hook" {
             let input = FileHandle.standardInput.readDataToEndOfFile()
-            _ = AgentHookCommand().run(
+            let command = AgentHookCommand()
+            _ = command.run(
                 arguments: CommandLine.arguments,
                 environment: ProcessInfo.processInfo.environment,
                 standardInput: input
             )
+            if let output = command.standardOutput(
+                arguments: CommandLine.arguments
+            ) {
+                FileHandle.standardOutput.write(output)
+            }
             return
         }
         if CommandLine.arguments.dropFirst().first == "trigger" {

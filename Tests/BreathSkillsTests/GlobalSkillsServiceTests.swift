@@ -111,7 +111,7 @@ struct GlobalSkillsServiceTests {
         try fixture.writeSkill(agent: .codex, directoryName: "review", manifest: sharedManifest)
         try fixture.writeSkill(agent: .claudeCode, directoryName: "review", manifest: sharedManifest)
         try fixture.writeSkill(
-            agent: .geminiCLI,
+            agent: .antigravityCLI,
             directoryName: "review",
             manifest: """
                 ---
@@ -300,24 +300,24 @@ struct GlobalSkillsServiceTests {
         let preview = await service.previewInstallation(
             batch: batch,
             candidateIDs: [candidate.id],
-            targetAgents: [.geminiCLI]
+            targetAgents: [.antigravityCLI]
         )
         let result = await service.install(preview)
 
         #expect(await github.requestedLocators().isEmpty)
         #expect(result.items.first?.status == .succeeded)
         #expect(Set(result.snapshot.skills.first?.copies.map(\.agent) ?? [])
-            == Set([.codex, .claudeCode, .geminiCLI]))
-        let geminiDirectory = try fixture.skillRoot(for: .geminiCLI)
+            == Set([.codex, .claudeCode, .antigravityCLI, .kimiCode]))
+        let antigravityDirectory = try fixture.skillRoot(for: .antigravityCLI)
             .appendingPathComponent("agent-browser", isDirectory: true)
-        #expect(FileManager.default.fileExists(atPath: geminiDirectory.path))
+        #expect(FileManager.default.fileExists(atPath: antigravityDirectory.path))
         #expect(FileManager.default.fileExists(atPath: sharedSkill.path))
-        let geminiRecord = try #require(
+        let antigravityRecord = try #require(
             try await records.loadSkillInstallationRecords().first {
-                $0.agent == .geminiCLI
+                $0.agent == .antigravityCLI
             }
         )
-        #expect(geminiRecord.origin.sharedProvenance?.skillIdentifier == "Agent Browser")
+        #expect(antigravityRecord.origin.sharedProvenance?.skillIdentifier == "Agent Browser")
         #expect(result.snapshot.skills.first?.copies.allSatisfy {
             $0.matchesSkillsShCatalogEntry(catalogEntry)
         } == true)

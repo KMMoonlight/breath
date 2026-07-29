@@ -289,7 +289,7 @@ Agent 集成在生命周期节点产生、并关联到具体终端窗格的状�
 _Avoid_: 终端输出、进程状态、Agent 消息内容
 
 **受支持 Agent CLI（Supported Agent CLI）**：
-拥有官方本地生命周期扩展机制，并由 Breath 内置适配器及兼容性测试覆盖的 Agent CLI。首版支持矩阵包含 Codex、Claude Code、Gemini CLI、GitHub Copilot CLI、Qwen Code、Cursor Agent、Factory Droid、OpenCode 和 Pi。
+拥有官方本地生命周期扩展机制，并由 Breath 内置适配器及兼容性测试覆盖的 Agent CLI。当前支持矩阵包含 Codex、Claude Code、Antigravity CLI、GitHub Copilot CLI、Qwen Code、Cursor Agent、Factory Droid、OpenCode、Pi 和 Kimi Code。
 _Avoid_: 任意 Agent CLI、所有带 hooks 的 CLI、普通终端程序
 
 **Agent 额度（Agent Quota）**：

@@ -15,6 +15,13 @@ public struct AgentHookEventFactory: Sendable {
         rawPayload: Data,
         environment: [String: String]
     ) throws -> AgentEvent? {
+        guard try shouldEmitEvent(
+            agent: agent,
+            lifecycle: lifecycle,
+            rawPayload: rawPayload
+        ) else {
+            return nil
+        }
         guard let applicationInstanceID = identifier(
             ApplicationInstanceID.init(rawValue:),
             value: environment["BREATH_APPLICATION_INSTANCE_ID"]
@@ -58,6 +65,23 @@ public struct AgentHookEventFactory: Sendable {
         )
     }
 
+    private func shouldEmitEvent(
+        agent: AgentKind,
+        lifecycle: AgentLifecycle,
+        rawPayload: Data
+    ) throws -> Bool {
+        guard agent == .antigravityCLI,
+              lifecycle == .turnCompleted,
+              !rawPayload.isEmpty,
+              let root = try JSONSerialization.jsonObject(with: rawPayload)
+                as? [String: Any],
+              let fullyIdle = root["fullyIdle"] as? Bool
+        else {
+            return true
+        }
+        return fullyIdle
+    }
+
     private func identifier<ID>(
         _ make: (UUID) -> ID,
         value: String?
@@ -81,6 +105,7 @@ public struct AgentHookEventFactory: Sendable {
                 root["session_id"],
                 root["sessionId"],
                 root["conversation_id"],
+                root["conversationId"],
                 root["thread_id"],
                 session?["id"],
                 info?["id"]
@@ -96,6 +121,7 @@ public struct AgentHookEventFactory: Sendable {
                 root["cwd"],
                 root["working_directory"],
                 (root["workspace_roots"] as? [String])?.first,
+                (root["workspacePaths"] as? [String])?.first,
                 session?["cwd"],
                 info?["directory"]
             )

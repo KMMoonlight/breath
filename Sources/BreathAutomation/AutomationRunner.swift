@@ -79,6 +79,13 @@ public struct CLIAutomationRunner: AutomationRunning, Sendable {
         )
         let temporaryHome = runRoot.appendingPathComponent("home", isDirectory: true)
         let temporaryDirectory = runRoot.appendingPathComponent("tmp", isDirectory: true)
+        let finalOutputURL = runRoot.appendingPathComponent("final-output.txt")
+        let standardOutputURL = runRoot.appendingPathComponent("stdout.txt")
+        let standardErrorURL = runRoot.appendingPathComponent("stderr.txt")
+        let command = try command(
+            for: request,
+            finalOutputURL: finalOutputURL
+        )
         defer {
             try? fileManager.removeItem(at: runRoot)
         }
@@ -103,13 +110,6 @@ public struct CLIAutomationRunner: AutomationRunning, Sendable {
                 "无法准备临时运行环境。"
             )
         }
-        let finalOutputURL = runRoot.appendingPathComponent("final-output.txt")
-        let standardOutputURL = runRoot.appendingPathComponent("stdout.txt")
-        let standardErrorURL = runRoot.appendingPathComponent("stderr.txt")
-        let command = try command(
-            for: request,
-            finalOutputURL: finalOutputURL
-        )
         let environment = runtimeEnvironment(
             for: request.agent,
             temporaryHome: temporaryHome,
@@ -260,9 +260,8 @@ public struct CLIAutomationRunner: AutomationRunning, Sendable {
         case .claudeCode:
             environment["CLAUDE_CONFIG_DIR"] = temporaryHome
                 .appendingPathComponent(".claude", isDirectory: true).path
-        case .geminiCLI:
-            environment["GEMINI_CLI_HOME"] = temporaryHome
-                .appendingPathComponent(".gemini", isDirectory: true).path
+        case .antigravityCLI:
+            break
         case .githubCopilotCLI:
             environment["COPILOT_HOME"] = temporaryHome
                 .appendingPathComponent(".copilot", isDirectory: true).path
@@ -281,6 +280,9 @@ public struct CLIAutomationRunner: AutomationRunning, Sendable {
         case .pi:
             environment["PI_CODING_AGENT_DIR"] = temporaryHome
                 .appendingPathComponent(".pi/agent", isDirectory: true).path
+        case .kimiCode:
+            environment["KIMI_CODE_HOME"] = temporaryHome
+                .appendingPathComponent(".kimi-code", isDirectory: true).path
         }
         return environment
     }
@@ -290,35 +292,52 @@ public struct CLIAutomationRunner: AutomationRunning, Sendable {
         to temporaryHome: URL
     ) throws {
         let fileManager = FileManager.default
-        let relativePaths: [String]
+        let configurations: [(source: URL, destinationRelativePath: String)]
         switch agent {
         case .codex:
-            relativePaths = [".codex", ".agents/skills"]
+            configurations = relativeConfigurations([".codex", ".agents/skills"])
         case .claudeCode:
-            relativePaths = [".claude"]
-        case .geminiCLI:
-            relativePaths = [".gemini"]
+            configurations = relativeConfigurations([".claude"])
+        case .antigravityCLI:
+            configurations = []
         case .githubCopilotCLI:
-            relativePaths = [".copilot"]
+            configurations = relativeConfigurations([".copilot"])
         case .qwenCode:
-            relativePaths = [".qwen"]
+            configurations = relativeConfigurations([".qwen"])
         case .cursorAgent:
-            relativePaths = [".cursor"]
+            configurations = relativeConfigurations([".cursor"])
         case .factoryDroid:
-            relativePaths = [".factory"]
+            configurations = relativeConfigurations([".factory"])
         case .openCode:
-            relativePaths = [".config/opencode"]
+            configurations = relativeConfigurations([".config/opencode"])
         case .pi:
-            relativePaths = [".pi/agent"]
+            configurations = relativeConfigurations([".pi/agent"])
+        case .kimiCode:
+            guard let adapter = AgentAdapterRegistry.builtIn.adapters.first(
+                where: { $0.kind == .kimiCode }
+            ) else {
+                throw AutomationRunnerError.unsupportedAgent
+            }
+            let configuredRoot = try adapter.resolvedUserConfigurationURL(
+                homeDirectory: homeDirectory,
+                environment: processEnvironment()
+            ).deletingLastPathComponent()
+            configurations = [
+                (configuredRoot, ".kimi-code"),
+                (
+                    homeDirectory.appendingPathComponent(
+                        ".agents/skills",
+                        isDirectory: true
+                    ),
+                    ".agents/skills"
+                ),
+            ]
         }
-        for relativePath in relativePaths {
-            let source = homeDirectory.appendingPathComponent(
-                relativePath,
-                isDirectory: true
-            )
+        for configuration in configurations {
+            let source = configuration.source
             guard fileManager.fileExists(atPath: source.path) else { continue }
             let destination = temporaryHome.appendingPathComponent(
-                relativePath,
+                configuration.destinationRelativePath,
                 isDirectory: true
             )
             try fileManager.createDirectory(
@@ -327,6 +346,17 @@ public struct CLIAutomationRunner: AutomationRunning, Sendable {
                 attributes: [.posixPermissions: 0o700]
             )
             try copyConfigurationTree(from: source, to: destination)
+        }
+    }
+
+    private func relativeConfigurations(
+        _ paths: [String]
+    ) -> [(source: URL, destinationRelativePath: String)] {
+        paths.map { path in
+            (
+                homeDirectory.appendingPathComponent(path, isDirectory: true),
+                path
+            )
         }
     }
 
@@ -499,6 +529,14 @@ public struct CLIAutomationRunner: AutomationRunning, Sendable {
                 limit: 2 * 1_024 * 1_024
             )
             return (output, nil)
+        }
+        if agent == .kimiCode {
+            return (
+                standardOutput.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ),
+                nil
+            )
         }
         let lines = standardOutput.split(
             whereSeparator: \.isNewline

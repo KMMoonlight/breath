@@ -1360,7 +1360,7 @@ extension AgentQuotaService {
                         }
                     )
                 },
-                .geminiCLI: { .unsupported },
+                .antigravityCLI: { .unsupported },
                 .githubCopilotCLI: {
                     await AgentQuotaOfficialCLIAdapter.query(
                         agent: .githubCopilotCLI,
@@ -1396,6 +1396,7 @@ extension AgentQuotaService {
                         httpClient: httpClient
                     )
                 },
+                .kimiCode: { .unsupported },
             ]
         )
     }

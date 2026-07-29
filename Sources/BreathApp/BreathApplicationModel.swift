@@ -1247,10 +1247,11 @@ final class BreathApplicationModel: ObservableObject {
 
     private func refreshEnabledAgents() {
         enabledAgents = Set(adapters.compactMap { adapter in
-            guard adapter.userConfigurationPath.hasPrefix("~/") else { return nil }
-            let url = homeDirectory.appendingPathComponent(
-                String(adapter.userConfigurationPath.dropFirst(2))
-            )
+            guard let url = try? adapter.resolvedUserConfigurationURL(
+                homeDirectory: homeDirectory
+            ) else {
+                return nil
+            }
             guard let data = try? Data(contentsOf: url),
                   let contents = String(data: data, encoding: .utf8)
             else {
@@ -1276,8 +1277,17 @@ struct AgentIntegrationPreferenceStore {
     func shouldInstall(_ agent: AgentKind, isInstalled: Bool) -> Bool {
         guard isInstalled else { return false }
         let preferenceKey = key(for: agent)
-        guard defaults.object(forKey: preferenceKey) != nil else {
-            return true
+        if defaults.object(forKey: preferenceKey) == nil {
+            if agent == .antigravityCLI {
+                let legacyKey =
+                    "Breath.agentIntegration.geminiCLI.enabled"
+                if defaults.object(forKey: legacyKey) != nil {
+                    let value = defaults.bool(forKey: legacyKey)
+                    defaults.set(value, forKey: preferenceKey)
+                    return value
+                }
+            }
+            return false
         }
         return defaults.bool(forKey: preferenceKey)
     }
@@ -1327,12 +1337,15 @@ enum SkillInstallationTargetAvailabilityResolver {
 
 enum AgentCLIInstallationError: LocalizedError {
     case notInstalled(String)
+    case manualUpdateRequired(name: String, command: String)
     case updateFailed(String)
 
     var errorDescription: String? {
         switch self {
         case let .notInstalled(name):
             "未找到 \(name) 的本地可执行文件。"
+        case let .manualUpdateRequired(name, command):
+            "请在终端中运行 \(command) 完成 \(name) 更新。"
         case let .updateFailed(message):
             "更新失败：\(message)"
         }
@@ -1387,12 +1400,14 @@ struct AgentCLILatestVersionChecker: Sendable {
             return value(after: "VER=\"", before: "\"", in: contents)
         case .codex,
              .claudeCode,
-             .geminiCLI,
              .githubCopilotCLI,
              .qwenCode,
              .openCode,
-             .pi:
+             .pi,
+             .kimiCode:
             return (try? JSONDecoder().decode(NPMRelease.self, from: data))?.version
+        case .antigravityCLI:
+            return nil
         }
     }
 
@@ -1409,8 +1424,8 @@ struct AgentCLILatestVersionChecker: Sendable {
             url = "https://registry.npmjs.org/%40openai%2Fcodex/latest"
         case .claudeCode:
             url = "https://registry.npmjs.org/%40anthropic-ai%2Fclaude-code/latest"
-        case .geminiCLI:
-            url = "https://registry.npmjs.org/%40google%2Fgemini-cli/latest"
+        case .antigravityCLI:
+            return nil
         case .githubCopilotCLI:
             url = "https://registry.npmjs.org/%40github%2Fcopilot/latest"
         case .qwenCode:
@@ -1423,6 +1438,8 @@ struct AgentCLILatestVersionChecker: Sendable {
             url = "https://registry.npmjs.org/opencode-ai/latest"
         case .pi:
             url = "https://registry.npmjs.org/%40mariozechner%2Fpi-coding-agent/latest"
+        case .kimiCode:
+            url = "https://registry.npmjs.org/%40moonshot-ai%2Fkimi-code/latest"
         }
         return URL(string: url)
     }
@@ -1518,7 +1535,21 @@ struct InstalledAgentCLIDetector: Sendable {
         guard let executableURL = executableURL(for: adapter.kind) else {
             throw AgentCLIInstallationError.notInstalled(adapter.displayName)
         }
+        if adapter.kind == .antigravityCLI {
+            throw AgentCLIInstallationError.manualUpdateRequired(
+                name: adapter.displayName,
+                command: "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+            )
+        }
         let command = updateCommand(for: adapter.kind, executableURL: executableURL)
+        if adapter.kind == .kimiCode,
+           command.executableURL == executableURL
+        {
+            throw AgentCLIInstallationError.manualUpdateRequired(
+                name: adapter.displayName,
+                command: "kimi upgrade"
+            )
+        }
         _ = try run(command.executableURL, arguments: command.arguments)
         return installationStatus(for: adapter)
     }
@@ -1652,6 +1683,7 @@ struct InstalledAgentCLIDetector: Sendable {
 
         directories.append(contentsOf: [
             homeDirectory.appendingPathComponent(".local/bin", isDirectory: true),
+            homeDirectory.appendingPathComponent(".kimi-code/bin", isDirectory: true),
             homeDirectory.appendingPathComponent("bin", isDirectory: true),
             homeDirectory.appendingPathComponent(".bun/bin", isDirectory: true),
             homeDirectory.appendingPathComponent(".volta/bin", isDirectory: true),
@@ -1673,6 +1705,15 @@ struct InstalledAgentCLIDetector: Sendable {
         }
 
         for variable in ["VOLTA_HOME", "BUN_INSTALL"] {
+            if let path = environment[variable], !path.isEmpty {
+                directories.append(
+                    URL(fileURLWithPath: path, isDirectory: true)
+                        .appendingPathComponent("bin", isDirectory: true)
+                )
+            }
+        }
+
+        for variable in ["KIMI_INSTALL_DIR", "KIMI_CODE_HOME"] {
             if let path = environment[variable], !path.isEmpty {
                 directories.append(
                     URL(fileURLWithPath: path, isDirectory: true)
@@ -1720,11 +1761,12 @@ private extension AgentKind {
         switch self {
         case .codex: "@openai/codex"
         case .claudeCode: "@anthropic-ai/claude-code"
-        case .geminiCLI: "@google/gemini-cli"
+        case .antigravityCLI: nil
         case .githubCopilotCLI: "@github/copilot"
         case .qwenCode: "@qwen-code/qwen-code"
         case .openCode: "opencode-ai"
         case .pi: "@mariozechner/pi-coding-agent"
+        case .kimiCode: "@moonshot-ai/kimi-code"
         case .cursorAgent, .factoryDroid: nil
         }
     }
@@ -1735,9 +1777,12 @@ private extension AgentKind {
             ["upgrade"]
         case .pi:
             ["update", "--self"]
+        case .kimiCode:
+            ["upgrade"]
+        case .antigravityCLI:
+            ["--version"]
         case .codex,
              .claudeCode,
-             .geminiCLI,
              .githubCopilotCLI,
              .qwenCode,
              .cursorAgent,

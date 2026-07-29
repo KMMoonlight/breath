@@ -13,8 +13,8 @@ Git 操作、Skills 和自动化任务集中在一个原生应用中。
 - 在一个工作区中创建多个工作会话，并递归进行横向或纵向终端分屏。
 - 使用托管 Git Worktree 隔离需要并行修改同一仓库的 Agent 会话。
 - 在原生终端中运行任意命令，并增强支持 Codex、Claude Code、
-  Gemini CLI、GitHub Copilot CLI、Qwen Code、Cursor Agent、
-  Factory Droid、OpenCode 和 Pi。
+  Antigravity CLI、GitHub Copilot CLI、Qwen Code、Cursor Agent、
+  Factory Droid、OpenCode、Pi 和 Kimi Code。
 - 通过 Agent 官方 hooks 或 plugin 展示运行状态、标题与可恢复会话，
   不解析终端输出，也不保存 Prompt、回复或 transcript。
 - 提供独立 Git 工作台、全局 Skill 管理和本地自动化任务。

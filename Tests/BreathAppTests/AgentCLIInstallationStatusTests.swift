@@ -132,23 +132,48 @@ struct AgentCLIInstallationStatusTests {
         }
     }
 
+    @Test("detects Kimi in the official native installation directory")
+    func detectsNativeKimiInstallation() throws {
+        let home = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let binDirectory = home.appendingPathComponent(
+            ".kimi-code/bin",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: binDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeExecutable(
+            named: AgentKind.kimiCode.cliExecutableName,
+            in: binDirectory,
+            contents: "#!/bin/sh\necho '0.29.2'\n"
+        )
+        let detector = InstalledAgentCLIDetector(
+            homeDirectory: home,
+            environment: ["PATH": ""]
+        )
+
+        #expect(detector.isInstalled(.kimiCode))
+    }
+
     @Test("flags an update when the official release is newer than the compatible minimum")
     func officialReleaseIsNewer() throws {
         let temporaryDirectory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
         try writeExecutable(
-            named: AgentKind.geminiCLI.cliExecutableName,
+            named: AgentKind.kimiCode.cliExecutableName,
             in: temporaryDirectory,
-            contents: "#!/bin/sh\necho '0.37.2'\n"
+            contents: "#!/bin/sh\necho '0.29.2'\n"
         )
         let detector = InstalledAgentCLIDetector(searchDirectories: [temporaryDirectory])
         let adapter = try #require(
-            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .geminiCLI }
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .kimiCode }
         )
 
         #expect(
-            detector.installationStatus(for: adapter, latestVersion: "0.50.0")
-                == .installed(version: "0.37.2", updateAvailable: true)
+            detector.installationStatus(for: adapter, latestVersion: "0.30.0")
+                == .installed(version: "0.29.2", updateAvailable: true)
         )
         #expect(
             InstalledAgentCLIDetector.isVersion(
@@ -178,6 +203,13 @@ struct AgentCLIInstallationStatusTests {
         #expect(
             AgentCLILatestVersionChecker.version(for: .factoryDroid, in: droidInstaller)
                 == "0.172.0"
+        )
+        #expect(
+            AgentCLILatestVersionChecker.version(for: .kimiCode, in: npmData)
+                == "2.1.210"
+        )
+        #expect(
+            AgentCLILatestVersionChecker.releaseURL(for: .antigravityCLI) == nil
         )
         #expect(
             AgentCLILatestVersionChecker.releaseURL(
@@ -233,7 +265,10 @@ struct AgentCLIInstallationStatusTests {
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
         let binDirectory = temporaryDirectory.appendingPathComponent("bin", isDirectory: true)
         let packageBinDirectory = temporaryDirectory
-            .appendingPathComponent("lib/node_modules/@google/gemini-cli/bin", isDirectory: true)
+            .appendingPathComponent(
+                "lib/node_modules/@moonshot-ai/kimi-code/bin",
+                isDirectory: true
+            )
         let markerURL = temporaryDirectory.appendingPathComponent("updated")
         try FileManager.default.createDirectory(
             at: binDirectory,
@@ -244,27 +279,27 @@ struct AgentCLIInstallationStatusTests {
             withIntermediateDirectories: true
         )
         try writeExecutable(
-            named: "gemini.js",
+            named: "kimi.js",
             in: packageBinDirectory,
             contents: """
                 #!/bin/sh
                 if [ -f "\(markerURL.path)" ]; then
-                  echo '0.50.0'
+                  echo '0.30.0'
                 else
-                  echo '0.37.2'
+                  echo '0.29.2'
                 fi
                 """
         )
         try FileManager.default.createSymbolicLink(
-            at: binDirectory.appendingPathComponent("gemini"),
-            withDestinationURL: packageBinDirectory.appendingPathComponent("gemini.js")
+            at: binDirectory.appendingPathComponent("kimi"),
+            withDestinationURL: packageBinDirectory.appendingPathComponent("kimi.js")
         )
         try writeExecutable(
             named: "npm",
             in: binDirectory,
             contents: """
                 #!/bin/sh
-                if [ "$1" = "install" ] && [ "$2" = "-g" ] && [ "$3" = "@google/gemini-cli@latest" ]; then
+                if [ "$1" = "install" ] && [ "$2" = "-g" ] && [ "$3" = "@moonshot-ai/kimi-code@latest" ]; then
                   touch "\(markerURL.path)"
                   exit 0
                 fi
@@ -273,13 +308,81 @@ struct AgentCLIInstallationStatusTests {
         )
         let detector = InstalledAgentCLIDetector(searchDirectories: [binDirectory])
         let adapter = try #require(
-            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .geminiCLI }
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .kimiCode }
         )
 
         let status = try detector.update(adapter)
 
         #expect(FileManager.default.fileExists(atPath: markerURL.path))
-        #expect(status == .installed(version: "0.50.0", updateAvailable: false))
+        #expect(status == .installed(version: "0.30.0", updateAvailable: false))
+    }
+
+    @Test("native Kimi updates stay interactive in the user's terminal")
+    func nativeKimiUpdateRequiresTerminal() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let markerURL = temporaryDirectory.appendingPathComponent("upgrade-ran")
+        try writeExecutable(
+            named: AgentKind.kimiCode.cliExecutableName,
+            in: temporaryDirectory,
+            contents: """
+                #!/bin/sh
+                if [ "$1" = "upgrade" ]; then
+                  touch "\(markerURL.path)"
+                fi
+                echo '0.29.2'
+                """
+        )
+        let detector = InstalledAgentCLIDetector(
+            searchDirectories: [temporaryDirectory]
+        )
+        let adapter = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first {
+                $0.kind == .kimiCode
+            }
+        )
+
+        do {
+            _ = try detector.update(adapter)
+            Issue.record("Expected the native Kimi updater to require a terminal")
+        } catch {
+            #expect(
+                error.localizedDescription
+                    == "请在终端中运行 kimi upgrade 完成 Kimi Code 更新。"
+            )
+        }
+        #expect(
+            !FileManager.default.fileExists(atPath: markerURL.path)
+        )
+    }
+
+    @Test("Antigravity updates use the official terminal installer")
+    func antigravityUpdateRequiresTerminalInstaller() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        try writeExecutable(
+            named: AgentKind.antigravityCLI.cliExecutableName,
+            in: temporaryDirectory,
+            contents: "#!/bin/sh\necho '1.1.7'\n"
+        )
+        let detector = InstalledAgentCLIDetector(
+            searchDirectories: [temporaryDirectory]
+        )
+        let adapter = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first {
+                $0.kind == .antigravityCLI
+            }
+        )
+
+        do {
+            _ = try detector.update(adapter)
+            Issue.record("Expected Antigravity to require its installer")
+        } catch {
+            #expect(
+                error.localizedDescription
+                    == "请在终端中运行 curl -fsSL https://antigravity.google/cli/install.sh | bash 完成 Antigravity CLI 更新。"
+            )
+        }
     }
 
     @Test("updates Homebrew Cask Claude Code through its installed channel")

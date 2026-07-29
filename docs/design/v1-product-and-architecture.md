@@ -126,13 +126,14 @@ Agent 类型是独立展示信息，不增加新的终端状态。状态变化�
 
 - Codex
 - Claude Code
-- Gemini CLI
+- Antigravity CLI
 - GitHub Copilot CLI
 - Qwen Code
 - Cursor Agent
 - Factory Droid
 - OpenCode
 - Pi
+- Kimi Code
 
 进入支持矩阵意味着：Agent 拥有官方、稳定的本地生命周期扩展机制，Breath 具有明确的最低兼容版本、内置适配器和兼容性测试。官方接口没有提供标题或恢复能力时，分别使用占位标题或只恢复布局。
 

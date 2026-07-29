@@ -2925,13 +2925,14 @@ private extension AgentKind {
         switch self {
         case .codex: "Codex"
         case .claudeCode: "Claude"
-        case .geminiCLI: "Gemini"
+        case .antigravityCLI: "Antigravity"
         case .githubCopilotCLI: "Copilot"
         case .qwenCode: "Qwen"
         case .cursorAgent: "Cursor"
         case .factoryDroid: "Droid"
         case .openCode: "OpenCode"
         case .pi: "Pi"
+        case .kimiCode: "Kimi"
         }
     }
 }

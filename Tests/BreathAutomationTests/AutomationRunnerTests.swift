@@ -350,7 +350,6 @@ struct AutomationRunnerTests {
         )
         let cases: [(AgentKind, String, String)] = [
             (.claudeCode, #"{"type":"result","result":"Claude final"}"#, "Claude final"),
-            (.geminiCLI, #"{"response":"Gemini final"}"#, "Gemini final"),
             (
                 .githubCopilotCLI,
                 #"{"type":"result","result":"Copilot final"}"#,
@@ -369,6 +368,7 @@ struct AutomationRunnerTests {
                 #"{"type":"message_end","message":{"content":[{"type":"text","text":"Pi final"}]}}"#,
                 "Pi final"
             ),
+            (.kimiCode, "Kimi final", "Kimi final"),
         ]
 
         for (agent, json, expected) in cases {
@@ -398,6 +398,63 @@ struct AutomationRunnerTests {
 
             #expect(result.finalOutput == expected, "Failed for \(agent)")
         }
+    }
+
+    @Test("Kimi automation copies configuration from KIMI_CODE_HOME")
+    func kimiAutomationUsesCustomHome() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "breath-runner-kimi-home-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        let kimiHome = root.appendingPathComponent("custom-kimi", isDirectory: true)
+        let runtime = root.appendingPathComponent("runtime", isDirectory: true)
+        for directory in [workspace, home, kimiHome, runtime] {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("custom-kimi-config".utf8).write(
+            to: kimiHome.appendingPathComponent("config.toml")
+        )
+        let executable = root.appendingPathComponent("fake-kimi")
+        try Data(
+            """
+            #!/bin/sh
+            /bin/cat "$KIMI_CODE_HOME/config.toml"
+            """.utf8
+        ).write(to: executable)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executable.path
+        )
+        let runner = CLIAutomationRunner(
+            homeDirectory: home,
+            runtimeRootDirectory: runtime,
+            processEnvironment: {
+                [
+                    "PATH": "/usr/bin:/bin",
+                    "KIMI_CODE_HOME": kimiHome.path,
+                ]
+            }
+        )
+
+        let result = try await runner.run(
+            AutomationRunRequest(
+                runID: AutomationRunID(rawValue: UUID()),
+                automationID: AutomationID(rawValue: UUID()),
+                agent: .kimiCode,
+                executablePath: executable.path,
+                workspacePath: workspace.path,
+                prompt: "Review",
+                maximumDurationMinutes: 1
+            )
+        )
+
+        #expect(result.finalOutput == "custom-kimi-config")
     }
 
     @Test("sandboxed Agent cannot signal a process outside its sandbox")

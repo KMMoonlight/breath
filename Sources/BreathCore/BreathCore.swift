@@ -54,13 +54,35 @@ public enum TerminalState: String, Equatable, Codable, Sendable {
 public enum AgentKind: String, CaseIterable, Equatable, Hashable, Codable, Sendable {
     case codex
     case claudeCode
-    case geminiCLI
+    case antigravityCLI
     case githubCopilotCLI
     case qwenCode
     case cursorAgent
     case factoryDroid
     case openCode
     case pi
+    case kimiCode
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        if rawValue == "geminiCLI" {
+            self = .antigravityCLI
+            return
+        }
+        guard let value = Self(rawValue: rawValue) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unsupported Agent kind: \(rawValue)"
+            )
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 public enum AgentLifecycle: String, Equatable, Codable, Sendable {
@@ -94,6 +116,28 @@ public struct AgentBinding: Equatable, Codable, Sendable {
         self.nativeTitle = nativeTitle
         self.isActive = isActive
         self.lastEventAt = lastEventAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let persistedAgent = try container.decode(String.self, forKey: .agent)
+        agent = try container.decode(AgentKind.self, forKey: .agent)
+        version = try container.decodeIfPresent(String.self, forKey: .version)
+        sessionID = persistedAgent == "geminiCLI"
+            ? nil
+            : try container.decodeIfPresent(String.self, forKey: .sessionID)
+        nativeTitle = try container.decodeIfPresent(String.self, forKey: .nativeTitle)
+        isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive)
+        lastEventAt = try container.decodeIfPresent(Date.self, forKey: .lastEventAt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agent
+        case version
+        case sessionID
+        case nativeTitle
+        case isActive
+        case lastEventAt
     }
 }
 

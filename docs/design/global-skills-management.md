@@ -89,13 +89,14 @@ Skill 安装目标与 Breath 的“受支持 Agent CLI”使用同一注册表�
 |---|---|
 | Codex | `~/.codex/skills` |
 | Claude Code | `~/.claude/skills` |
-| Gemini CLI | `~/.gemini/skills` |
+| Antigravity CLI | `~/.gemini/antigravity-cli/skills` |
 | GitHub Copilot CLI | `~/.copilot/skills` |
 | Qwen Code | `~/.qwen/skills` |
 | Cursor Agent | `~/.cursor/skills` |
 | Factory Droid | `~/.factory/skills` |
 | OpenCode | `${XDG_CONFIG_HOME:-~/.config}/opencode/skills` |
 | Pi | `~/.pi/agent/skills` |
+| Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}/skills` |
 
 Skill 安装目标必须同时满足：
 

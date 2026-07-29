@@ -52,8 +52,11 @@ public struct BuiltInAgentResumeCommands: AgentResumeCommandProviding, Sendable 
             return AgentResumeCommand(executable: executable, arguments: ["resume", sessionID])
         case .claudeCode:
             return AgentResumeCommand(executable: executable, arguments: ["--resume", sessionID])
-        case .geminiCLI:
-            return AgentResumeCommand(executable: executable, arguments: ["--resume", sessionID])
+        case .antigravityCLI:
+            return AgentResumeCommand(
+                executable: executable,
+                arguments: ["--conversation", sessionID]
+            )
         case .githubCopilotCLI:
             return AgentResumeCommand(executable: executable, arguments: ["--resume", sessionID])
         case .qwenCode:
@@ -66,6 +69,8 @@ public struct BuiltInAgentResumeCommands: AgentResumeCommandProviding, Sendable 
             return AgentResumeCommand(executable: executable, arguments: ["--session", sessionID])
         case .pi:
             return AgentResumeCommand(executable: executable, arguments: ["--session", sessionID])
+        case .kimiCode:
+            return AgentResumeCommand(executable: executable, arguments: ["--session", sessionID])
         }
     }
 }
@@ -75,13 +80,14 @@ public extension AgentKind {
         switch self {
         case .codex: "codex"
         case .claudeCode: "claude"
-        case .geminiCLI: "gemini"
+        case .antigravityCLI: "agy"
         case .githubCopilotCLI: "copilot"
         case .qwenCode: "qwen"
         case .cursorAgent: "cursor-agent"
         case .factoryDroid: "droid"
         case .openCode: "opencode"
         case .pi: "pi"
+        case .kimiCode: "kimi"
         }
     }
 }
@@ -200,13 +206,13 @@ public struct AgentAdapterDescriptor: Equatable, Sendable {
 public enum AgentAutomationInvocation: String, Equatable, Sendable {
     case codex
     case claudeCode
-    case geminiCLI
     case githubCopilotCLI
     case qwenCode
     case cursorAgent
     case factoryDroid
     case openCode
     case pi
+    case kimiCode
 }
 
 public struct AgentAutomationCapability: Equatable, Sendable {
@@ -249,13 +255,6 @@ public struct AgentAutomationCapability: Equatable, Sendable {
                 "--permission-mode", "dontAsk",
                 "--no-session-persistence",
             ]
-        case .geminiCLI:
-            [
-                "-p", prompt,
-                "--output-format", "json",
-                "--approval-mode", "plan",
-                "--skip-trust",
-            ]
         case .githubCopilotCLI:
             [
                 "-p", prompt,
@@ -290,6 +289,11 @@ public struct AgentAutomationCapability: Equatable, Sendable {
                 "-p", prompt,
                 "--mode", "json",
                 "--no-session",
+            ]
+        case .kimiCode:
+            [
+                "-p", prompt,
+                "--output-format", "text",
             ]
         }
     }
@@ -341,27 +345,20 @@ public struct AgentAdapterRegistry: Sendable {
             )
         ),
         AgentAdapterDescriptor(
-            kind: .geminiCLI,
-            displayName: "Gemini CLI",
-            minimumVersion: "0.37.2",
+            kind: .antigravityCLI,
+            displayName: "Antigravity CLI",
+            minimumVersion: "1.1.8",
             integrationMechanism: .userHooks,
-            userConfigurationPath: "~/.gemini/settings.json",
+            userConfigurationPath: "~/.gemini/config/hooks.json",
             hookRegistrations: [
-                AgentHookRegistration(eventName: "BeforeAgent", lifecycle: .turnStarted),
-                AgentHookRegistration(eventName: "BeforeTool", lifecycle: .attentionResolved),
-                AgentHookRegistration(eventName: "AfterAgent", lifecycle: .turnCompleted),
-                AgentHookRegistration(eventName: "Notification", lifecycle: .needsAttention),
-                AgentHookRegistration(eventName: "SessionEnd", lifecycle: .sessionEnded),
+                AgentHookRegistration(eventName: "PreInvocation", lifecycle: .turnStarted),
+                AgentHookRegistration(eventName: "Stop", lifecycle: .turnCompleted),
             ],
             globalSkills: AgentGlobalSkillsCapability(
-                configurationRootEnvironmentVariable: "GEMINI_CLI_HOME",
-                defaultConfigurationRootRelativePath: ".gemini",
-                activationHint: "Start a new Gemini CLI session to load changed Skills."
+                defaultConfigurationRootRelativePath: ".gemini/antigravity-cli",
+                activationHint: "Start a new Antigravity CLI session to load changed Skills."
             ),
-            automation: AgentAutomationCapability(
-                minimumVersion: "0.37.2",
-                invocation: .geminiCLI
-            )
+            automation: nil
         ),
         AgentAdapterDescriptor(
             kind: .githubCopilotCLI,
@@ -485,6 +482,45 @@ public struct AgentAdapterRegistry: Sendable {
             automation: AgentAutomationCapability(
                 minimumVersion: "未版本化（2026-07 Headless 文档）",
                 invocation: .pi
+            )
+        ),
+        AgentAdapterDescriptor(
+            kind: .kimiCode,
+            displayName: "Kimi Code",
+            minimumVersion: "0.29.2",
+            integrationMechanism: .userHooks,
+            userConfigurationPath: "~/.kimi-code/config.toml",
+            hookRegistrations: [
+                AgentHookRegistration(
+                    eventName: "UserPromptSubmit",
+                    lifecycle: .turnStarted
+                ),
+                AgentHookRegistration(
+                    eventName: "PermissionRequest",
+                    lifecycle: .needsAttention
+                ),
+                AgentHookRegistration(
+                    eventName: "PermissionResult",
+                    lifecycle: .attentionResolved
+                ),
+                AgentHookRegistration(
+                    eventName: "Stop",
+                    lifecycle: .turnCompleted
+                ),
+                AgentHookRegistration(
+                    eventName: "SessionEnd",
+                    lifecycle: .sessionEnded
+                ),
+            ],
+            globalSkills: AgentGlobalSkillsCapability(
+                configurationRootEnvironmentVariable: "KIMI_CODE_HOME",
+                defaultConfigurationRootRelativePath: ".kimi-code",
+                additionalDiscoveryRootRelativePaths: [".agents/skills"],
+                activationHint: "Start a new Kimi Code session to load changed Skills."
+            ),
+            automation: AgentAutomationCapability(
+                minimumVersion: "0.29.2",
+                invocation: .kimiCode
             )
         ),
     ])

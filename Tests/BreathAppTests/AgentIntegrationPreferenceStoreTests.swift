@@ -44,16 +44,28 @@ struct AgentIntegrationPreferenceStoreTests {
         #expect(model.snapshot.targets.first?.availability.isSelectable == true)
     }
 
-    @Test("installed CLIs are enabled by default and explicit choices persist")
+    @Test("installed CLIs require explicit opt-in and choices persist")
     func installedDefaultsAndExplicitChoices() throws {
         let suiteName = "BreathTests.AgentIntegrationPreferenceStore.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let preferences = AgentIntegrationPreferenceStore(defaults: defaults)
 
-        #expect(preferences.shouldInstall(.codex, isInstalled: true))
-        #expect(preferences.shouldInstall(.claudeCode, isInstalled: true))
-        #expect(!preferences.shouldInstall(.geminiCLI, isInstalled: false))
+        #expect(!preferences.shouldInstall(.codex, isInstalled: true))
+        #expect(!preferences.shouldInstall(.claudeCode, isInstalled: true))
+        #expect(!preferences.shouldInstall(.kimiCode, isInstalled: true))
+        #expect(!preferences.shouldInstall(.antigravityCLI, isInstalled: false))
+
+        defaults.set(
+            true,
+            forKey: "Breath.agentIntegration.geminiCLI.enabled"
+        )
+        #expect(
+            preferences.shouldInstall(
+                .antigravityCLI,
+                isInstalled: true
+            )
+        )
 
         preferences.setEnabled(false, for: .codex)
         preferences.setEnabled(true, for: .claudeCode)
@@ -64,7 +76,7 @@ struct AgentIntegrationPreferenceStoreTests {
     }
 
     @MainActor
-    @Test("application startup installs hooks only for detected Agent CLIs")
+    @Test("application startup installs hooks only for explicitly enabled detected CLIs")
     func applicationStartupInstallsDetectedAgentHooks() async throws {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("breath-auto-hooks-\(UUID().uuidString)", isDirectory: true)
@@ -97,19 +109,22 @@ struct AgentIntegrationPreferenceStoreTests {
             )
         }
         try Data("not executable\n".utf8).write(
-            to: binDirectory.appendingPathComponent("gemini")
+            to: binDirectory.appendingPathComponent("agy")
         )
         try Data(
             """
             {"hooks":{"Stop":[{"hooks":[{"type":"command","command":"existing-tool"}]}]}}
             """.utf8
         ).write(to: hooksURL)
+        let preferences = AgentIntegrationPreferenceStore(defaults: defaults)
+        preferences.setEnabled(true, for: .codex)
+        preferences.setEnabled(true, for: .claudeCode)
 
         let model = try BreathApplicationModel(
             homeDirectory: homeDirectory,
             supportDirectory: supportDirectory,
             terminalEngineOverride: AppShellTestingTerminalEngine(),
-            integrationPreferences: AgentIntegrationPreferenceStore(defaults: defaults),
+            integrationPreferences: preferences,
             installedAgentCLIDetector: InstalledAgentCLIDetector(
                 searchDirectories: [binDirectory]
             )
@@ -126,7 +141,9 @@ struct AgentIntegrationPreferenceStoreTests {
         let installed = try String(contentsOf: hooksURL, encoding: .utf8)
         let claudeSettingsURL = homeDirectory.appendingPathComponent(".claude/settings.json")
         let claudeSettings = try String(contentsOf: claudeSettingsURL, encoding: .utf8)
-        let geminiSettingsURL = homeDirectory.appendingPathComponent(".gemini/settings.json")
+        let antigravityHooksURL = homeDirectory.appendingPathComponent(
+            ".gemini/config/hooks.json"
+        )
         #expect(installed.contains("existing-tool"))
         #expect(installed.contains("--agent-hook codex"))
         #expect(installed.contains("PreToolUse"))
@@ -136,7 +153,7 @@ struct AgentIntegrationPreferenceStoreTests {
         #expect(claudeSettings.contains("--agent-hook claudeCode turnStarted"))
         #expect(claudeSettings.contains("PreToolUse"))
         #expect(claudeSettings.contains("--agent-hook claudeCode attentionResolved"))
-        #expect(!FileManager.default.fileExists(atPath: geminiSettingsURL.path))
+        #expect(!FileManager.default.fileExists(atPath: antigravityHooksURL.path))
 
         try Data("{\"environmentVariables\":{}}".utf8).write(to: claudeSettingsURL)
         model.repairDetectedAgentIntegrations()

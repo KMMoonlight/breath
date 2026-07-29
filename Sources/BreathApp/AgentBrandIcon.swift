@@ -3,7 +3,7 @@ import BreathCore
 import SwiftUI
 
 struct AgentBrandIcon: View {
-    private static let iconCount: CGFloat = 9
+    private static let iconCount: CGFloat = 10
     private static let sprite = BreathResources.bundle
         .url(forResource: "AgentBrandIcons", withExtension: "svg")
         .flatMap(NSImage.init(contentsOf:))
@@ -59,13 +59,14 @@ extension AgentKind {
         switch self {
         case .codex: 0
         case .claudeCode: 1
-        case .geminiCLI: 2
+        case .antigravityCLI: 2
         case .githubCopilotCLI: 3
         case .qwenCode: 4
         case .cursorAgent: 5
         case .factoryDroid: 6
         case .openCode: 7
         case .pi: 8
+        case .kimiCode: 9
         }
     }
 }

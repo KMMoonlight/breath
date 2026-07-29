@@ -6,7 +6,7 @@ import Testing
 
 @Suite("Supported Agent CLI registry")
 struct AgentAdapterRegistryTests {
-    @Test("v1 exposes the approved nine-agent compatibility matrix")
+    @Test("v1 exposes the approved ten-agent compatibility matrix")
     func supportedMatrix() {
         let adapters = AgentAdapterRegistry.builtIn.adapters
 
@@ -16,41 +16,58 @@ struct AgentAdapterRegistryTests {
             adapters.map(\.kind) == [
                 .codex,
                 .claudeCode,
-                .geminiCLI,
+                .antigravityCLI,
                 .githubCopilotCLI,
                 .qwenCode,
                 .cursorAgent,
                 .factoryDroid,
                 .openCode,
                 .pi,
+                .kimiCode,
             ]
         )
         #expect(adapters.map(\.displayName) == [
             "Codex",
             "Claude Code",
-            "Gemini CLI",
+            "Antigravity CLI",
             "GitHub Copilot CLI",
             "Qwen Code",
             "Cursor Agent",
             "Factory Droid",
             "OpenCode",
             "Pi",
+            "Kimi Code",
         ])
         #expect(adapters.allSatisfy { !$0.minimumVersion.isEmpty })
         #expect(adapters.allSatisfy { $0.integrationMechanism != .terminalParsing })
-        #expect(adapters.allSatisfy { $0.automation != nil })
+        #expect(
+            adapters
+                .filter { $0.kind != .antigravityCLI }
+                .allSatisfy { $0.automation != nil }
+        )
+        #expect(
+            adapters.first { $0.kind == .antigravityCLI }?.automation == nil
+        )
+        #expect(
+            adapters.first { $0.kind == .antigravityCLI }?
+                .userConfigurationPath == "~/.gemini/config/hooks.json"
+        )
+        #expect(
+            adapters.first { $0.kind == .kimiCode }?
+                .userConfigurationPath == "~/.kimi-code/config.toml"
+        )
         #expect(
             Set(adapters.compactMap(\.automation?.invocation))
                 == Set([
                     .codex,
                     .claudeCode,
-                    .geminiCLI,
                     .githubCopilotCLI,
                     .qwenCode,
                     .cursorAgent,
                     .factoryDroid,
                     .openCode,
                     .pi,
+                    .kimiCode,
                 ])
         )
     }
@@ -80,17 +97,20 @@ struct AgentAdapterRegistryTests {
                 "--ephemeral",
             ],
             .claudeCode: ["--permission-mode", "dontAsk", "--no-session-persistence"],
-            .geminiCLI: ["--approval-mode", "plan", "--skip-trust"],
             .githubCopilotCLI: ["--allow-all-tools", "--no-ask-user"],
             .qwenCode: ["--approval-mode", "plan"],
             .cursorAgent: ["--output-format", "json"],
             .factoryDroid: ["exec", "--output-format", "json"],
             .openCode: ["run", "--format", "json"],
             .pi: ["--mode", "json", "--no-session"],
+            .kimiCode: ["--output-format", "text"],
         ]
 
         for adapter in AgentAdapterRegistry.builtIn.adapters {
-            let capability = try #require(adapter.automation)
+            guard let capability = adapter.automation else {
+                #expect(adapter.kind == .antigravityCLI)
+                continue
+            }
             let arguments = capability.arguments(
                 prompt: "PROMPT",
                 finalOutputPath: "/tmp/final"
@@ -112,13 +132,14 @@ struct AgentAdapterRegistryTests {
         let expected: [AgentKind: String] = [
             .codex: "/Users/tester/.codex/skills",
             .claudeCode: "/Users/tester/.claude/skills",
-            .geminiCLI: "/Users/tester/.gemini/skills",
+            .antigravityCLI: "/Users/tester/.gemini/antigravity-cli/skills",
             .githubCopilotCLI: "/Users/tester/.copilot/skills",
             .qwenCode: "/Users/tester/.qwen/skills",
             .cursorAgent: "/Users/tester/.cursor/skills",
             .factoryDroid: "/Users/tester/.factory/skills",
             .openCode: "/Users/tester/.config/opencode/skills",
             .pi: "/Users/tester/.pi/agent/skills",
+            .kimiCode: "/Users/tester/.kimi-code/skills",
         ]
 
         for adapter in AgentAdapterRegistry.builtIn.adapters {
@@ -149,7 +170,7 @@ struct AgentAdapterRegistryTests {
         )
     }
 
-    @Test("Claude, Gemini, and OpenCode map their official lifecycle events")
+    @Test("Claude, Antigravity, Kimi, and OpenCode map their official lifecycle events")
     func officialLifecycleMappings() throws {
         let claude = try #require(
             AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .claudeCode }
@@ -161,17 +182,32 @@ struct AgentAdapterRegistryTests {
             AgentHookRegistration(eventName: "PreToolUse", lifecycle: .attentionResolved)
         ))
 
-        let gemini = try #require(
-            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .geminiCLI }
+        let antigravity = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first {
+                $0.kind == .antigravityCLI
+            }
         )
-        #expect(gemini.hookRegistrations.contains(
-            AgentHookRegistration(eventName: "Notification", lifecycle: .needsAttention)
+        #expect(antigravity.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "PreInvocation", lifecycle: .turnStarted)
         ))
-        #expect(gemini.hookRegistrations.contains(
+        #expect(antigravity.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "Stop", lifecycle: .turnCompleted)
+        ))
+
+        let kimi = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .kimiCode }
+        )
+        #expect(kimi.hookRegistrations.contains(
+            AgentHookRegistration(eventName: "PermissionRequest", lifecycle: .needsAttention)
+        ))
+        #expect(kimi.hookRegistrations.contains(
+            AgentHookRegistration(
+                eventName: "PermissionResult",
+                lifecycle: .attentionResolved
+            )
+        ))
+        #expect(kimi.hookRegistrations.contains(
             AgentHookRegistration(eventName: "SessionEnd", lifecycle: .sessionEnded)
-        ))
-        #expect(gemini.hookRegistrations.contains(
-            AgentHookRegistration(eventName: "BeforeTool", lifecycle: .attentionResolved)
         ))
 
         let openCode = try #require(
@@ -227,19 +263,58 @@ struct AgentAdapterRegistryTests {
         }
     }
 
+    @Test("legacy Gemini persistence decodes as Antigravity without reusing its session ID")
+    func legacyGeminiPersistence() throws {
+        #expect(
+            try JSONDecoder().decode(
+                AgentKind.self,
+                from: Data(#""geminiCLI""#.utf8)
+            ) == .antigravityCLI
+        )
+        #expect(
+            String(
+                decoding: try JSONEncoder().encode(AgentKind.antigravityCLI),
+                as: UTF8.self
+            ) == #""antigravityCLI""#
+        )
+
+        let legacyBinding = try JSONDecoder().decode(
+            AgentBinding.self,
+            from: Data(
+                """
+                {
+                  "agent": "geminiCLI",
+                  "sessionID": "legacy-gemini-session",
+                  "nativeTitle": "Legacy Gemini session"
+                }
+                """.utf8
+            )
+        )
+        #expect(legacyBinding.agent == .antigravityCLI)
+        #expect(legacyBinding.sessionID == nil)
+        #expect(legacyBinding.nativeTitle == "Legacy Gemini session")
+    }
+
     @Test("built-in adapters resume through each CLI's supported session flag")
     func resumeCommands() {
         let provider = BuiltInAgentResumeCommands()
         let expected: [AgentKind: AgentResumeCommand] = [
             .codex: AgentResumeCommand(executable: "codex", arguments: ["resume", "session-1"]),
             .claudeCode: AgentResumeCommand(executable: "claude", arguments: ["--resume", "session-1"]),
-            .geminiCLI: AgentResumeCommand(executable: "gemini", arguments: ["--resume", "session-1"]),
+            .antigravityCLI: AgentResumeCommand(
+                executable: "agy",
+                arguments: ["--conversation", "session-1"]
+            ),
             .githubCopilotCLI: AgentResumeCommand(executable: "copilot", arguments: ["--resume", "session-1"]),
             .qwenCode: AgentResumeCommand(executable: "qwen", arguments: ["--resume", "session-1"]),
             .cursorAgent: AgentResumeCommand(executable: "cursor-agent", arguments: ["--resume", "session-1"]),
             .factoryDroid: AgentResumeCommand(executable: "droid", arguments: ["--resume", "session-1"]),
             .openCode: AgentResumeCommand(executable: "opencode", arguments: ["--session", "session-1"]),
             .pi: AgentResumeCommand(executable: "pi", arguments: ["--session", "session-1"]),
+            .kimiCode: AgentResumeCommand(
+                executable: "kimi",
+                arguments: ["--session", "session-1"]
+            ),
         ]
 
         for (agent, command) in expected {
@@ -291,6 +366,198 @@ struct AgentAdapterRegistryTests {
         let hooks = try #require(object["hooks"] as? [String: Any])
         #expect((hooks["Stop"] as? [Any])?.count == 1)
         #expect(hooks["UserPromptSubmit"] == nil)
+    }
+
+    @Test("Antigravity named hook installation is idempotent and reversible")
+    func reversibleAntigravityHookConfiguration() throws {
+        let original = Data(
+            """
+            {
+              "existing-linter": {
+                "PostToolUse": [
+                  {
+                    "matcher": "run_command",
+                    "hooks": [
+                      {
+                        "type": "command",
+                        "command": "./lint.sh"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+            """.utf8
+        )
+        let editor = AntigravityHookConfigurationEditor()
+        let registrations = [
+            AgentHookRegistration(
+                eventName: "PreInvocation",
+                lifecycle: .turnStarted
+            ),
+            AgentHookRegistration(
+                eventName: "Stop",
+                lifecycle: .turnCompleted
+            ),
+        ]
+
+        let installed = try editor.install(
+            in: original,
+            registrations: registrations,
+            hookExecutable: "/Applications/Breath.app/Contents/MacOS/Breath",
+            agent: .antigravityCLI
+        )
+        let repeated = try editor.install(
+            in: installed,
+            registrations: registrations,
+            hookExecutable: "/Applications/Breath.app/Contents/MacOS/Breath",
+            agent: .antigravityCLI
+        )
+        #expect(repeated == installed)
+
+        let object = try #require(
+            JSONSerialization.jsonObject(with: installed) as? [String: Any]
+        )
+        #expect(object["existing-linter"] != nil)
+        let breath = try #require(
+            object["breath-agent-integration"] as? [String: Any]
+        )
+        #expect((breath["PreInvocation"] as? [[String: Any]])?.count == 1)
+        #expect((breath["Stop"] as? [[String: Any]])?.count == 1)
+
+        let uninstalled = try editor.uninstall(from: installed)
+        let restored = try #require(
+            JSONSerialization.jsonObject(with: uninstalled) as? [String: Any]
+        )
+        #expect(restored["existing-linter"] != nil)
+        #expect(restored["breath-agent-integration"] == nil)
+    }
+
+    @Test("Kimi TOML hook installation is idempotent and reversible")
+    func reversibleKimiHookConfiguration() throws {
+        let original = Data(
+            """
+            default_model = "kimi-code/kimi-for-coding"
+
+            [[hooks]]
+            event = "Notification"
+            matcher = "task\\\\.completed"
+            command = "notify-existing"
+            """.utf8
+        )
+        let editor = KimiHookConfigurationEditor()
+        let kimi = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first {
+                $0.kind == .kimiCode
+            }
+        )
+
+        let installed = try editor.install(
+            in: original,
+            registrations: kimi.hookRegistrations,
+            hookExecutable: "/Applications/Breath.app/Contents/MacOS/Breath",
+            agent: .kimiCode
+        )
+        let repeated = try editor.install(
+            in: installed,
+            registrations: kimi.hookRegistrations,
+            hookExecutable: "/Applications/Breath.app/Contents/MacOS/Breath",
+            agent: .kimiCode
+        )
+        #expect(repeated == installed)
+
+        let text = String(decoding: installed, as: UTF8.self)
+        #expect(text.contains(#"command = "notify-existing""#))
+        #expect(text.contains(#"event = "UserPromptSubmit""#))
+        #expect(text.contains("--agent-hook kimiCode turnStarted"))
+        #expect(text.contains(#"event = "PermissionRequest""#))
+        #expect(text.contains("--agent-hook kimiCode needsAttention"))
+        #expect(text.contains(#"event = "SessionEnd""#))
+
+        let uninstalled = try editor.uninstall(from: installed)
+        let restored = String(decoding: uninstalled, as: UTF8.self)
+        #expect(restored.contains(#"command = "notify-existing""#))
+        #expect(!restored.contains("--agent-hook kimiCode"))
+        #expect(!restored.contains("BEGIN Breath Agent Integration"))
+    }
+
+    @Test("installing Antigravity removes Breath's legacy Gemini hooks")
+    func antigravityInstallationMigratesLegacyGeminiHooks() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "breath-antigravity-migration-home-\(UUID().uuidString)"
+            )
+        defer { try? FileManager.default.removeItem(at: home) }
+        let legacyConfig = home.appendingPathComponent(".gemini/settings.json")
+        try FileManager.default.createDirectory(
+            at: legacyConfig.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            {
+              "theme": "dark",
+              "hooks": {
+                "Stop": [{
+                  "matcher": "",
+                  "hooks": [
+                    {
+                      "type": "command",
+                      "name": "Breath",
+                      "command": "'/Applications/Breath.app/Contents/MacOS/Breath' --agent-hook geminiCLI turnCompleted"
+                    },
+                    {
+                      "type": "command",
+                      "name": "User Tool",
+                      "command": "notify-user"
+                    }
+                  ]
+                }]
+              }
+            }
+            """.utf8
+        ).write(to: legacyConfig)
+        try Data("{}".utf8).write(
+            to: URL(fileURLWithPath: legacyConfig.path + ".breath-backup")
+        )
+        let adapter = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first {
+                $0.kind == .antigravityCLI
+            }
+        )
+
+        try UserHookIntegrationInstaller().install(
+            adapter: adapter,
+            hookExecutable: "/Applications/Breath.app/Contents/MacOS/Breath",
+            homeDirectory: home
+        )
+
+        let legacyRoot = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: legacyConfig)
+            ) as? [String: Any]
+        )
+        #expect(legacyRoot["theme"] as? String == "dark")
+        let hooks = try #require(legacyRoot["hooks"] as? [String: Any])
+        let stop = try #require(hooks["Stop"] as? [[String: Any]])
+        let handlers = try #require(stop.first?["hooks"] as? [[String: Any]])
+        #expect(handlers.count == 1)
+        #expect(handlers.first?["command"] as? String == "notify-user")
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: legacyConfig.path + ".breath-backup"
+            )
+        )
+
+        let antigravityConfig = home.appendingPathComponent(
+            ".gemini/config/hooks.json"
+        )
+        let antigravityRoot = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: antigravityConfig)
+            ) as? [String: Any]
+        )
+        #expect(antigravityRoot["breath-agent-integration"] != nil)
     }
 
     @Test("hook installation refreshes Breath's executable path in place")
@@ -498,6 +765,40 @@ struct AgentAdapterRegistryTests {
         #expect(!FileManager.default.fileExists(atPath: backupURL.path))
     }
 
+    @Test("Kimi hook installation honors KIMI_CODE_HOME")
+    func kimiCustomHomeHookInstallation() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("breath-kimi-home-\(UUID().uuidString)", isDirectory: true)
+        let kimiHome = home.appendingPathComponent("custom-kimi", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let adapter = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first(where: { $0.kind == .kimiCode })
+        )
+        let installer = UserHookIntegrationInstaller()
+
+        try installer.install(
+            adapter: adapter,
+            hookExecutable: "/Applications/Breath.app/Contents/MacOS/Breath",
+            homeDirectory: home,
+            environment: ["KIMI_CODE_HOME": kimiHome.path]
+        )
+
+        let configURL = kimiHome.appendingPathComponent("config.toml")
+        #expect(FileManager.default.fileExists(atPath: configURL.path))
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: home.appendingPathComponent(".kimi-code/config.toml").path
+            )
+        )
+
+        try installer.uninstall(
+            adapter: adapter,
+            homeDirectory: home,
+            environment: ["KIMI_CODE_HOME": kimiHome.path]
+        )
+        #expect(!FileManager.default.fileExists(atPath: configURL.path))
+    }
+
     @Test("uninstall removes hook config files that Breath created from scratch")
     func uninstallNewHookConfiguration() throws {
         let home = FileManager.default.temporaryDirectory
@@ -505,7 +806,12 @@ struct AgentAdapterRegistryTests {
         defer { try? FileManager.default.removeItem(at: home) }
         let installer = UserHookIntegrationInstaller()
 
-        for kind in [AgentKind.githubCopilotCLI, .cursorAgent] {
+        for kind in [
+            AgentKind.antigravityCLI,
+            .githubCopilotCLI,
+            .cursorAgent,
+            .kimiCode,
+        ] {
             let adapter = try #require(
                 AgentAdapterRegistry.builtIn.adapters.first(where: { $0.kind == kind })
             )
@@ -579,7 +885,39 @@ struct AgentAdapterRegistryTests {
         )
     }
 
-    @Test("all nine official hook payload shapes reduce to resumable metadata")
+    @Test("Antigravity Stop waits until all background work is fully idle")
+    func antigravityStopRequiresFullyIdle() throws {
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let workSessionID = WorkSessionID(rawValue: UUID())
+        let paneID = TerminalPaneID(rawValue: UUID())
+        let applicationInstanceID = ApplicationInstanceID(rawValue: UUID())
+        let environment = [
+            "BREATH_APPLICATION_INSTANCE_ID": applicationInstanceID.rawValue.uuidString,
+            "BREATH_WORKSPACE_ID": workspaceID.rawValue.uuidString,
+            "BREATH_WORK_SESSION_ID": workSessionID.rawValue.uuidString,
+            "BREATH_TERMINAL_PANE_ID": paneID.rawValue.uuidString,
+        ]
+        let factory = AgentHookEventFactory()
+
+        #expect(
+            try factory.makeEvent(
+                agent: .antigravityCLI,
+                lifecycle: .turnCompleted,
+                rawPayload: Data(#"{"fullyIdle":false}"#.utf8),
+                environment: environment
+            ) == nil
+        )
+        #expect(
+            try factory.makeEvent(
+                agent: .antigravityCLI,
+                lifecycle: .turnCompleted,
+                rawPayload: Data(#"{"fullyIdle":true}"#.utf8),
+                environment: environment
+            )?.lifecycle == .turnCompleted
+        )
+    }
+
+    @Test("all ten official hook payload shapes reduce to resumable metadata")
     func supportedHookPayloadShapes() throws {
         struct Sample {
             let agent: AgentKind
@@ -605,11 +943,14 @@ struct AgentAdapterRegistryTests {
                 workingDirectory: "/tmp/claude"
             ),
             Sample(
-                agent: .geminiCLI,
-                object: ["session_id": "gemini-1", "cwd": "/tmp/gemini"],
-                sessionID: "gemini-1",
+                agent: .antigravityCLI,
+                object: [
+                    "conversationId": "antigravity-1",
+                    "workspacePaths": ["/tmp/antigravity"],
+                ],
+                sessionID: "antigravity-1",
                 title: nil,
-                workingDirectory: "/tmp/gemini"
+                workingDirectory: "/tmp/antigravity"
             ),
             Sample(
                 agent: .githubCopilotCLI,
@@ -656,6 +997,13 @@ struct AgentAdapterRegistryTests {
                 sessionID: "pi-1",
                 title: "Fix parser",
                 workingDirectory: "/tmp/pi"
+            ),
+            Sample(
+                agent: .kimiCode,
+                object: ["session_id": "kimi-1", "cwd": "/tmp/kimi"],
+                sessionID: "kimi-1",
+                title: nil,
+                workingDirectory: "/tmp/kimi"
             ),
         ]
         let workspaceID = WorkspaceID(rawValue: UUID())
