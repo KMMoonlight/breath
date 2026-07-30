@@ -109,9 +109,33 @@ actor SkillWriteCoordinator {
         for agent: AgentKind,
         operation: @Sendable () async throws -> T
     ) async throws -> T {
+        try await withLocks(for: [agent], operation: operation)
+    }
+
+    func withLocks<T: Sendable>(
+        for agents: [AgentKind],
+        operation: @Sendable () async throws -> T
+    ) async throws -> T {
+        let orderedAgents = Array(Set(agents)).sorted { $0.rawValue < $1.rawValue }
+        return try await withLocks(
+            for: orderedAgents[...],
+            operation: operation
+        )
+    }
+
+    private func withLocks<T: Sendable>(
+        for agents: ArraySlice<AgentKind>,
+        operation: @Sendable () async throws -> T
+    ) async throws -> T {
+        guard let agent = agents.first else {
+            return try await operation()
+        }
         await acquire(agent)
         do {
-            let result = try await operation()
+            let result = try await withLocks(
+                for: agents.dropFirst(),
+                operation: operation
+            )
             release(agent)
             return result
         } catch {
@@ -344,6 +368,11 @@ struct SkillUninstallCommitter: @unchecked Sendable {
             try await trash.moveToTrash(item.directory)
         }
         do {
+            try removeSharedRegistryEntry(for: item)
+        } catch {
+            throw SkillInstallationError.sharedRegistryPersistenceFailed
+        }
+        do {
             try await recordRepository?.removeSkillInstallationRecord(
                 installationDirectory: item.directory
             )
@@ -351,9 +380,42 @@ struct SkillUninstallCommitter: @unchecked Sendable {
             throw SkillInstallationError.recordPersistenceFailed
         }
     }
+
+    private func removeSharedRegistryEntry(
+        for item: SkillUninstallPreviewItem
+    ) throws {
+        guard item.scope == .sharedLibrary,
+              let skillIdentifier = item.sharedRegistrySkillIdentifier
+        else {
+            return
+        }
+        let skillsRoot = item.directory.deletingLastPathComponent()
+        let sharedContainer = skillsRoot.deletingLastPathComponent()
+        guard skillsRoot.lastPathComponent == "skills",
+              sharedContainer.lastPathComponent == ".agents"
+        else {
+            throw SkillInstallationError.stalePreview
+        }
+        let lockURL = sharedContainer.appendingPathComponent(".skill-lock.json")
+        guard fileManager.fileExists(atPath: lockURL.path) else { return }
+        let data = try Data(contentsOf: lockURL)
+        guard var lock = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var skills = lock["skills"] as? [String: Any]
+        else {
+            throw SkillInstallationError.sharedRegistryPersistenceFailed
+        }
+        guard skills.removeValue(forKey: skillIdentifier) != nil else { return }
+        lock["skills"] = skills
+        let updated = try JSONSerialization.data(
+            withJSONObject: lock,
+            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        )
+        try updated.write(to: lockURL, options: .atomic)
+    }
 }
 
 enum SkillInstallationError: Error {
     case stalePreview
     case recordPersistenceFailed
+    case sharedRegistryPersistenceFailed
 }

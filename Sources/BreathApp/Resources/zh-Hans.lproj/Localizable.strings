@@ -657,12 +657,17 @@
 "安装更新" = "安装更新";
 "卸载 %@" = "卸载 %@";
 "只会从明确选择的 Agent 中移除 Skill。" = "只会从明确选择的 Agent 中移除 Skill。";
+"共享副本会整体删除；独立副本只会从明确选择的 Agent 中移除。" = "共享副本会整体删除；独立副本只会从明确选择的 Agent 中移除。";
+"共享 Skill" = "共享 Skill";
+"删除后，此 Skill 将同时从以下 Agent 中移除：%@" = "删除后，此 Skill 将同时从以下 Agent 中移除：%@";
+"将同时从以下 Agent 中移除：%@" = "将同时从以下 Agent 中移除：%@";
 "移入 macOS 废纸篓，可恢复" = "移入 macOS 废纸篓，可恢复";
 "只移除链接，共享目标保持不变" = "只移除链接，共享目标保持不变";
 "移入废纸篓" = "移入废纸篓";
 "移除链接" = "移除链接";
 "检查卸载" = "检查卸载";
 "卸载所选副本" = "卸载所选副本";
+"卸载 Skill" = "卸载 Skill";
 "The same Skill content is already installed." = "相同内容的 Skill 已经安装。";
 "The existing same-name Skill was kept." = "已保留现有同名 Skill。";
 "This Skill is already installed. The installed version will be kept unless replacement is selected." = "此 Skill 已安装；除非选择覆盖，否则将保留已安装版本。";
@@ -673,6 +678,8 @@
 "The target changed after preview. Refresh and review it again." = "目标在预览后发生变化，请刷新并重新确认。";
 "The source record could not be saved, so the previous directory was restored." = "来源记录保存失败，原目录已恢复。";
 "The Skill could not be installed at this target." = "无法将 Skill 安装到此目标。";
+"The shared Skill was moved to Trash and removed from every affected Agent." = "共享 Skill 已移入废纸篓，并从所有受影响的 Agent 中移除。";
+"The shared Skill was removed, but the skills CLI registry could not be updated." = "共享 Skill 已移除，但无法更新 skills CLI 清单。";
 "The selected symbolic link was removed; its shared target was kept." = "所选符号链接已移除，共享目标保持不变。";
 "The selected Skill was moved to Trash." = "所选 Skill 已移入废纸篓。";
 "The ZIP file could not be read." = "无法读取 ZIP 文件。";

@@ -19,35 +19,48 @@ public enum SkillUninstallAction: String, Codable, Hashable, Sendable {
     case removeSymbolicLink
 }
 
+public enum SkillUninstallScope: String, Codable, Hashable, Sendable {
+    case agent
+    case sharedLibrary
+}
+
 public struct SkillUninstallPreviewItem: Identifiable, Hashable, Sendable {
-    public var id: String { "\(agent.rawValue):\(directory.path)" }
+    public var id: String { directory.standardizedFileURL.path }
     public let skillID: String
     public let skillName: String
-    public let agent: AgentKind
-    public let agentDisplayName: String
+    public let affectedAgents: [AgentKind]
+    public let affectedAgentDisplayNames: [String]
+    public let scope: SkillUninstallScope
     public let directory: URL
     public let resolvedDirectory: URL
     public let action: SkillUninstallAction
     let expectedDigest: String
+    let sharedRegistrySkillIdentifier: String?
+
+    public var agentDisplayName: String { affectedAgentDisplayNames.joined(separator: ", ") }
 
     init(
         skillID: String,
         skillName: String,
-        agent: AgentKind,
-        agentDisplayName: String,
+        affectedAgents: [AgentKind],
+        affectedAgentDisplayNames: [String],
+        scope: SkillUninstallScope,
         directory: URL,
         resolvedDirectory: URL,
         action: SkillUninstallAction,
-        expectedDigest: String
+        expectedDigest: String,
+        sharedRegistrySkillIdentifier: String? = nil
     ) {
         self.skillID = skillID
         self.skillName = skillName
-        self.agent = agent
-        self.agentDisplayName = agentDisplayName
+        self.affectedAgents = affectedAgents
+        self.affectedAgentDisplayNames = affectedAgentDisplayNames
+        self.scope = scope
         self.directory = directory
         self.resolvedDirectory = resolvedDirectory
         self.action = action
         self.expectedDigest = expectedDigest
+        self.sharedRegistrySkillIdentifier = sharedRegistrySkillIdentifier
     }
 }
 
@@ -62,27 +75,32 @@ public struct SkillUninstallPreview: Sendable {
 }
 
 public struct SkillUninstallResultItem: Identifiable, Hashable, Sendable {
-    public var id: String { "\(agent.rawValue):\(directory.path)" }
+    public var id: String { directory.standardizedFileURL.path }
     public let skillName: String
-    public let agent: AgentKind
-    public let agentDisplayName: String
+    public let affectedAgents: [AgentKind]
+    public let affectedAgentDisplayNames: [String]
+    public let scope: SkillUninstallScope
     public let directory: URL
     public let status: SkillOperationStatus
     public let message: String
     public let diagnostic: String?
 
+    public var agentDisplayName: String { affectedAgentDisplayNames.joined(separator: ", ") }
+
     public init(
         skillName: String,
-        agent: AgentKind,
-        agentDisplayName: String,
+        affectedAgents: [AgentKind],
+        affectedAgentDisplayNames: [String],
+        scope: SkillUninstallScope,
         directory: URL,
         status: SkillOperationStatus,
         message: String,
         diagnostic: String? = nil
     ) {
         self.skillName = skillName
-        self.agent = agent
-        self.agentDisplayName = agentDisplayName
+        self.affectedAgents = affectedAgents
+        self.affectedAgentDisplayNames = affectedAgentDisplayNames
+        self.scope = scope
         self.directory = directory
         self.status = status
         self.message = message

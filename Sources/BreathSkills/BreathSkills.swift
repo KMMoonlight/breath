@@ -1031,26 +1031,61 @@ public actor GlobalSkillsService {
 
     public func previewUninstall(
         skillID: String,
-        targetAgents: Set<AgentKind>
+        targetAgents: Set<AgentKind>,
+        includeSharedDiscoveryCopies: Bool = false
     ) async -> SkillUninstallPreview {
         let snapshot = await scan()
         guard let skill = snapshot.skills.first(where: { $0.id == skillID }) else {
             return SkillUninstallPreview(items: [], createdAt: now())
         }
-        let items = skill.copies.filter {
+        var items = skill.copies.filter {
             targetAgents.contains($0.agent) && !$0.isSharedAgentDiscoveryCopy
         }.map { copy in
             SkillUninstallPreviewItem(
                 skillID: skill.id,
                 skillName: skill.name,
-                agent: copy.agent,
-                agentDisplayName: copy.agentDisplayName,
+                affectedAgents: [copy.agent],
+                affectedAgentDisplayNames: [copy.agentDisplayName],
+                scope: .agent,
                 directory: copy.directory,
                 resolvedDirectory: copy.resolvedDirectory,
                 action: copy.isSymbolicLink ? .removeSymbolicLink : .moveToTrash,
-                expectedDigest: skill.contentDigest
+                expectedDigest: skill.contentDigest,
+                sharedRegistrySkillIdentifier: nil
             )
-        }.sorted { $0.agentDisplayName < $1.agentDisplayName }
+        }
+        if includeSharedDiscoveryCopies {
+            let sharedCopiesByDirectory = Dictionary(
+                grouping: skill.copies.filter(\.isSharedAgentDiscoveryCopy)
+            ) {
+                $0.directory.standardizedFileURL.path
+            }
+            items.append(contentsOf: sharedCopiesByDirectory.values.compactMap { copies in
+                let sortedCopies = copies.sorted {
+                    $0.agentDisplayName.localizedStandardCompare($1.agentDisplayName)
+                        == .orderedAscending
+                }
+                guard let first = sortedCopies.first else { return nil }
+                let sharedRegistryIdentifiers = Set(sortedCopies.compactMap {
+                    $0.installationOrigin?.sharedProvenance?.skillIdentifier
+                })
+                return SkillUninstallPreviewItem(
+                    skillID: skill.id,
+                    skillName: skill.name,
+                    affectedAgents: sortedCopies.map(\.agent),
+                    affectedAgentDisplayNames: sortedCopies.map(\.agentDisplayName),
+                    scope: .sharedLibrary,
+                    directory: first.directory,
+                    resolvedDirectory: first.resolvedDirectory,
+                    action: .moveToTrash,
+                    expectedDigest: skill.contentDigest,
+                    sharedRegistrySkillIdentifier: sharedRegistryIdentifiers.count == 1
+                        ? sharedRegistryIdentifiers.first
+                        : nil
+                )
+            })
+        }
+        items.sort { $0.agentDisplayName < $1.agentDisplayName }
         return SkillUninstallPreview(items: items, createdAt: now())
     }
 
@@ -1067,24 +1102,33 @@ public actor GlobalSkillsService {
                 group.addTask {
                     let result: SkillUninstallResultItem
                     do {
-                        try await coordinator.withLock(for: item.agent) {
+                        try await coordinator.withLocks(for: item.affectedAgents) {
                             try await committer.commit(item)
+                        }
+                        let message: String
+                        switch (item.scope, item.action) {
+                        case (.sharedLibrary, _):
+                            message = "The shared Skill was moved to Trash and removed from every affected Agent."
+                        case (_, .removeSymbolicLink):
+                            message = "The selected symbolic link was removed; its shared target was kept."
+                        case (_, .moveToTrash):
+                            message = "The selected Skill was moved to Trash."
                         }
                         result = SkillUninstallResultItem(
                             skillName: item.skillName,
-                            agent: item.agent,
-                            agentDisplayName: item.agentDisplayName,
+                            affectedAgents: item.affectedAgents,
+                            affectedAgentDisplayNames: item.affectedAgentDisplayNames,
+                            scope: item.scope,
                             directory: item.directory,
                             status: .succeeded,
-                            message: item.action == .removeSymbolicLink
-                                ? "The selected symbolic link was removed; its shared target was kept."
-                                : "The selected Skill was moved to Trash."
+                            message: message
                         )
                     } catch {
                         result = SkillUninstallResultItem(
                             skillName: item.skillName,
-                            agent: item.agent,
-                            agentDisplayName: item.agentDisplayName,
+                            affectedAgents: item.affectedAgents,
+                            affectedAgentDisplayNames: item.affectedAgentDisplayNames,
+                            scope: item.scope,
                             directory: item.directory,
                             status: .failed,
                             message: Self.uninstallFailureMessage(error),
@@ -1813,10 +1857,14 @@ public actor GlobalSkillsService {
     }
 
     private static func uninstallFailureMessage(_ error: Error) -> String {
-        if case SkillInstallationError.recordPersistenceFailed = error {
+        switch error {
+        case SkillInstallationError.recordPersistenceFailed:
             return "The Skill was removed, but its source record could not be cleaned up. Refresh to retry reconciliation."
+        case SkillInstallationError.sharedRegistryPersistenceFailed:
+            return "The shared Skill was removed, but the skills CLI registry could not be updated."
+        default:
+            return installationFailureMessage(error)
         }
-        return installationFailureMessage(error)
     }
 
     private static func candidateRejectionMessage(_ error: Error) -> String {

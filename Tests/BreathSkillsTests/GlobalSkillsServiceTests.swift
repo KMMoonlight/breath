@@ -292,10 +292,17 @@ struct GlobalSkillsServiceTests {
         )
         #expect(codexPreview.items.first?.action == .alreadyInstalled)
         #expect(codexPreview.items.first?.targetDirectory == sharedSkill.standardizedFileURL)
-        #expect((await service.previewUninstall(
+        let sharedUninstallPreview = await service.previewUninstall(
             skillID: skill.id,
-            targetAgents: [.codex]
-        )).items.isEmpty)
+            targetAgents: [],
+            includeSharedDiscoveryCopies: true
+        )
+        #expect(sharedUninstallPreview.items.count == 1)
+        #expect(sharedUninstallPreview.items.first?.scope == .sharedLibrary)
+        #expect(
+            Set(sharedUninstallPreview.items.first?.affectedAgents ?? [])
+                == Set([.codex, .kimiCode])
+        )
 
         let preview = await service.previewInstallation(
             batch: batch,
@@ -1659,6 +1666,84 @@ struct GlobalSkillsServiceTests {
         #expect(candidate.declarations.allowedTools == "- Read\n- Grep\n- Glob")
     }
 
+    @Test("shared discovery copy is one uninstall target affecting every discovering Agent")
+    func uninstallsSharedDiscoveryCopyOnceForEveryAffectedAgent() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let sharedSkill = fixture.home
+            .appendingPathComponent(".agents/skills/review", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: sharedSkill,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            ---
+            name: review
+            description: Review before shipping.
+            ---
+            """.utf8
+        ).write(to: sharedSkill.appendingPathComponent("SKILL.md"))
+        let sharedContainer = sharedSkill
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let lockURL = sharedContainer.appendingPathComponent(".skill-lock.json")
+        try Data(
+            """
+            {
+              "version": 3,
+              "skills": {
+                "review": {
+                  "source": "example/review",
+                  "sourceType": "github",
+                  "skillPath": "skills/review/SKILL.md"
+                },
+                "keep": {
+                  "source": "example/keep",
+                  "sourceType": "github",
+                  "skillPath": "skills/keep/SKILL.md"
+                }
+              }
+            }
+            """.utf8
+        ).write(to: lockURL)
+        let trash = RecordingSkillTrash(
+            recoveryDirectory: fixture.home.appendingPathComponent("Trash", isDirectory: true)
+        )
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            trash: trash
+        )
+        let skill = try #require((await service.scan()).skills.first)
+
+        let preview = await service.previewUninstall(
+            skillID: skill.id,
+            targetAgents: [],
+            includeSharedDiscoveryCopies: true
+        )
+
+        let item = try #require(preview.items.first)
+        #expect(preview.items.count == 1)
+        #expect(item.scope == .sharedLibrary)
+        #expect(Set(item.affectedAgents) == Set([.codex, .kimiCode]))
+
+        let result = await service.uninstall(preview)
+
+        #expect(result.items.count == 1)
+        #expect(result.items.first?.scope == .sharedLibrary)
+        #expect(Set(result.items.first?.affectedAgents ?? []) == Set([.codex, .kimiCode]))
+        #expect(result.snapshot.skills.isEmpty)
+        #expect(await trash.trashedItems().map(\.lastPathComponent) == ["review"])
+        let updatedLock = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: lockURL))
+                as? [String: Any]
+        )
+        let lockedSkills = try #require(updatedLock["skills"] as? [String: Any])
+        #expect(lockedSkills["review"] == nil)
+        #expect(lockedSkills["keep"] != nil)
+    }
+
     @Test("uninstall trashes physical copies but removes only an external link")
     func uninstallsSelectedCopiesSafely() async throws {
         let fixture = try SkillsFixture()
@@ -1701,8 +1786,14 @@ struct GlobalSkillsServiceTests {
             skillID: skill.id,
             targetAgents: [.codex, .claudeCode]
         )
-        #expect(preview.items.first { $0.agent == .codex }?.action == .moveToTrash)
-        #expect(preview.items.first { $0.agent == .claudeCode }?.action == .removeSymbolicLink)
+        #expect(
+            preview.items.first { $0.affectedAgents == [.codex] }?.action
+                == .moveToTrash
+        )
+        #expect(
+            preview.items.first { $0.affectedAgents == [.claudeCode] }?.action
+                == .removeSymbolicLink
+        )
 
         let result = await service.uninstall(preview)
 

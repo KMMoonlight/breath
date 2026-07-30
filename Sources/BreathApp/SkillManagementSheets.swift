@@ -1094,6 +1094,39 @@ struct SkillUpdateReviewView: View {
     }
 }
 
+struct SkillUninstallSelectionPresentation: Equatable {
+    struct SharedCopy: Identifiable, Equatable {
+        var id: String { directory.standardizedFileURL.path }
+        let directory: URL
+        let affectedAgents: [AgentKind]
+        let affectedAgentDisplayNames: [String]
+    }
+
+    let selectableCopies: [InstalledSkillCopy]
+    let sharedCopies: [SharedCopy]
+
+    init(skill: GlobalSkill) {
+        selectableCopies = skill.copies.filter { !$0.isSharedAgentDiscoveryCopy }
+        let copiesByDirectory = Dictionary(
+            grouping: skill.copies.filter(\.isSharedAgentDiscoveryCopy)
+        ) {
+            $0.directory.standardizedFileURL.path
+        }
+        sharedCopies = copiesByDirectory.values.compactMap { copies in
+            let sortedCopies = copies.sorted {
+                $0.agentDisplayName.localizedStandardCompare($1.agentDisplayName)
+                    == .orderedAscending
+            }
+            guard let first = sortedCopies.first else { return nil }
+            return SharedCopy(
+                directory: first.directory,
+                affectedAgents: sortedCopies.map(\.agent),
+                affectedAgentDisplayNames: sortedCopies.map(\.agentDisplayName)
+            )
+        }.sorted { $0.directory.path < $1.directory.path }
+    }
+}
+
 struct SkillUninstallView: View {
     let service: GlobalSkillsService
     let skill: GlobalSkill
@@ -1110,7 +1143,11 @@ struct SkillUninstallView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 ExplanationLabel(
-                    localizer.string("只会从明确选择的 Agent 中移除 Skill。")
+                    localizer.string(
+                        selectionPresentation.sharedCopies.isEmpty
+                            ? "只会从明确选择的 Agent 中移除 Skill。"
+                            : "共享副本会整体删除；独立副本只会从明确选择的 Agent 中移除。"
+                    )
                 ) {
                     Text(localizer.format("卸载 %@", skill.name))
                         .font(.title2.weight(.semibold))
@@ -1142,8 +1179,21 @@ struct SkillUninstallView: View {
                 List(preview.items) { item in
                     HStack(alignment: .top, spacing: 6) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(item.agentDisplayName).fontWeight(.medium)
+                            Text(
+                                item.scope == .sharedLibrary
+                                    ? localizer.string("共享 Skill")
+                                    : item.agentDisplayName
+                            )
+                            .fontWeight(.medium)
                             Text(item.directory.path).font(.caption.monospaced())
+                            if item.scope == .sharedLibrary {
+                                Text(localizer.format(
+                                    "将同时从以下 Agent 中移除：%@",
+                                    formattedAgentNames(item.affectedAgentDisplayNames)
+                                ))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
                         }
                         Spacer()
                         ExplanationLabel(
@@ -1164,7 +1214,7 @@ struct SkillUninstallView: View {
                     }
                 }
             } else {
-                List(skill.copies) { copy in
+                List(selectionPresentation.selectableCopies) { copy in
                     Toggle(isOn: Binding(
                         get: { selectedAgents.contains(copy.agent) },
                         set: { enabled in
@@ -1182,7 +1232,21 @@ struct SkillUninstallView: View {
                         }
                     }
                     .toggleStyle(.checkbox)
-                    .disabled(copy.isSharedAgentDiscoveryCopy)
+                }
+                ForEach(selectionPresentation.sharedCopies) { sharedCopy in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(localizer.string("共享 Skill"))
+                            .fontWeight(.medium)
+                        Text(sharedCopy.directory.path)
+                            .font(.caption.monospaced())
+                        Text(localizer.format(
+                            "删除后，此 Skill 将同时从以下 Agent 中移除：%@",
+                            formattedAgentNames(sharedCopy.affectedAgentDisplayNames)
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
                 }
             }
             Divider()
@@ -1197,10 +1261,14 @@ struct SkillUninstallView: View {
                 } else if preview == nil {
                     Button(localizer.string("检查卸载"), action: makePreview)
                         .buttonStyle(.borderedProminent)
-                        .disabled(selectedAgents.isEmpty || isWorking)
+                        .disabled(
+                            selectedAgents.isEmpty
+                                && selectionPresentation.sharedCopies.isEmpty
+                                || isWorking
+                        )
                 } else {
                     Button(localizer.string("返回")) { self.preview = nil }
-                    Button(localizer.string("卸载所选副本"), role: .destructive, action: uninstall)
+                    Button(localizer.string("卸载 Skill"), role: .destructive, action: uninstall)
                         .disabled(isWorking)
                 }
             }
@@ -1212,12 +1280,24 @@ struct SkillUninstallView: View {
         ApplicationLocalizer(language: language)
     }
 
+    private var selectionPresentation: SkillUninstallSelectionPresentation {
+        SkillUninstallSelectionPresentation(skill: skill)
+    }
+
+    private func formattedAgentNames(_ names: [String]) -> String {
+        names.formatted(
+            .list(type: .and, width: .standard)
+                .locale(localizer.locale)
+        )
+    }
+
     private func makePreview() {
         isWorking = true
         Task {
             preview = await service.previewUninstall(
                 skillID: skill.id,
-                targetAgents: selectedAgents
+                targetAgents: selectedAgents,
+                includeSharedDiscoveryCopies: !selectionPresentation.sharedCopies.isEmpty
             )
             isWorking = false
         }

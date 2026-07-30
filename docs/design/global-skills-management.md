@@ -155,8 +155,8 @@ Agent Skill 目录中无法解析的文件夹或链接不计入正常 Skill 数�
 
 - 读取支持矩阵解析出的全部 Agent 全局 Skill 目录。
 - 识别普通目录和符号链接。
-- 将 `~/.agents/skills` 视为 skills CLI 管理的共享内容库。Agent 适配器显式声明该目录为额外发现根时（当前 Codex 支持），其中的 Skill 直接计为该 Agent 的已安装副本；其他 Agent 的 Skill 目录软链接到其中时，仍按对应 Agent 的已安装副本展示。共享库只读发现，不是 Breath 的安装或卸载目标。
-- 只读解析 `~/.agents/.skill-lock.json`，按 skills CLI 的目录规范化规则将锁文件 Skill 标识关联到共享目录，并恢复 Repo 和来源内路径；规范化后发生歧义时不关联来源。Breath 不修改该清单，也不根据 `SKILL.md` 名称猜测来源。skills.sh 搜索返回结果后，只有锁文件 Repo、Skill 标识与结果中的 Repo、`skillId`、完整目录条目 ID 彼此一致，才视为同一目录条目。
+- 将 `~/.agents/skills` 视为 skills CLI 管理的共享内容库。Agent 适配器显式声明该目录为额外发现根时，其中的 Skill 直接计为该 Agent 的已安装副本；其他 Agent 的 Skill 目录软链接到其中时，仍按对应 Agent 的已安装副本展示。共享库不是 Breath 的安装目标；卸载时，同一物理目录聚合为一个共享目标，不提供逐 Agent 复选，并直接说明删除后会同时从哪些 Agent 中消失。
+- 解析 `~/.agents/.skill-lock.json`，按 skills CLI 的目录规范化规则将锁文件 Skill 标识关联到共享目录，并恢复 Repo 和来源内路径；规范化后发生歧义时不关联来源。Breath 不根据 `SKILL.md` 名称猜测来源。删除共享 Skill 时，只移除与该物理目录精确关联的清单条目并保留其他字段和条目；除此之外不修改该清单。skills.sh 搜索返回结果后，只有锁文件 Repo、Skill 标识与结果中的 Repo、`skillId`、完整目录条目 ID 彼此一致，才视为同一目录条目。
 - 不跟随形成循环或越界到不可读位置的链接。
 - 解析 `SKILL.md` 的 YAML frontmatter，读取 `name`、`description` 及可选的 `license`、`compatibility`、`metadata` 和 `allowed-tools`。
 - 内容摘要覆盖 Skill 目录内的真实文件内容，忽略 `.DS_Store` 等文件系统噪声，不执行任何文件。
@@ -306,6 +306,7 @@ Breath 可以只读识别能安全匹配的生态兼容清单，例如 skills CL
 ## 13. 卸载
 
 - 用户在详情中选择一个或多个 Agent 副本，也可以选择该条目的全部 Agent。
+- `~/.agents/skills` 中的共享副本不显示逐 Agent 复选框；确认界面展示共享真实路径和全部受影响 Agent，用户确认后只将该物理目录移入废纸篓一次。
 - 确认页显示 Agent、真实路径和将移除的存储形式。
 - 普通目录通过 macOS 文件协调能力移入废纸篓，不永久递归删除。
 - 符号链接只移除链接本身，不跟随和删除目标。
@@ -359,7 +360,7 @@ skills.sh 被封装为可替换 Provider。接口变化、限流或不可用时�
 14. 打开 Skills 页面才触发远程检查；应用其他区域不后台联网；网络失败不影响本地列表和操作。
 15. 更新逐 Skill确认，不提供更新全部；本地修改目标不默认勾选，失败时保留旧版本。
 16. 外部符号链接可展示；卸载只移除链接，显式更新才把所选 Agent 转成独立副本。
-17. 普通 Skill 卸载移入废纸篓，并按 Agent 分别报告结果，不删除来源或未选择副本。
+17. 普通 Skill 卸载移入废纸篓，并按 Agent 分别报告结果；共享 Skill 按物理目录报告一次并列出全部受影响 Agent，不删除来源或未选择副本。
 18. 安装、更新和卸载不重启 Agent 或终端，并提示可能需要新会话后生效。
 19. Skills 页面、安装向导、预览、结果和错误状态支持键盘、VoiceOver、中英文及系统深浅外观。
 20. 新增受支持 Agent 时，缺少 Skill 目录解析与完整契约测试会使支持矩阵测试失败，防止功能遗漏。
