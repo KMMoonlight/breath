@@ -180,6 +180,8 @@ private struct LibghosttyTestFixture {
 
     func tearDown() {
         window.close()
+        NativeUITestLifetime.retainUntilProcessExit(engine)
+        NativeUITestLifetime.retainUntilProcessExit(window)
         try? FileManager.default.removeItem(at: directory)
     }
 }

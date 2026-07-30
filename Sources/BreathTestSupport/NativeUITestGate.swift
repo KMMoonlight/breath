@@ -35,3 +35,17 @@ public final class NativeUITestGate: @unchecked Sendable {
         }
     }
 }
+
+@MainActor
+public enum NativeUITestLifetime {
+    private static var retainedObjects: [AnyObject] = []
+
+    /// Keeps closed native test fixtures out of async autorelease teardown.
+    ///
+    /// AppKit, WebKit, and libghostty can enqueue native cleanup beyond the
+    /// logical end of a test. Retaining those fixtures avoids overlapping that
+    /// cleanup with another native test in the same Swift Testing process.
+    public static func retainUntilProcessExit(_ object: AnyObject) {
+        retainedObjects.append(object)
+    }
+}

@@ -941,7 +941,11 @@ struct SkillUpdateReviewView: View {
                                         )
                                     }
                                     if item.changes.isEmpty {
-                                        Text(localizer.string("没有文件变化"))
+                                        BreathEmptyState(
+                                            title: localizer.string("没有文件变化"),
+                                            style: .passive,
+                                            placement: .inline
+                                        )
                                     } else {
                                         ForEach(item.changes) { change in
                                             Text("\(change.kind.rawValue) · \(change.relativePath)")

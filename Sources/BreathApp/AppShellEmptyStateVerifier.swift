@@ -122,11 +122,8 @@ enum AppShellEmptyStateVerifier {
                 into: &failures
             )
             require(
-                !automationAccessibilityText.contains("尚未创建自动化")
-                    && !automationAccessibilityText.contains(
-                        "保存固定 Prompt，并让已安装的 Agent 按规则运行。"
-                    ),
-                "the empty Automation library rendered a large passive prompt",
+                automationAccessibilityText.contains("尚未创建自动化"),
+                "the empty Automation library lost its compact empty state",
                 into: &failures
             )
             require(
@@ -157,8 +154,8 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
         require(
-            canvasInspection.isSolid,
-            "empty terminal canvas contains visible placeholder content: \(canvasInspection)",
+            !canvasInspection.isSolid,
+            "empty terminal canvas lost its compact empty state: \(canvasInspection)",
             into: &failures
         )
         let automationVerificationProbe = AutomationViewVerificationProbe()
@@ -174,6 +171,11 @@ enum AppShellEmptyStateVerifier {
         require(
             emptyAutomationText.contains("新建自动化"),
             "the empty Automation page lost its creation action",
+            into: &failures
+        )
+        require(
+            emptyAutomationText.contains("尚未创建自动化"),
+            "the empty Automation page lost its compact empty state",
             into: &failures
         )
         require(
@@ -271,8 +273,8 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
         require(
-            canvasInspection.isSolid,
-            "unselected WorkSession canvas contains visible placeholder content: \(canvasInspection)",
+            !canvasInspection.isSolid,
+            "unselected WorkSession canvas lost its compact empty state: \(canvasInspection)",
             into: &failures
         )
 
@@ -328,8 +330,8 @@ enum AppShellEmptyStateVerifier {
             into: &failures
         )
         require(
-            canvasInspection.isSolid,
-            "empty WorkSession canvas contains visible placeholder content: \(canvasInspection)",
+            !canvasInspection.isSolid,
+            "empty WorkSession canvas lost its compact empty state: \(canvasInspection)",
             into: &failures
         )
 

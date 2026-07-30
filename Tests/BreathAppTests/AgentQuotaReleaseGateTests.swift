@@ -25,9 +25,10 @@ struct AgentQuotaReleaseGateTests {
         #expect(source.contains("static let cardHeight: CGFloat = 188"))
         #expect(source.contains("static let quotaWindowWidth: CGFloat = 161"))
         #expect(source.contains("static let quotaWindowHeight: CGFloat = 110"))
-        #expect(source.contains(
-            ".adaptive(\n                                        minimum: AgentQuotaLayout.cardWidth,\n                                        maximum: AgentQuotaLayout.cardWidth"
-        ))
+        #expect(source.range(
+            of: #"\.adaptive\(\s*minimum: AgentQuotaLayout\.cardWidth,\s*maximum: AgentQuotaLayout\.cardWidth"#,
+            options: .regularExpression
+        ) != nil)
         #expect(source.contains("width: AgentQuotaLayout.cardWidth"))
         #expect(source.contains("height: AgentQuotaLayout.cardHeight"))
         #expect(source.range(
@@ -69,6 +70,9 @@ struct AgentQuotaReleaseGateTests {
         #expect(!source.contains(
             "Text(localizer.string(\"未登录\"))"
         ))
+        #expect(source.contains(
+            "title: localizer.string(\"未登录\")"
+        ))
     }
 
     @Test("reset details use the adjacent info icon and local timezone")
@@ -85,7 +89,11 @@ struct AgentQuotaReleaseGateTests {
     func quietReadOnlyPage() throws {
         let source = try appSource("AgentQuotaView.swift")
 
-        #expect(source.contains("if model.cards.isEmpty"))
+        #expect(source.contains("if !model.hasLoadedAgentInventory"))
+        #expect(source.contains("else if model.cards.isEmpty"))
+        #expect(source.contains(
+            "title: localizer.string(\"没有可用的 Agent CLI\")"
+        ))
         #expect(source.contains("Color(nsColor: .windowBackgroundColor)"))
         #expect(source.contains(".accessibilityLabel(localizer.string(\"全部刷新\"))"))
         #expect(source.contains("localizer.format(\"刷新 %@ 额度\", card.displayName)"))

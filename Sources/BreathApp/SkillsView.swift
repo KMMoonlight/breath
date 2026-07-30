@@ -196,10 +196,13 @@ struct SkillsView: View {
     private func skillList(navigatesToDetail: Bool) -> some View {
         List {
             if model.filteredSkills.isEmpty {
-                Text(model.snapshot.skills.isEmpty
-                    ? localizer.string("尚未发现全局 Skill")
-                    : localizer.string("没有符合筛选条件的 Skill"))
-                    .foregroundStyle(.secondary)
+                BreathEmptyState(
+                    title: model.snapshot.skills.isEmpty
+                        ? localizer.string("尚未发现全局 Skill")
+                        : localizer.string("没有符合筛选条件的 Skill"),
+                    style: .passive,
+                    placement: .inline
+                )
             } else {
                 ForEach(model.filteredSkills) { skill in
                     if navigatesToDetail {
@@ -247,10 +250,10 @@ struct SkillsView: View {
                 uninstall: { skillToUninstall = skill }
             )
         } else {
-            Text(localizer.string("选择一个 Skill"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            BreathEmptyState(
+                title: localizer.string("选择一个 Skill"),
+                style: .passive
+            )
         }
     }
 

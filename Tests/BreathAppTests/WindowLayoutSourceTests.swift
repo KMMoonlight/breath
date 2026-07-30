@@ -141,7 +141,11 @@ struct WindowLayoutSourceTests {
             defer: false
         )
         window.makeKeyAndOrderFront(nil)
-        defer { window.close() }
+        defer {
+            window.close()
+            NativeUITestLifetime.retainUntilProcessExit(engine)
+            NativeUITestLifetime.retainUntilProcessExit(window)
+        }
 
         let originalPage = NSHostingView(
             rootView: RecreatedTerminalSplitHarness(
@@ -759,9 +763,9 @@ struct WindowLayoutSourceTests {
             detailStart.lowerBound..<selectedSkillStart.lowerBound
         ]
         #expect(!detailSource.contains("ContentUnavailableView("))
-        #expect(detailSource.contains("Text(localizer.string(\"选择一个 Skill\"))"))
-        #expect(detailSource.contains(".font(.caption)"))
-        #expect(detailSource.contains(".foregroundStyle(.secondary)"))
+        #expect(detailSource.contains("BreathEmptyState("))
+        #expect(detailSource.contains("title: localizer.string(\"选择一个 Skill\")"))
+        #expect(detailSource.contains("style: .passive"))
 
         let headerStart = try #require(
             skillsSource.range(of: "private var header: some View")
@@ -854,18 +858,24 @@ struct WindowLayoutSourceTests {
             sidebarStart.lowerBound..<workspaceSectionStart.lowerBound
         ]
 
-        #expect(source.contains("@State private var detailMode = WorkbenchDetailMode.workspace"))
+        #expect(source.contains("@State private var pageSelection = RetainedPageSelection("))
         #expect(source.contains("activityBar\n            workbenchContent"))
         #expect(!source.contains("activityBar\n            Divider()\n            workbenchContent"))
-        #expect(content.contains("if detailMode == .workspace"))
-        #expect(content.contains("SidebarResizeContainer"))
-        #expect(content.contains("} else {\n            detail"))
+        #expect(content.contains("RetainedPageDeck(selection: pageSelection)"))
+        #expect(content.contains("workbenchPage(for: page)"))
+        #expect(source.contains("case .workspace:\n            SidebarResizeContainer"))
         #expect(!content.contains("Color.clear"))
         #expect(!content.contains(".frame(height: WorkbenchLayout.windowControlsHeight)"))
-        #expect(content.contains("detail\n                .font(applicationFont(for: model))"))
-        #expect(!snapshotObserver.contains("detailMode = .workspace"))
+        #expect(content.contains(".font(applicationFont(for: model))"))
+        #expect(source.contains(".allowsHitTesting(selection.selected == page)"))
+        #expect(source.contains(".accessibilityHidden(selection.selected != page)"))
+        #expect(!snapshotObserver.contains("selectDetailMode(.workspace)"))
         #expect(source.contains("private func selectWorkSession"))
-        #expect(source.contains("detailMode = .workspace\n        model.selectWorkSession"))
+        #expect(
+            source.contains(
+                "selectDetailMode(.workspace)\n        model.selectWorkSession"
+            )
+        )
         #expect(source.contains("activityBarWidth: CGFloat = 44"))
         #expect(source.contains("activityBarIconSize: CGFloat = 16"))
         #expect(source.contains("pageToolbarHeight: CGFloat = 32"))
@@ -1380,12 +1390,10 @@ struct WindowLayoutSourceTests {
             contentsOf: root.appendingPathComponent("Sources/BreathApp/BreathApp.swift"),
             encoding: .utf8
         )
-        let automationPanelStart = try #require(
-            source.range(of: "if detailMode == .automation")
-        )
+        let automationPanelStart = try #require(source.range(of: "case .automation:"))
         let gitWorkbenchDetailStart = try #require(
             source.range(
-                of: "} else if detailMode == .gitWorkbench {",
+                of: "case .gitWorkbench:",
                 range: automationPanelStart.upperBound..<source.endIndex
             )
         )
@@ -1438,7 +1446,7 @@ struct WindowLayoutSourceTests {
         #expect(source.contains("private var activityBar: some View"))
         #expect(!source.contains("@Environment(\\.openSettings) private var openSettings"))
         #expect(!source.contains("openSettings()"))
-        #expect(source.contains("detailMode = .automation"))
+        #expect(source.contains("selectDetailMode(.automation)"))
         #expect(activityBar.contains("GitBranchIcon()"))
         #expect(!activityBar.contains("systemName: \"arrow.triangle.branch\""))
         #expect(source.contains("width: WorkbenchLayout.activityBarIconSize"))
@@ -1455,7 +1463,7 @@ struct WindowLayoutSourceTests {
                 "if previousSnapshot.selectedWorkSessionID != snapshot.selectedWorkSessionID"
             )
         )
-        #expect(source.contains("detailMode = .gitWorkbench"))
+        #expect(source.contains("selectDetailMode(.gitWorkbench)"))
         #expect(source.contains("GitWorkbenchUnselectedView("))
         #expect(source.contains("workspaces: gitWorkspaceChoices"))
         #expect(source.contains("onSelectWorkspace: selectGitWorkspace"))
@@ -1666,8 +1674,8 @@ struct WindowLayoutSourceTests {
         #expect(workbenchSource.contains("case settings"))
         #expect(workbenchSource.contains("BreathSettingsView(model: model)"))
         #expect(workbenchSource.contains("publisher(for: .breathOpenSettings)"))
-        #expect(activityBar.contains("isSelected: detailMode == .settings"))
-        #expect(activityBar.contains("detailMode = .settings"))
+        #expect(activityBar.contains("isSelected: pageSelection.selected == .settings"))
+        #expect(activityBar.contains("selectDetailMode(.settings)"))
         #expect(!appSource.contains("Settings {"))
         #expect(appSource.contains("CommandGroup(replacing: .appSettings)"))
         #expect(appSource.contains("OpenSettingsPageCommand("))
@@ -1980,9 +1988,13 @@ struct WindowLayoutSourceTests {
         ]
 
         #expect(!detailsPane.contains("ContentUnavailableView("))
-        #expect(detailsPane.contains("Text(localizer.string(\"选择一个变更或提交\"))"))
-        #expect(detailsPane.contains(".font(.caption)"))
-        #expect(detailsPane.contains(".foregroundStyle(.secondary)"))
+        #expect(detailsPane.contains("BreathEmptyState("))
+        #expect(
+            detailsPane.contains(
+                "title: localizer.string(\"选择一个变更或提交\")"
+            )
+        )
+        #expect(detailsPane.contains("style: .passive"))
     }
 
     @Test("Git dialogs stay compact and inherit the active application theme")

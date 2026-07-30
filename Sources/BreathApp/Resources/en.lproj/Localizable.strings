@@ -79,6 +79,7 @@
 "“%@”及其最近运行结果将被永久删除。" = "“%@” and its recent run results will be permanently deleted.";
 "搜索名称或 Prompt" = "Search name or Prompt";
 "没有匹配的自动化" = "No Matching Automation";
+"尚未创建自动化" = "No Automations Yet";
 "清除搜索" = "Clear Search";
 "并发 %d" = "Concurrency %d";
 "最大并发数" = "Maximum Concurrency";
@@ -804,6 +805,9 @@
 "额度" = "Quota";
 "全部刷新" = "Refresh All";
 "刷新 %@ 额度" = "Refresh %@ Quota";
+"正在检测 Agent CLI…" = "Detecting Agent CLIs…";
+"安装 Breath 支持的 Agent CLI 后即可查看额度。" = "Install a supported Agent CLI to view quota usage.";
+"登录 Agent CLI 后即可查看额度。" = "Sign in to the Agent CLI to view quota usage.";
 "查询中" = "Checking";
 "可用" = "Available";
 "警告" = "Warning";

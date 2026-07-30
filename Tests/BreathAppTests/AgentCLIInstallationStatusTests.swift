@@ -123,6 +123,94 @@ struct AgentCLIInstallationStatusTests {
         )
     }
 
+    @Test("reuses a detected executable without rerunning its version command")
+    func reusesDetectedExecutable() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let invocationCountURL = temporaryDirectory.appendingPathComponent(
+            "version-invocation-count"
+        )
+        try writeExecutable(
+            named: AgentKind.codex.cliExecutableName,
+            in: temporaryDirectory,
+            contents: """
+                #!/bin/sh
+                count=0
+                if [ -f "\(invocationCountURL.path)" ]; then
+                  count=$(cat "\(invocationCountURL.path)")
+                fi
+                count=$((count + 1))
+                printf '%s' "$count" > "\(invocationCountURL.path)"
+                echo 'codex-cli 0.146.0'
+                """
+        )
+        let detector = InstalledAgentCLIDetector(
+            searchDirectories: [temporaryDirectory]
+        )
+        let adapter = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .codex }
+        )
+
+        #expect(
+            detector.installationStatus(for: adapter)
+                == .installed(version: "0.146.0", updateAvailable: false)
+        )
+        for _ in 0..<5 {
+            #expect(
+                detector.executableURL(for: .codex)?.standardizedFileURL
+                    == temporaryDirectory
+                        .appendingPathComponent(AgentKind.codex.cliExecutableName)
+                        .standardizedFileURL
+            )
+        }
+
+        let invocationCount = try String(
+            contentsOf: invocationCountURL,
+            encoding: .utf8
+        )
+        #expect(invocationCount == "1")
+    }
+
+    @Test("explicit refresh invalidates the detected executable cache")
+    func refreshInvalidatesDetectedExecutable() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let versionURL = temporaryDirectory.appendingPathComponent(
+            "reported-version"
+        )
+        try Data("0.120.0".utf8).write(to: versionURL)
+        try writeExecutable(
+            named: AgentKind.codex.cliExecutableName,
+            in: temporaryDirectory,
+            contents: """
+                #!/bin/sh
+                echo "codex-cli $(cat "\(versionURL.path)")"
+                """
+        )
+        let detector = InstalledAgentCLIDetector(
+            searchDirectories: [temporaryDirectory]
+        )
+        let adapter = try #require(
+            AgentAdapterRegistry.builtIn.adapters.first { $0.kind == .codex }
+        )
+        #expect(
+            detector.installationStatus(for: adapter)
+                == .installed(version: "0.120.0", updateAvailable: true)
+        )
+
+        try Data("0.146.0".utf8).write(to: versionURL)
+        #expect(
+            detector.installationStatus(for: adapter)
+                == .installed(version: "0.120.0", updateAvailable: true)
+        )
+        detector.invalidateDetectionCache()
+
+        #expect(
+            detector.installationStatus(for: adapter)
+                == .installed(version: "0.146.0", updateAvailable: false)
+        )
+    }
+
     @Test("quota capability respects the supported Agent CLI minimum version")
     func quotaCapabilityRequiresMinimumVersion() throws {
         let temporaryDirectory = try makeTemporaryDirectory()

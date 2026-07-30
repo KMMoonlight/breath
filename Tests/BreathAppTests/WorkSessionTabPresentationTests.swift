@@ -54,6 +54,52 @@ struct WorkSessionTabPresentationTests {
         #expect(presentation.title == "修复登录流程")
     }
 
+    @Test("the selection button fills the clickable tab area")
+    func selectionButtonFillsClickableTabArea() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/WorkbenchView.swift"
+            ),
+            encoding: .utf8
+        )
+        let sessionTabStart = try #require(
+            source.range(of: "private func sessionTab(")
+        )
+        let sessionMarkerStart = try #require(
+            source.range(
+                of: "private func sessionMarker(",
+                range: sessionTabStart.upperBound..<source.endIndex
+            )
+        )
+        let sessionTab = source[
+            sessionTabStart.lowerBound..<sessionMarkerStart.lowerBound
+        ]
+        let selectionButtonStart = try #require(
+            sessionTab.range(of: "Button {\n                onSelect(session.id)")
+        )
+        let archiveButtonStart = try #require(
+            sessionTab.range(
+                of: "Button {\n                onArchive(session)",
+                range: selectionButtonStart.upperBound..<sessionTab.endIndex
+            )
+        )
+        let selectionButton = sessionTab[
+            selectionButtonStart.lowerBound..<archiveButtonStart.lowerBound
+        ]
+        let compactSelectionButton = selectionButton.filter { !$0.isWhitespace }
+
+        #expect(
+            compactSelectionButton.contains(
+                ".frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.leading)"
+                    + ".contentShape(Rectangle())"
+            )
+        )
+    }
+
     private var placeholderSession: WorkSession {
         WorkSession(
             id: WorkSessionID(rawValue: UUID()),

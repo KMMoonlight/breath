@@ -168,6 +168,7 @@ struct GitWorkbenchView: View {
     let workspaces: [GitWorkspaceChoice]
     @ObservedObject var model: GitWorkspaceViewModel
     @ObservedObject private var preferencesStore: GitPreferencesStore
+    let isVisible: Bool
     let onAddWorkspace: (URL) -> Void
     let onSelectWorkspace: (String) -> Void
 
@@ -208,6 +209,7 @@ struct GitWorkbenchView: View {
         workspace: Workspace,
         workspaces: [GitWorkspaceChoice],
         model: GitWorkspaceViewModel,
+        isVisible: Bool,
         onAddWorkspace: @escaping (URL) -> Void,
         onSelectWorkspace: @escaping (String) -> Void
     ) {
@@ -217,6 +219,7 @@ struct GitWorkbenchView: View {
         _preferencesStore = ObservedObject(
             wrappedValue: model.preferencesStore
         )
+        self.isVisible = isVisible
         self.onAddWorkspace = onAddWorkspace
         self.onSelectWorkspace = onSelectWorkspace
     }
@@ -235,9 +238,15 @@ struct GitWorkbenchView: View {
             shortcutCommandHost
         }
         .task {
-            model.activate()
             await Task.yield()
             presentPendingCommand()
+        }
+        .onChange(of: isVisible, initial: true) { _, visible in
+            if visible {
+                model.activate()
+            } else {
+                model.deactivate()
+            }
         }
         .onDisappear {
             model.deactivate()
@@ -594,8 +603,9 @@ struct GitWorkbenchView: View {
     private var branchList: some View {
         let localBranches = visibleBranches(of: .localBranch)
         let remoteBranches = visibleBranches(of: .remoteBranch)
+        let branchFilter = model.metadata.branchFilter ?? ""
         let remoteBranchesAreVisible = showingRemoteBranches
-            || !(model.metadata.branchFilter ?? "").isEmpty
+            || !branchFilter.isEmpty
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Label(localizer.string("分支"), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
@@ -651,6 +661,19 @@ struct GitWorkbenchView: View {
 
                     ForEach(localBranches) { reference in
                         branchRow(reference)
+                    }
+
+                    if localBranches.isEmpty, remoteBranches.isEmpty {
+                        BreathEmptyState(
+                            title: localizer.string(
+                                branchFilter.isEmpty
+                                    ? "没有可用的分支"
+                                    : "没有匹配的分支"
+                            ),
+                            style: .passive,
+                            placement: .inline
+                        )
+                        .padding(.horizontal, 9)
                     }
 
                     if !remoteBranches.isEmpty {
@@ -1577,10 +1600,10 @@ struct GitWorkbenchView: View {
                     }
                 )
             } else {
-                Text(localizer.string("选择一个变更或提交"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                BreathEmptyState(
+                    title: localizer.string("选择一个变更或提交"),
+                    style: .passive
+                )
             }
         }
         .accessibilityElement(children: .contain)
@@ -1861,12 +1884,10 @@ struct GitWorkbenchView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-            Text(localizer.string("此工作区还不是 Git 仓库"))
-                .font(.title3)
+        BreathEmptyState(
+            title: localizer.string("此工作区还不是 Git 仓库"),
+            systemImage: "point.topleft.down.to.point.bottomright.curvepath"
+        ) {
             HStack {
                 Button(localizer.string("初始化 Git 仓库")) {
                     model.initializeRepository()
@@ -1876,7 +1897,6 @@ struct GitWorkbenchView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var rootPicker: some View {
@@ -2125,10 +2145,10 @@ struct GitWorkbenchView: View {
                     }
                 }
             } else {
-                Text(localizer.string("选择一个变更或提交"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                BreathEmptyState(
+                    title: localizer.string("选择一个变更或提交"),
+                    style: .passive
+                )
             }
         }
         .background(Color(nsColor: .controlBackgroundColor))
@@ -3668,8 +3688,11 @@ struct GitWorkbenchView: View {
             Divider()
 
             if request.choices.isEmpty {
-                Text(localizer.string("没有可用的远程分支"))
-                    .foregroundStyle(.secondary)
+                BreathEmptyState(
+                    title: localizer.string("没有可用的远程分支"),
+                    style: .passive,
+                    placement: .inline
+                )
             } else {
                 ScrollView {
                     LazyVStack(spacing: 2) {
@@ -4681,21 +4704,16 @@ private struct GitStructuredDiffView: View {
 
     var body: some View {
         if diff.isBinary || diff.isTooLarge {
-            VStack(spacing: 12) {
-                Image(systemName: diff.isBinary ? "doc.fill" : "doc.badge.ellipsis")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.secondary)
-                ExplanationLabel(
-                    localizer.format(
-                        diff.isBinary
-                            ? "大小：%d 字节，可使用系统预览。"
-                            : "大小：%d 字节；为保持页面响应，未自动生成文本 Diff。",
-                        diff.byteCount
-                    )
-                ) {
-                    Text(localizer.string(diff.isBinary ? "二进制文件" : "文件过大"))
-                        .font(.title3.weight(.semibold))
-                }
+            BreathEmptyState(
+                title: localizer.string(diff.isBinary ? "二进制文件" : "文件过大"),
+                systemImage: diff.isBinary ? "doc.fill" : "doc.badge.ellipsis",
+                message: localizer.format(
+                    diff.isBinary
+                        ? "大小：%d 字节，可使用系统预览。"
+                        : "大小：%d 字节；为保持页面响应，未自动生成文本 Diff。",
+                    diff.byteCount
+                )
+            ) {
                 if diff.path != nil {
                     Button(localizer.string("使用系统应用打开")) {
                         onSystemPreview()

@@ -18,7 +18,7 @@ enum WorkbenchAccessibility {
     static let automationPanel = "自动化面板"
 }
 
-private enum WorkbenchDetailMode: Equatable {
+private enum WorkbenchDetailMode: Hashable {
     case workspace
     case notes
     case automation
@@ -26,6 +26,48 @@ private enum WorkbenchDetailMode: Equatable {
     case agentQuota
     case settings
     case gitWorkbench
+}
+
+struct RetainedPageSelection<Page: Hashable>: Equatable {
+    private(set) var selected: Page
+    private(set) var retainedPages: [Page]
+
+    init(initial: Page) {
+        selected = initial
+        retainedPages = [initial]
+    }
+
+    mutating func select(_ page: Page) {
+        if !retainedPages.contains(page) {
+            retainedPages.append(page)
+        }
+        selected = page
+    }
+}
+
+struct RetainedPageDeck<Page: Hashable, Content: View>: View {
+    let selection: RetainedPageSelection<Page>
+    private let content: (Page) -> Content
+
+    init(
+        selection: RetainedPageSelection<Page>,
+        @ViewBuilder content: @escaping (Page) -> Content
+    ) {
+        self.selection = selection
+        self.content = content
+    }
+
+    var body: some View {
+        ZStack {
+            ForEach(selection.retainedPages, id: \.self) { page in
+                content(page)
+                    .opacity(selection.selected == page ? 1 : 0)
+                    .allowsHitTesting(selection.selected == page)
+                    .accessibilityHidden(selection.selected != page)
+                    .zIndex(selection.selected == page ? 1 : 0)
+            }
+        }
+    }
 }
 
 struct WorkbenchView: View {
@@ -45,7 +87,9 @@ struct WorkbenchView: View {
     @State private var expandedSessionIDs: Set<WorkSessionID> = []
     @State private var hoveredSessionID: WorkSessionID?
     @State private var pendingTerminalFocusID: TerminalPaneID?
-    @State private var detailMode = WorkbenchDetailMode.workspace
+    @State private var pageSelection = RetainedPageSelection(
+        initial: WorkbenchDetailMode.workspace
+    )
     @State private var selectedGitWorkspace: Workspace?
     @State private var isWindowFullScreen = false
     @StateObject private var gitCoordinator = GitWorkbenchCoordinator()
@@ -75,7 +119,7 @@ struct WorkbenchView: View {
             .onChange(of: colorScheme) { _, _ in
                 model.synchronizeTerminalAppearance(resolvedAppearance)
             }
-            .onChange(of: detailMode, initial: true) { _, mode in
+            .onChange(of: pageSelection.selected, initial: true) { _, mode in
                 model.setNotesActive(mode == .notes)
             }
             .onChange(of: model.snapshot) { previousSnapshot, snapshot in
@@ -96,25 +140,25 @@ struct WorkbenchView: View {
                 openGitWorkbench()
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathOpenSettings)) { _ in
-                detailMode = .settings
+                selectDetailMode(.settings)
             }
             .onReceive(
                 NotificationCenter.default.publisher(for: .breathSelectWorkSessionTab)
             ) { notification in
-                guard detailMode != .notes else { return }
+                guard pageSelection.selected != .notes else { return }
                 guard let tab = notification.object as? WorkSessionTabShortcut else { return }
                 selectWorkSessionTab(at: tab.selectionIndex)
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathSelectPreviousPane)) { _ in
-                guard detailMode != .notes else { return }
+                guard pageSelection.selected != .notes else { return }
                 focusAdjacentPane(previous: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathSelectNextPane)) { _ in
-                guard detailMode != .notes else { return }
+                guard pageSelection.selected != .notes else { return }
                 focusAdjacentPane(previous: false)
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathCloseTerminalTarget)) { _ in
-                guard detailMode != .notes else { return }
+                guard pageSelection.selected != .notes else { return }
                 closeTerminalTarget()
             }
             .onReceive(NotificationCenter.default.publisher(for: .breathGitCommit)) { _ in
@@ -284,18 +328,9 @@ struct WorkbenchView: View {
         colorScheme == .dark ? .dark : .light
     }
 
-    @ViewBuilder
     private var workbenchContent: some View {
-        if detailMode == .workspace {
-            SidebarResizeContainer {
-                sidebar
-                    .font(applicationFont(for: model))
-            } detail: {
-                sessionDetail
-                    .font(applicationFont(for: model))
-            }
-        } else {
-            detail
+        RetainedPageDeck(selection: pageSelection) { page in
+            workbenchPage(for: page)
                 .font(applicationFont(for: model))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
@@ -311,23 +346,23 @@ struct WorkbenchView: View {
             activityBarButton(
                 systemName: "folder",
                 accessibilityLabel: WorkbenchAccessibility.openWorkspace,
-                isSelected: detailMode == .workspace
+                isSelected: pageSelection.selected == .workspace
             ) {
-                detailMode = .workspace
+                selectDetailMode(.workspace)
             }
 
             activityBarButton(
                 systemName: "note.text",
                 accessibilityLabel: WorkbenchAccessibility.openNotes,
-                isSelected: detailMode == .notes
+                isSelected: pageSelection.selected == .notes
             ) {
-                detailMode = .notes
+                selectDetailMode(.notes)
             }
 
             activityBarButton(
                 accessibilityLabel: automationAccessibilityLabel,
-                isSelected: detailMode == .automation,
-                action: { detailMode = .automation }
+                isSelected: pageSelection.selected == .automation,
+                action: { selectDetailMode(.automation) }
             ) {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "clock.arrow.2.circlepath")
@@ -354,8 +389,8 @@ struct WorkbenchView: View {
 
             activityBarButton(
                 accessibilityLabel: WorkbenchAccessibility.openSkills,
-                isSelected: detailMode == .skills,
-                action: { detailMode = .skills }
+                isSelected: pageSelection.selected == .skills,
+                action: { selectDetailMode(.skills) }
             ) {
                 SkillActivityIcon()
             }
@@ -363,9 +398,9 @@ struct WorkbenchView: View {
             activityBarButton(
                 systemName: "gauge.with.dots.needle.67percent",
                 accessibilityLabel: WorkbenchAccessibility.openAgentQuota,
-                isSelected: detailMode == .agentQuota
+                isSelected: pageSelection.selected == .agentQuota
             ) {
-                detailMode = .agentQuota
+                selectDetailMode(.agentQuota)
             }
 
             Spacer(minLength: 0)
@@ -373,9 +408,9 @@ struct WorkbenchView: View {
             activityBarButton(
                 systemName: "gearshape",
                 accessibilityLabel: WorkbenchAccessibility.openSettings,
-                isSelected: detailMode == .settings
+                isSelected: pageSelection.selected == .settings
             ) {
-                detailMode = .settings
+                selectDetailMode(.settings)
             }
         }
         .frame(width: WorkbenchLayout.activityBarWidth)
@@ -469,10 +504,10 @@ struct WorkbenchView: View {
             Divider()
 
             if model.snapshot.workspaces.isEmpty {
-                Text(localizer.string("添加工作区"))
-                    .font(applicationFont(for: model, offset: -1))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                BreathEmptyState(
+                    title: localizer.string("添加工作区"),
+                    systemImage: "folder.badge.plus"
+                )
             } else {
                 List {
                     ForEach(model.snapshot.workspaces) { workspace in
@@ -664,7 +699,7 @@ struct WorkbenchView: View {
     }
 
     private func selectWorkSession(_ sessionID: WorkSessionID) {
-        detailMode = .workspace
+        selectDetailMode(.workspace)
         model.selectWorkSession(sessionID)
     }
 
@@ -690,7 +725,7 @@ struct WorkbenchView: View {
     }
 
     private func closeTerminalTarget() {
-        guard detailMode == .workspace,
+        guard pageSelection.selected == .workspace,
               let selectedSessionID = model.snapshot.selectedWorkSessionID,
               let session = model.snapshot.activeWorkSessions.first(where: {
                   $0.id == selectedSessionID
@@ -739,7 +774,7 @@ struct WorkbenchView: View {
             targetPaneID = session.layout.paneIDs.first
         }
         guard let targetPaneID else { return }
-        detailMode = .workspace
+        selectDetailMode(.workspace)
         pendingTerminalFocusID = targetPaneID
         focusPendingTerminalAfterViewUpdate()
     }
@@ -950,11 +985,11 @@ struct WorkbenchView: View {
     }
 
     private var isGitWorkbenchSelected: Bool {
-        detailMode == .gitWorkbench
+        pageSelection.selected == .gitWorkbench
     }
 
     private var gitCommandWorkspace: Workspace? {
-        if detailMode == .gitWorkbench, let selectedGitWorkspace {
+        if pageSelection.selected == .gitWorkbench, let selectedGitWorkspace {
             return selectedGitWorkspace
         }
         if let currentWorkspaceID = model.currentWorkspaceID {
@@ -969,7 +1004,7 @@ struct WorkbenchView: View {
         {
             selectedGitWorkspace = model.gitWorkspace(for: currentWorkspaceID)
         }
-        detailMode = .gitWorkbench
+        selectDetailMode(.gitWorkbench)
     }
 
     private var gitWorkspaceChoices: [GitWorkspaceChoice] {
@@ -1022,7 +1057,7 @@ struct WorkbenchView: View {
 
     private func selectGitWorkspace(_ workspace: Workspace) {
         selectedGitWorkspace = workspace
-        detailMode = .gitWorkbench
+        selectDetailMode(.gitWorkbench)
     }
 
     private var sidebarActionForegroundColor: Color {
@@ -1056,24 +1091,38 @@ struct WorkbenchView: View {
         )
     }
 
+    private func selectDetailMode(_ mode: WorkbenchDetailMode) {
+        guard pageSelection.selected != mode else { return }
+        TerminalInputFocus.resignCurrentInput()
+        pageSelection.select(mode)
+    }
+
     @ViewBuilder
-    private var detail: some View {
-        if detailMode == .settings {
+    private func workbenchPage(for page: WorkbenchDetailMode) -> some View {
+        switch page {
+        case .workspace:
+            SidebarResizeContainer {
+                sidebar
+            } detail: {
+                sessionDetail
+            }
+        case .settings:
             BreathSettingsView(model: model)
-        } else if detailMode == .notes {
+        case .notes:
             NotesView(applicationModel: model)
-        } else if detailMode == .skills {
+        case .skills:
             SkillsView(service: model.skillsService)
-        } else if detailMode == .agentQuota {
+        case .agentQuota:
             AgentQuotaView(service: model.agentQuotaService)
-        } else if detailMode == .automation {
+        case .automation:
             AutomationView(model: model)
-        } else if detailMode == .gitWorkbench {
+        case .gitWorkbench:
             if let workspace = selectedGitWorkspace {
                 GitWorkbenchView(
                     workspace: workspace,
                     workspaces: gitWorkspaceChoices,
                     model: gitCoordinator.model(for: workspace),
+                    isVisible: pageSelection.selected == .gitWorkbench,
                     onAddWorkspace: { model.addWorkspace($0) },
                     onSelectWorkspace: selectGitWorkspace
                 )
@@ -1084,8 +1133,6 @@ struct WorkbenchView: View {
                     onSelectWorkspace: selectGitWorkspace
                 )
             }
-        } else {
-            sessionDetail
         }
     }
 
@@ -1132,7 +1179,15 @@ struct WorkbenchView: View {
                 .id(session.id)
             }
         } else {
-            model.effectiveTerminalColorTheme.canvasColor
+            ZStack {
+                model.effectiveTerminalColorTheme.canvasColor
+                BreathEmptyState(
+                    title: localizer.string(
+                        WorkbenchAccessibility.noSelectedWorkSession
+                    ),
+                    systemImage: "terminal"
+                )
+            }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(localizer.string(WorkbenchAccessibility.noSelectedWorkSession))
         }
@@ -1585,14 +1640,11 @@ private struct ManagedWorktreeStartBranchPicker: View {
                             }
                         )
                         if filteredStartBranches.isEmpty {
-                            Text(localizer.string("没有匹配的分支"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(
-                                    maxWidth: .infinity,
-                                    minHeight: 80,
-                                    alignment: .center
-                                )
+                            BreathEmptyState(
+                                title: localizer.string("没有匹配的分支"),
+                                style: .passive
+                            )
+                            .frame(minHeight: 80)
                         }
                     }
                     .padding(.vertical, 2)
@@ -1920,9 +1972,14 @@ private struct WorkSessionTabBar: View {
                                             ? Color.accentColor.opacity(0.2)
                                             : Color.primary.opacity(0.08)
                                     )
-                            }
+                        }
                     }
                 }
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .leading
+                )
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -2191,6 +2248,7 @@ struct NativeSplitView<First: View, Second: View>: NSViewRepresentable {
     let minimumPosition: NativeSplitPosition
     let maximumPosition: NativeSplitPosition
     let minimumSecondLength: CGFloat
+    let drawsDivider: Bool
     let updatesPosition: Bool
     let onResize: ((Double) -> Void)?
     @ViewBuilder let first: First
@@ -2202,6 +2260,7 @@ struct NativeSplitView<First: View, Second: View>: NSViewRepresentable {
         minimumPosition: NativeSplitPosition,
         maximumPosition: NativeSplitPosition,
         minimumSecondLength: CGFloat,
+        drawsDivider: Bool = true,
         updatesPosition: Bool,
         onResize: ((Double) -> Void)? = nil,
         @ViewBuilder first: () -> First,
@@ -2212,6 +2271,7 @@ struct NativeSplitView<First: View, Second: View>: NSViewRepresentable {
         self.minimumPosition = minimumPosition
         self.maximumPosition = maximumPosition
         self.minimumSecondLength = minimumSecondLength
+        self.drawsDivider = drawsDivider
         self.updatesPosition = updatesPosition
         self.onResize = onResize
         self.first = first()
@@ -2227,6 +2287,7 @@ struct NativeSplitView<First: View, Second: View>: NSViewRepresentable {
             minimumPosition: minimumPosition,
             maximumPosition: maximumPosition,
             minimumSecondLength: minimumSecondLength,
+            drawsDivider: drawsDivider,
             onResize: onResize,
             appliesPosition: true
         )
@@ -2241,6 +2302,7 @@ struct NativeSplitView<First: View, Second: View>: NSViewRepresentable {
             minimumPosition: minimumPosition,
             maximumPosition: maximumPosition,
             minimumSecondLength: minimumSecondLength,
+            drawsDivider: drawsDivider,
             onResize: onResize,
             appliesPosition: updatesPosition
         )
@@ -2258,6 +2320,7 @@ final class NativeSplitNSView:
     private var minimumPosition = NativeSplitPosition.fraction(0)
     private var maximumPosition = NativeSplitPosition.fraction(1)
     private var minimumSecondLength: CGFloat = 0
+    private var drawsDivider = true
     private var configuredPosition: NativeSplitPosition?
     private var pendingPosition: NativeSplitPosition?
     private var isApplyingPosition = false
@@ -2323,6 +2386,7 @@ final class NativeSplitNSView:
         minimumPosition: NativeSplitPosition,
         maximumPosition: NativeSplitPosition,
         minimumSecondLength: CGFloat,
+        drawsDivider: Bool = true,
         onResize: ((Double) -> Void)?,
         appliesPosition: Bool
     ) {
@@ -2340,6 +2404,10 @@ final class NativeSplitNSView:
         self.minimumPosition = minimumPosition
         self.maximumPosition = maximumPosition
         self.minimumSecondLength = minimumSecondLength
+        if self.drawsDivider != drawsDivider {
+            self.drawsDivider = drawsDivider
+            needsDisplay = true
+        }
         self.onResize = onResize
         if appliesPosition {
             configuredPosition = position
@@ -2363,6 +2431,11 @@ final class NativeSplitNSView:
         super.layout()
         applyPendingPositionIfNeeded()
         updateTrackingAreas()
+    }
+
+    override func drawDivider(in rect: NSRect) {
+        guard drawsDivider else { return }
+        super.drawDivider(in: rect)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -3061,6 +3134,19 @@ enum TerminalInputFocus {
         }
         return didMoveFocus
     }
+
+    static func resignCurrentInput() {
+        guard let window = NSApp.keyWindow else { return }
+        var view = window.firstResponder as? NSView
+        while let currentView = view {
+            if let host = currentView as? TerminalHostView {
+                host.relinquishInputFocus()
+                return
+            }
+            view = currentView.superview
+        }
+        window.makeFirstResponder(nil)
+    }
 }
 
 @MainActor
@@ -3157,6 +3243,10 @@ final class TerminalHostView: NSView {
             retainsInputFocus = false
         }
         reportCurrentFocus()
+    }
+
+    func relinquishInputFocus() {
+        relinquishInputFocus(in: window)
     }
 
     private func updateFocusMonitoring() {

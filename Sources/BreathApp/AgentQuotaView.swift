@@ -23,6 +23,7 @@ struct AgentQuotaCard: Equatable, Identifiable, Sendable {
 @MainActor
 final class AgentQuotaViewModel: ObservableObject {
     @Published private(set) var cards: [AgentQuotaCard] = []
+    @Published private(set) var hasLoadedAgentInventory = false
     @Published private(set) var isRefreshingAll = false
 
     private let service: AgentQuotaService
@@ -44,6 +45,7 @@ final class AgentQuotaViewModel: ObservableObject {
                 )
             )
         }
+        hasLoadedAgentInventory = true
         await refresh(
             kinds: cards.map(\.kind),
             tracksRefreshAll: true
@@ -120,65 +122,74 @@ struct AgentQuotaView: View {
     }
 
     var body: some View {
-        Group {
-            if model.cards.isEmpty {
-                Color(nsColor: .windowBackgroundColor)
+        VStack(spacing: 0) {
+            HStack {
+                Text(localizer.string("额度"))
+                    .font(.headline)
+                Spacer()
+                Button {
+                    Task { await model.refreshAll() }
+                } label: {
+                    Label(
+                        localizer.string("全部刷新"),
+                        systemImage: "arrow.clockwise"
+                    )
+                }
+                .buttonStyle(.borderless)
+                .disabled(model.isRefreshingAll || model.cards.isEmpty)
+                .accessibilityLabel(localizer.string("全部刷新"))
+                .help(localizer.string("全部刷新"))
+            }
+            .pageToolbarLeadingPadding()
+            .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
+            .frame(height: WorkbenchLayout.pageToolbarHeight)
+
+            Divider()
+
+            if !model.hasLoadedAgentInventory {
+                ProgressView(localizer.string("正在检测 Agent CLI…"))
+                    .controlSize(.small)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if model.cards.isEmpty {
+                BreathEmptyState(
+                    title: localizer.string("没有可用的 Agent CLI"),
+                    systemImage: "terminal",
+                    message: localizer.string(
+                        "安装 Breath 支持的 Agent CLI 后即可查看额度。"
+                    )
+                )
             } else {
-                VStack(spacing: 0) {
-                    HStack {
-                        Text(localizer.string("额度"))
-                            .font(.headline)
-                        Spacer()
-                        Button {
-                            Task { await model.refreshAll() }
-                        } label: {
-                            Label(
-                                localizer.string("全部刷新"),
-                                systemImage: "arrow.clockwise"
+                ScrollView {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(
+                                .adaptive(
+                                    minimum: AgentQuotaLayout.cardWidth,
+                                    maximum: AgentQuotaLayout.cardWidth
+                                ),
+                                spacing: AgentQuotaLayout.cardSpacing,
+                                alignment: .top
+                            ),
+                        ],
+                        alignment: .leading,
+                        spacing: AgentQuotaLayout.cardSpacing
+                    ) {
+                        ForEach(model.cards) { card in
+                            AgentQuotaCardView(
+                                card: card,
+                                refresh: {
+                                    Task { await model.refresh(card.kind) }
+                                }
                             )
                         }
-                        .buttonStyle(.borderless)
-                        .disabled(model.isRefreshingAll)
-                        .accessibilityLabel(localizer.string("全部刷新"))
-                        .help(localizer.string("全部刷新"))
                     }
-                    .pageToolbarLeadingPadding()
-                    .padding(.trailing, WorkbenchLayout.pageToolbarTrailingInset)
-                    .frame(height: WorkbenchLayout.pageToolbarHeight)
-
-                    Divider()
-
-                    ScrollView {
-                        LazyVGrid(
-                            columns: [
-                                GridItem(
-                                    .adaptive(
-                                        minimum: AgentQuotaLayout.cardWidth,
-                                        maximum: AgentQuotaLayout.cardWidth
-                                    ),
-                                    spacing: AgentQuotaLayout.cardSpacing,
-                                    alignment: .top
-                                ),
-                            ],
-                            alignment: .leading,
-                            spacing: AgentQuotaLayout.cardSpacing
-                        ) {
-                            ForEach(model.cards) { card in
-                                AgentQuotaCardView(
-                                    card: card,
-                                    refresh: {
-                                        Task { await model.refresh(card.kind) }
-                                    }
-                                )
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(AgentQuotaLayout.contentPadding)
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(AgentQuotaLayout.contentPadding)
                 }
-                .background(Color(nsColor: .windowBackgroundColor))
             }
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .task {
             await model.load()
         }
@@ -297,7 +308,12 @@ private struct AgentQuotaCardView: View {
             }
             .scrollIndicators(.automatic)
         case .notLoggedIn:
-            Color.clear
+            BreathEmptyState(
+                title: localizer.string("未登录"),
+                message: localizer.string("登录 Agent CLI 后即可查看额度。"),
+                style: .passive,
+                placement: .inline
+            )
         case .unsupported:
             Text(localizer.string("当前 Auth 暂不支持"))
                 .font(.caption)

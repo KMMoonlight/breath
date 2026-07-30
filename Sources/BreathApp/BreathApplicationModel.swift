@@ -61,6 +61,7 @@ final class BreathApplicationModel: ObservableObject {
     private let scriptInstaller = ScriptIntegrationInstaller()
     private let integrationPreferences: AgentIntegrationPreferenceStore
     private let installedAgentCLIDetector: InstalledAgentCLIDetector
+    private let agentCLIInventory: AgentCLIInventory
     private let networkSessionManager: NetworkSessionManager
     private let networkProxyPasswordStore: any NetworkProxyPasswordStoring
     private let agentCLILatestVersionChecker: AgentCLILatestVersionChecker
@@ -108,6 +109,8 @@ final class BreathApplicationModel: ObservableObject {
         let resolvedAgentCLIDetector = installedAgentCLIDetector
             ?? InstalledAgentCLIDetector(homeDirectory: homeDirectory)
         self.installedAgentCLIDetector = resolvedAgentCLIDetector
+        let resolvedAgentCLIInventory = AgentCLIInventory()
+        agentCLIInventory = resolvedAgentCLIInventory
         self.networkSessionManager = networkSessionManager
         self.networkProxyPasswordStore = networkProxyPasswordStore
         agentQuotaService = AgentQuotaService.live(
@@ -226,14 +229,11 @@ final class BreathApplicationModel: ObservableObject {
             applicationInstanceID: applicationInstanceID,
             availableAdapters: {
                 AgentAdapterRegistry.builtIn.adapters.filter {
-                    resolvedAgentCLIDetector.isInstalled($0.kind)
-                        && resolvedAgentCLIDetector.supportsMinimumVersion(
-                            of: $0
-                        )
+                    resolvedAgentCLIInventory.supportsMinimumVersion(of: $0)
                 }
             },
             executableURL: {
-                resolvedAgentCLIDetector.executableURL(for: $0)
+                resolvedAgentCLIInventory.executableURL(for: $0)
             }
         )
         runtime = TerminalEngineRuntime(engine: terminalEngine)
@@ -842,7 +842,7 @@ final class BreathApplicationModel: ObservableObject {
     }
 
     func setAgentIntegration(_ adapter: AgentAdapterDescriptor, enabled: Bool) {
-        guard !enabled || installedAgentCLIDetector.isInstalled(adapter.kind) else {
+        guard !enabled || agentCLIInventory.isInstalled(adapter.kind) else {
             lastError = "未安装 \(adapter.displayName)，无法安装 Hooks。"
             refreshAgentCLIStatuses()
             return
@@ -858,32 +858,20 @@ final class BreathApplicationModel: ObservableObject {
 
     func canToggleAgentIntegration(_ adapter: AgentAdapterDescriptor) -> Bool {
         enabledAgents.contains(adapter.kind)
-            || installedAgentCLIDetector.isInstalled(adapter.kind)
+            || agentCLIInventory.isInstalled(adapter.kind)
     }
 
     func refreshAgentCLIStatuses() {
         let detector = installedAgentCLIDetector
         let latestVersionChecker = agentCLILatestVersionChecker
         let adapters = self.adapters
+        detector.invalidateDetectionCache()
         Task { [weak self] in
-            let localStatuses = await Task.detached(priority: .userInitiated) {
-                await withTaskGroup(
-                    of: (AgentKind, AgentCLIInstallationStatus).self,
-                    returning: [AgentKind: AgentCLIInstallationStatus].self
-                ) { group in
-                    for adapter in adapters {
-                        group.addTask {
-                            (adapter.kind, detector.installationStatus(for: adapter))
-                        }
-                    }
-                    var statuses: [AgentKind: AgentCLIInstallationStatus] = [:]
-                    for await (kind, status) in group {
-                        statuses[kind] = status
-                    }
-                    return statuses
-                }
-            }.value
+            let localInstallations = await self?.detectLocalAgentCLIInstallations()
             guard let self else { return }
+            guard let localInstallations else { return }
+            let localStatuses = localInstallations.mapValues(\.status)
+            agentCLIInventory.replace(with: localInstallations)
             agentCLIStatuses = localStatuses
             noteAgentModel.refreshAvailability()
             await skillsService.updateTargetAvailability(
@@ -951,12 +939,11 @@ final class BreathApplicationModel: ObservableObject {
     func repairDetectedAgentIntegrations() {
         refreshEnabledAgents()
         var failures: [String] = []
-        for adapter in adapters where !enabledAgents.contains(adapter.kind)
-            && integrationPreferences.shouldInstall(
-                adapter.kind,
-                isInstalled: installedAgentCLIDetector.isInstalled(adapter.kind)
-            )
-        {
+        for adapter in adapters where integrationPreferences.shouldInstall(
+            adapter.kind,
+            isInstalled: installedAgentCLIDetector.isInstalled(adapter.kind),
+            existingIntegration: enabledAgents.contains(adapter.kind)
+        ) {
             do {
                 try applyAgentIntegration(adapter, enabled: true)
             } catch {
@@ -1085,7 +1072,9 @@ final class BreathApplicationModel: ObservableObject {
     }
 
     private func refreshSnapshot() async {
-        snapshot = await workbench.snapshot()
+        let latestSnapshot = await workbench.snapshot()
+        guard latestSnapshot != snapshot else { return }
+        snapshot = latestSnapshot
         guard automationServiceStarted else { return }
         try? await automationService.updateEnvironment(
             workspaces: snapshot.workspaces,
@@ -1112,9 +1101,12 @@ final class BreathApplicationModel: ObservableObject {
             automationCLIInstallationStatus =
                 automationCLIInstaller.status()
             do {
-                let localAgentStatuses =
-                    await detectLocalAgentCLIStatuses()
+                let localAgentInstallations =
+                    await detectLocalAgentCLIInstallations()
+                let localAgentStatuses = localAgentInstallations.mapValues(\.status)
+                agentCLIInventory.replace(with: localAgentInstallations)
                 agentCLIStatuses = localAgentStatuses
+                noteAgentModel.refreshAvailability()
                 await skillsService.updateTargetAvailability(
                     skillTargetAvailabilities(
                         from: localAgentStatuses
@@ -1138,29 +1130,29 @@ final class BreathApplicationModel: ObservableObject {
         }
     }
 
-    private func detectLocalAgentCLIStatuses() async
-        -> [AgentKind: AgentCLIInstallationStatus]
+    private func detectLocalAgentCLIInstallations() async
+        -> [AgentKind: DetectedAgentCLIInstallation]
     {
         let detector = installedAgentCLIDetector
         let adapters = self.adapters
         return await Task.detached(priority: .userInitiated) {
             await withTaskGroup(
-                of: (AgentKind, AgentCLIInstallationStatus).self,
-                returning: [AgentKind: AgentCLIInstallationStatus].self
+                of: (AgentKind, DetectedAgentCLIInstallation).self,
+                returning: [AgentKind: DetectedAgentCLIInstallation].self
             ) { group in
                 for adapter in adapters {
                     group.addTask {
                         (
                             adapter.kind,
-                            detector.installationStatus(for: adapter)
+                            detector.installation(for: adapter)
                         )
                     }
                 }
-                var statuses: [AgentKind: AgentCLIInstallationStatus] = [:]
-                for await (kind, status) in group {
-                    statuses[kind] = status
+                var installations: [AgentKind: DetectedAgentCLIInstallation] = [:]
+                for await (kind, installation) in group {
+                    installations[kind] = installation
                 }
-                return statuses
+                return installations
             }
         }.value
     }
@@ -1186,7 +1178,7 @@ final class BreathApplicationModel: ObservableObject {
             guard let automationCapability = adapter.automation else {
                 return nil
             }
-            let executablePath = installedAgentCLIDetector
+            let executablePath = agentCLIInventory
                 .executableURL(for: adapter.kind)?.path
             let availability: AutomationAgentAvailability
             switch statuses[adapter.kind] {
@@ -1263,9 +1255,11 @@ final class BreathApplicationModel: ObservableObject {
     }
 
     private func installDetectedAgentIntegrations() throws {
+        refreshEnabledAgents()
         for adapter in adapters where integrationPreferences.shouldInstall(
             adapter.kind,
-            isInstalled: installedAgentCLIDetector.isInstalled(adapter.kind)
+            isInstalled: installedAgentCLIDetector.isInstalled(adapter.kind),
+            existingIntegration: enabledAgents.contains(adapter.kind)
         ) {
             try applyAgentIntegration(adapter, enabled: true)
         }
@@ -1322,7 +1316,10 @@ final class BreathApplicationModel: ObservableObject {
                 return nil
             }
             switch adapter.integrationMechanism {
-            case .userHooks, .plugin, .extension:
+            case .userHooks:
+                let marker = " --agent-hook \(adapter.kind.rawValue) "
+                return contents.contains(marker) ? adapter.kind : nil
+            case .plugin, .extension:
                 return contents.contains("--agent-hook") ? adapter.kind : nil
             case .terminalParsing:
                 return nil
@@ -1338,7 +1335,11 @@ struct AgentIntegrationPreferenceStore {
         self.defaults = defaults
     }
 
-    func shouldInstall(_ agent: AgentKind, isInstalled: Bool) -> Bool {
+    func shouldInstall(
+        _ agent: AgentKind,
+        isInstalled: Bool,
+        existingIntegration: Bool = false
+    ) -> Bool {
         guard isInstalled else { return false }
         let preferenceKey = key(for: agent)
         if defaults.object(forKey: preferenceKey) == nil {
@@ -1350,6 +1351,12 @@ struct AgentIntegrationPreferenceStore {
                     defaults.set(value, forKey: preferenceKey)
                     return value
                 }
+            }
+            if existingIntegration {
+                // Existing managed hooks prove that the user opted in before
+                // explicit integration preferences were introduced.
+                defaults.set(true, forKey: preferenceKey)
+                return true
             }
             return false
         }
@@ -1368,6 +1375,44 @@ struct AgentIntegrationPreferenceStore {
 enum AgentCLIInstallationStatus: Equatable, Sendable {
     case notInstalled
     case installed(version: String?, updateAvailable: Bool)
+}
+
+struct DetectedAgentCLIInstallation: Equatable, Sendable {
+    let status: AgentCLIInstallationStatus
+    let executableURL: URL?
+}
+
+@MainActor
+private final class AgentCLIInventory {
+    private var installations: [AgentKind: DetectedAgentCLIInstallation] = [:]
+
+    func replace(with installations: [AgentKind: DetectedAgentCLIInstallation]) {
+        self.installations = installations
+    }
+
+    func executableURL(for agent: AgentKind) -> URL? {
+        installations[agent]?.executableURL
+    }
+
+    func isInstalled(_ agent: AgentKind) -> Bool {
+        guard case .installed = installations[agent]?.status else {
+            return false
+        }
+        return true
+    }
+
+    func supportsMinimumVersion(of adapter: AgentAdapterDescriptor) -> Bool {
+        guard case let .installed(version, _) = installations[adapter.kind]?.status else {
+            return false
+        }
+        guard let version else {
+            return true
+        }
+        return !InstalledAgentCLIDetector.isVersion(
+            version,
+            olderThan: adapter.minimumVersion
+        )
+    }
 }
 
 enum SkillInstallationTargetAvailabilityResolver {
@@ -1531,6 +1576,67 @@ struct InstalledAgentCLIDetector: Sendable {
         let version: AgentCLIVersion?
     }
 
+    private final class DetectionCache: @unchecked Sendable {
+        private enum Entry {
+            case resolving(generation: UInt64)
+            case resolved(
+                generation: UInt64,
+                executable: DetectedExecutable?
+            )
+        }
+
+        private let condition = NSCondition()
+        private var generation: UInt64 = 0
+        private var entries: [AgentKind: Entry] = [:]
+
+        func value(
+            for agent: AgentKind,
+            resolve: () -> DetectedExecutable?
+        ) -> DetectedExecutable? {
+            var generationToResolve: UInt64?
+            condition.lock()
+            while generationToResolve == nil {
+                let currentGeneration = generation
+                switch entries[agent] {
+                case let .resolved(entryGeneration, executable)
+                    where entryGeneration == currentGeneration:
+                    condition.unlock()
+                    return executable
+                case let .resolving(entryGeneration)
+                    where entryGeneration == currentGeneration:
+                    condition.wait()
+                default:
+                    entries[agent] = .resolving(
+                        generation: currentGeneration
+                    )
+                    generationToResolve = currentGeneration
+                }
+            }
+            condition.unlock()
+
+            let executable = resolve()
+
+            condition.lock()
+            if generation == generationToResolve {
+                entries[agent] = .resolved(
+                    generation: generation,
+                    executable: executable
+                )
+            }
+            condition.broadcast()
+            condition.unlock()
+            return executable
+        }
+
+        func invalidate() {
+            condition.lock()
+            generation &+= 1
+            entries.removeAll(keepingCapacity: true)
+            condition.broadcast()
+            condition.unlock()
+        }
+    }
+
     private struct AgentCLIVersion: Comparable, Sendable {
         let rawValue: String
         private let coreComponents: [Int]
@@ -1652,6 +1758,7 @@ struct InstalledAgentCLIDetector: Sendable {
     }
 
     private let searchDirectories: [URL]
+    private let detectionCache: DetectionCache
 
     init(searchDirectories: [URL]) {
         var seenPaths = Set<String>()
@@ -1659,6 +1766,7 @@ struct InstalledAgentCLIDetector: Sendable {
             let standardized = directory.standardizedFileURL
             return seenPaths.insert(standardized.path).inserted ? standardized : nil
         }
+        detectionCache = DetectionCache()
     }
 
     init(
@@ -1701,18 +1809,40 @@ struct InstalledAgentCLIDetector: Sendable {
         for adapter: AgentAdapterDescriptor,
         latestVersion: String? = nil
     ) -> AgentCLIInstallationStatus {
+        installation(
+            for: adapter,
+            latestVersion: latestVersion
+        ).status
+    }
+
+    func installation(
+        for adapter: AgentAdapterDescriptor,
+        latestVersion: String? = nil
+    ) -> DetectedAgentCLIInstallation {
         guard let executable = detectedExecutable(for: adapter.kind) else {
-            return .notInstalled
+            return DetectedAgentCLIInstallation(
+                status: .notInstalled,
+                executableURL: nil
+            )
         }
         guard let version = executable.version else {
-            return .installed(version: nil, updateAvailable: false)
+            return DetectedAgentCLIInstallation(
+                status: .installed(
+                    version: nil,
+                    updateAvailable: false
+                ),
+                executableURL: executable.url
+            )
         }
         let targetVersion = Self.parsedVersion(
             in: latestVersion ?? adapter.minimumVersion
         )
-        return .installed(
-            version: version.rawValue,
-            updateAvailable: targetVersion.map { version < $0 } ?? false
+        return DetectedAgentCLIInstallation(
+            status: .installed(
+                version: version.rawValue,
+                updateAvailable: targetVersion.map { version < $0 } ?? false
+            ),
+            executableURL: executable.url
         )
     }
 
@@ -1739,7 +1869,12 @@ struct InstalledAgentCLIDetector: Sendable {
             )
         }
         _ = try run(command.executableURL, arguments: command.arguments)
+        invalidateDetectionCache()
         return installationStatus(for: adapter)
+    }
+
+    func invalidateDetectionCache() {
+        detectionCache.invalidate()
     }
 
     private func updateCommand(
@@ -1785,6 +1920,14 @@ struct InstalledAgentCLIDetector: Sendable {
     }
 
     private func detectedExecutable(
+        for agent: AgentKind
+    ) -> DetectedExecutable? {
+        detectionCache.value(for: agent) {
+            detectExecutableWithoutCache(for: agent)
+        }
+    }
+
+    private func detectExecutableWithoutCache(
         for agent: AgentKind
     ) -> DetectedExecutable? {
         let executableURLs = executableURLs(for: agent)

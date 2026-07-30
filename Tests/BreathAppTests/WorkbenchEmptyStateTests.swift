@@ -33,7 +33,7 @@ struct WorkbenchEmptyStateTests {
         #expect(!smallRegion.isSolid)
     }
 
-    @Test("passive workbench empty states keep the App Shell quiet")
+    @Test("workbench empty states stay compact and visible")
     func passiveEmptyStatesAreQuiet() async throws {
         await NativeUITestGate.shared.acquire()
         defer { NativeUITestGate.shared.release() }

@@ -69,7 +69,7 @@ struct NotesView: View {
             notesToolbar
             Divider()
             if model.snapshot.library == nil {
-                Color.clear
+                unconfiguredLibraryState
             } else if !model.isLibraryAvailable {
                 unavailableLibraryState
             } else {
@@ -85,6 +85,7 @@ struct NotesView: View {
                             minimumPosition: .points(180),
                             maximumPosition: .points(420),
                             minimumSecondLength: 420,
+                            drawsDivider: false,
                             updatesPosition: true,
                             onResize: { fraction in
                                 let availableWidth = notesContentWidth(
@@ -434,12 +435,21 @@ struct NotesView: View {
         .accessibilityHidden(true)
     }
 
+    private var unconfiguredLibraryState: some View {
+        BreathEmptyState(
+            title: "尚未选择笔记库",
+            style: .passive
+        ) {
+            Button("选择目录…", action: chooseLibrary)
+        }
+    }
+
     private var unavailableLibraryState: some View {
-        ContentUnavailableView {
-            Label("笔记库不可访问", systemImage: "externaldrive.badge.exclamationmark")
-        } description: {
-            Text(model.snapshot.library?.rootPath ?? "")
-        } actions: {
+        BreathEmptyState(
+            title: "笔记库不可访问",
+            systemImage: "externaldrive.badge.exclamationmark",
+            message: model.snapshot.library?.rootPath ?? ""
+        ) {
             HStack {
                 Button("重试") { model.refresh() }
                 Button("在 Finder 中显示") {
@@ -452,20 +462,11 @@ struct NotesView: View {
                     .buttonStyle(.borderedProminent)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $sidebarMode) {
-                Text("文件").tag(SidebarMode.files)
-                Text("大纲").tag(SidebarMode.outline)
-                Text("搜索").tag(SidebarMode.search)
-            }
-            .pickerStyle(.segmented)
-            .padding(8)
-
-            Divider()
+            sidebarHeader
 
             switch sidebarMode {
             case .files:
@@ -479,29 +480,83 @@ struct NotesView: View {
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
+    private var sidebarHeader: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $sidebarMode) {
+                Text("文件").tag(SidebarMode.files)
+                Text("大纲").tag(SidebarMode.outline)
+                Text("搜索").tag(SidebarMode.search)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 8)
+            .frame(height: NotesLayout.navigationBarHeight)
+
+            Divider()
+
+            if sidebarMode == .files {
+                HStack(spacing: 6) {
+                    TextField("筛选文件", text: $filter)
+                        .textFieldStyle(.roundedBorder)
+                    Menu {
+                        Picker("排序", selection: $sortKey) {
+                            Text("名称").tag(NoteSortKey.name)
+                            Text("修改时间").tag(NoteSortKey.modified)
+                            Text("创建时间").tag(NoteSortKey.created)
+                        }
+                        Divider()
+                        Button(sortAscending ? "降序" : "升序") {
+                            sortAscending.toggle()
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .frame(width: 24)
+
+                    Menu {
+                        Button {
+                            model.createMarkdownDocument(
+                                in: selectedDirectoryPath
+                            )
+                        } label: {
+                            Label(
+                                "新建 Markdown",
+                                systemImage: "doc.badge.plus"
+                            )
+                        }
+                        Button {
+                            model.createFolder(in: selectedDirectoryPath)
+                        } label: {
+                            Label(
+                                "新建文件夹",
+                                systemImage: "folder.badge.plus"
+                            )
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .frame(width: 24)
+                    .help("新建笔记或文件夹")
+
+                    Button {
+                        model.undoLastFileOperation()
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                    }
+                    .help("撤销上一次文件操作")
+                }
+                .buttonStyle(.borderless)
+                .padding(.horizontal, 8)
+                .frame(height: NotesLayout.navigationBarHeight)
+
+                Divider()
+            }
+        }
+    }
+
     private var fileBrowser: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                TextField("筛选文件", text: $filter)
-                    .textFieldStyle(.roundedBorder)
-                Menu {
-                    Picker("排序", selection: $sortKey) {
-                        Text("名称").tag(NoteSortKey.name)
-                        Text("修改时间").tag(NoteSortKey.modified)
-                        Text("创建时间").tag(NoteSortKey.created)
-                    }
-                    Divider()
-                    Button(sortAscending ? "降序" : "升序") {
-                        sortAscending.toggle()
-                    }
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
-                }
-                .menuStyle(.borderlessButton)
-                .frame(width: 24)
-            }
-            .padding(8)
-
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
                     ForEach(filteredEntries) { entry in
@@ -543,32 +598,6 @@ struct NotesView: View {
                 }
                 return !paths.isEmpty
             }
-
-            Divider()
-            HStack(spacing: 10) {
-                Button {
-                    model.createMarkdownDocument(in: selectedDirectoryPath)
-                } label: {
-                    Image(systemName: "doc.badge.plus")
-                }
-                .help("新建 Markdown（⌘N）")
-                Button {
-                    model.createFolder(in: selectedDirectoryPath)
-                } label: {
-                    Image(systemName: "folder.badge.plus")
-                }
-                .help("新建文件夹")
-                Button {
-                    model.undoLastFileOperation()
-                } label: {
-                    Image(systemName: "arrow.uturn.backward")
-                }
-                .help("撤销上一次文件操作")
-                Spacer()
-            }
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 10)
-            .frame(height: 34)
         }
         .onTapGesture {
             fileTreeHasFocus = true
@@ -617,10 +646,10 @@ struct NotesView: View {
                     .controlSize(.small)
                     .padding()
             } else if model.searchQuery.isEmpty {
-                ContentUnavailableView(
-                    "全文搜索",
-                    systemImage: "text.magnifyingglass",
-                    description: Text("搜索 Markdown、文本和 Front Matter；不提供替换。")
+                BreathEmptyState(
+                    title: "全文搜索",
+                    message: "搜索 Markdown、文本和 Front Matter；不提供替换。",
+                    style: .passive
                 )
             } else {
                 List(model.searchResults) { result in
@@ -697,10 +726,10 @@ struct NotesView: View {
                         .padding(24)
                 }
             } else {
-                ContentUnavailableView(
-                    "没有打开的笔记",
-                    systemImage: "doc.text",
-                    description: Text("从左侧文件树打开 Markdown 或文本文件。")
+                BreathEmptyState(
+                    title: "没有打开的笔记",
+                    message: "从左侧文件树打开 Markdown 或文本文件。",
+                    style: .passive
                 )
             }
         }
@@ -864,7 +893,7 @@ struct NotesView: View {
                 }
             }
         }
-        .frame(height: 34)
+        .frame(height: NotesLayout.navigationBarHeight)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
@@ -1448,6 +1477,10 @@ struct NotesView: View {
     }
 }
 
+private enum NotesLayout {
+    static let navigationBarHeight: CGFloat = 34
+}
+
 private enum SidebarMode {
     case files
     case outline
@@ -1711,10 +1744,10 @@ private struct NoteAgentDrawer: View {
     private var idleSelector: some View {
         VStack(alignment: .leading, spacing: 14) {
             if model.availableAgents.isEmpty {
-                ContentUnavailableView(
-                    "没有可用的 Agent CLI",
+                BreathEmptyState(
+                    title: "没有可用的 Agent CLI",
                     systemImage: "terminal",
-                    description: Text("安装 Breath 支持的 Agent CLI 后重新打开此抽屉。")
+                    message: "安装 Breath 支持的 Agent CLI 后重新打开此抽屉。"
                 )
             } else {
                 Text("Agent 将以整座笔记库为工作目录运行。Breath 不会注入当前笔记内容，也不会额外限制 CLI 权限。")

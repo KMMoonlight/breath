@@ -706,9 +706,11 @@ struct BreathSettingsView: View {
     private var archivesSettings: some View {
         settingsList {
             if model.snapshot.archivedWorkSessions.isEmpty {
-                Text(localizer.string("暂无已归档工作会话"))
-                    .font(applicationFont(offset: -1))
-                    .foregroundStyle(.secondary)
+                BreathEmptyState(
+                    title: localizer.string("暂无已归档工作会话"),
+                    style: .passive,
+                    placement: .inline
+                )
             } else {
                 ForEach(model.snapshot.archivedWorkSessions) { session in
                     HStack {
@@ -1082,8 +1084,11 @@ struct BreathSettingsView: View {
                             model.refreshManagedWorktreeInventory()
                         }
                     } else {
-                        Text(localizer.string("没有 Worktree 分支或目录"))
-                            .foregroundStyle(.secondary)
+                        BreathEmptyState(
+                            title: localizer.string("没有 Worktree 分支或目录"),
+                            style: .passive,
+                            placement: .inline
+                        )
                     }
                 } else {
                     ForEach(model.managedWorktreeInventory) { item in

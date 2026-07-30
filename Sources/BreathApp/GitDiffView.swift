@@ -102,8 +102,8 @@ struct GitDiffView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if files.isEmpty {
-                ContentUnavailableView(
-                    localizer.string("暂无 Git 变更"),
+                BreathEmptyState(
+                    title: localizer.string("暂无 Git 变更"),
                     systemImage: "checkmark.circle"
                 )
             } else {
@@ -216,9 +216,9 @@ struct GitDiffView: View {
                 diffContent
             }
         } else {
-            ContentUnavailableView(
-                localizer.string("请选择一个文件查看 Diff"),
-                systemImage: "doc.text.magnifyingglass"
+            BreathEmptyState(
+                title: localizer.string("请选择一个文件查看 Diff"),
+                style: .passive
             )
         }
     }
@@ -256,8 +256,8 @@ struct GitDiffView: View {
                 .background(Color(nsColor: .textBackgroundColor))
             }
         case .unavailable:
-            ContentUnavailableView(
-                localizer.string("无法读取 Git Diff"),
+            BreathEmptyState(
+                title: localizer.string("无法读取 Git Diff"),
                 systemImage: "exclamationmark.triangle"
             )
         }

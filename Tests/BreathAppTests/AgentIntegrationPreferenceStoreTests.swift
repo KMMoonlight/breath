@@ -55,6 +55,14 @@ struct AgentIntegrationPreferenceStoreTests {
         #expect(!preferences.shouldInstall(.claudeCode, isInstalled: true))
         #expect(!preferences.shouldInstall(.kimiCode, isInstalled: true))
         #expect(!preferences.shouldInstall(.antigravityCLI, isInstalled: false))
+        #expect(
+            preferences.shouldInstall(
+                .kimiCode,
+                isInstalled: true,
+                existingIntegration: true
+            )
+        )
+        #expect(preferences.shouldInstall(.kimiCode, isInstalled: true))
 
         defaults.set(
             true,
@@ -71,6 +79,13 @@ struct AgentIntegrationPreferenceStoreTests {
         preferences.setEnabled(true, for: .claudeCode)
 
         #expect(!preferences.shouldInstall(.codex, isInstalled: true))
+        #expect(
+            !preferences.shouldInstall(
+                .codex,
+                isInstalled: true,
+                existingIntegration: true
+            )
+        )
         #expect(preferences.shouldInstall(.claudeCode, isInstalled: true))
         #expect(!preferences.shouldInstall(.claudeCode, isInstalled: false))
     }
@@ -166,6 +181,93 @@ struct AgentIntegrationPreferenceStoreTests {
     }
 
     @MainActor
+    @Test("application startup migrates existing hooks and refreshes a stale executable path")
+    func applicationStartupMigratesExistingAgentHooks() async throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "breath-stale-hooks-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let homeDirectory = temporaryDirectory.appendingPathComponent(
+            "home",
+            isDirectory: true
+        )
+        let supportDirectory = temporaryDirectory.appendingPathComponent(
+            "support",
+            isDirectory: true
+        )
+        let codexDirectory = homeDirectory.appendingPathComponent(
+            ".codex",
+            isDirectory: true
+        )
+        let hooksURL = codexDirectory.appendingPathComponent("hooks.json")
+        let binDirectory = temporaryDirectory.appendingPathComponent(
+            "bin",
+            isDirectory: true
+        )
+        let suiteName = "BreathTests.StaleAgentHooks.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: temporaryDirectory)
+        }
+
+        try FileManager.default.createDirectory(
+            at: codexDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: binDirectory,
+            withIntermediateDirectories: true
+        )
+        let codexExecutableURL = binDirectory.appendingPathComponent("codex")
+        try Data("#!/bin/sh\necho '0.144.3'\n".utf8).write(
+            to: codexExecutableURL
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: codexExecutableURL.path
+        )
+
+        let staleExecutable = "/Applications/Breath-0.1.0.app/Contents/MacOS/Breath"
+        let staleConfiguration = Data(
+            """
+            {"hooks":{"Stop":[{"matcher":"","hooks":[{
+              "type":"command",
+              "name":"Breath",
+              "command":"'\(staleExecutable)' --agent-hook codex turnCompleted"
+            }]}]}}
+            """.utf8
+        )
+        try staleConfiguration.write(to: hooksURL)
+        let preferences = AgentIntegrationPreferenceStore(defaults: defaults)
+        #expect(!preferences.shouldInstall(.codex, isInstalled: true))
+
+        let model = try BreathApplicationModel(
+            homeDirectory: homeDirectory,
+            supportDirectory: supportDirectory,
+            terminalEngineOverride: AppShellTestingTerminalEngine(),
+            integrationPreferences: preferences,
+            installedAgentCLIDetector: InstalledAgentCLIDetector(
+                searchDirectories: [binDirectory]
+            )
+        )
+        model.start()
+
+        let currentExecutable = Bundle.main.executableURL?.path
+            ?? "/Applications/Breath.app/Contents/MacOS/Breath"
+        let expectedCommand =
+            "'\(currentExecutable)' --agent-hook codex turnCompleted"
+        #expect(try codexStopCommand(in: hooksURL) == expectedCommand)
+        #expect(preferences.shouldInstall(.codex, isInstalled: true))
+
+        try staleConfiguration.write(to: hooksURL)
+        model.repairDetectedAgentIntegrations()
+        #expect(try codexStopCommand(in: hooksURL) == expectedCommand)
+        #expect(await model.prepareForTermination())
+    }
+
+    @MainActor
     @Test("an uninstalled Agent cannot enable hooks")
     func uninstalledAgentCannotEnableHooks() throws {
         let temporaryDirectory = FileManager.default.temporaryDirectory
@@ -203,5 +305,97 @@ struct AgentIntegrationPreferenceStoreTests {
                 atPath: homeDirectory.appendingPathComponent(".codex/hooks.json").path
             )
         )
+    }
+
+    @MainActor
+    @Test("automation options reuse the background Agent CLI detection")
+    func automationOptionsReuseBackgroundDetection() async throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "breath-cached-agent-options-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let homeDirectory = temporaryDirectory.appendingPathComponent(
+            "home",
+            isDirectory: true
+        )
+        let supportDirectory = temporaryDirectory.appendingPathComponent(
+            "support",
+            isDirectory: true
+        )
+        let binDirectory = temporaryDirectory.appendingPathComponent(
+            "bin",
+            isDirectory: true
+        )
+        let invocationCountURL = temporaryDirectory.appendingPathComponent(
+            "version-invocation-count"
+        )
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        try FileManager.default.createDirectory(
+            at: binDirectory,
+            withIntermediateDirectories: true
+        )
+        let executableURL = binDirectory.appendingPathComponent("codex")
+        try Data(
+            """
+            #!/bin/sh
+            count=0
+            if [ -f "\(invocationCountURL.path)" ]; then
+              count=$(cat "\(invocationCountURL.path)")
+            fi
+            count=$((count + 1))
+            printf '%s' "$count" > "\(invocationCountURL.path)"
+            echo 'codex-cli 0.146.0'
+            """.utf8
+        ).write(to: executableURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executableURL.path
+        )
+        let model = try BreathApplicationModel(
+            homeDirectory: homeDirectory,
+            supportDirectory: supportDirectory,
+            terminalEngineOverride: AppShellTestingTerminalEngine(),
+            installedAgentCLIDetector: InstalledAgentCLIDetector(
+                searchDirectories: [binDirectory]
+            )
+        )
+        model.start()
+        for _ in 0..<200 where model.agentCLIStatuses[.codex] == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.agentCLIStatuses[.codex] != nil)
+
+        let detectedInvocationCount = try String(
+            contentsOf: invocationCountURL,
+            encoding: .utf8
+        )
+        for _ in 0..<20 {
+            #expect(
+                model.automationAgentOptions.contains {
+                    $0.adapter.kind == .codex
+                }
+            )
+        }
+        let invocationCountAfterRendering = try String(
+            contentsOf: invocationCountURL,
+            encoding: .utf8
+        )
+
+        #expect(detectedInvocationCount == "1")
+        #expect(invocationCountAfterRendering == detectedInvocationCount)
+        #expect(await model.prepareForTermination())
+    }
+
+    private func codexStopCommand(in configURL: URL) throws -> String? {
+        let root = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: configURL)
+            ) as? [String: Any]
+        )
+        let hooks = try #require(root["hooks"] as? [String: Any])
+        let entries = try #require(hooks["Stop"] as? [[String: Any]])
+        let handlers = try #require(entries.first?["hooks"] as? [[String: Any]])
+        return handlers.first?["command"] as? String
     }
 }

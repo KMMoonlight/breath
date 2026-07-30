@@ -424,17 +424,23 @@ struct AutomationView: View {
     @ViewBuilder
     private var compactEmptyListRow: some View {
         if !model.automationSnapshot.automations.isEmpty {
-            HStack(spacing: 8) {
-                Text(localizer.string("没有匹配的自动化"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
+            BreathEmptyState(
+                title: localizer.string("没有匹配的自动化"),
+                style: .passive,
+                placement: .inline
+            ) {
                 Button(localizer.string("清除搜索")) {
                     searchText = ""
                 }
                 .buttonStyle(.borderless)
-                .controlSize(.small)
             }
+            .listRowSeparator(.hidden)
+        } else {
+            BreathEmptyState(
+                title: localizer.string("尚未创建自动化"),
+                systemImage: "clock.arrow.2.circlepath",
+                placement: .inline
+            )
             .listRowSeparator(.hidden)
         }
     }
@@ -968,8 +974,11 @@ private struct AutomationDetailView: View {
                     .foregroundStyle(.secondary)
             }
             if runs.isEmpty {
-                Text(localizer.string("还没有运行记录。"))
-                    .foregroundStyle(.secondary)
+                BreathEmptyState(
+                    title: localizer.string("还没有运行记录。"),
+                    style: .passive,
+                    placement: .inline
+                )
             } else {
                 VStack(spacing: 0) {
                     ForEach(runs) { run in
