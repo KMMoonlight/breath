@@ -94,8 +94,8 @@ struct NotesPageLayoutTests {
         )
     }
 
-    @Test("file creation actions live in the sidebar header, not its footer")
-    func fileCreationActionsLiveAtTheTop() throws {
+    @Test("the sidebar keeps creation actions but hides sort and undo controls")
+    func sidebarKeepsOnlyTreeActions() throws {
         let notesSource = try compactSource("NotesView.swift")
         let sidebarHeader = try sourceSection(
             notesSource,
@@ -105,21 +105,24 @@ struct NotesPageLayoutTests {
         let fileBrowser = try sourceSection(
             notesSource,
             from: "privatevarfileBrowser",
-            to: "privatevaroutline"
+            to: "privatevarlibraryRootRow"
         )
 
         for icon in [
             "doc.badge.plus",
             "folder.badge.plus",
-            "arrow.uturn.backward",
         ] {
             #expect(sidebarHeader.contains(icon))
             #expect(!fileBrowser.contains(icon))
         }
+        #expect(!sidebarHeader.contains("arrow.up.arrow.down"))
+        #expect(!sidebarHeader.contains("arrow.uturn.backward"))
+        #expect(sidebarHeader.contains(".menuIndicator(.hidden)"))
+        #expect(!notesSource.contains("privateenumNoteSortKey"))
     }
 
-    @Test("the Notes split keeps its resize hit target without drawing a line")
-    func notesSplitDoesNotDrawAcrossTheEditorCanvas() throws {
+    @Test("the Notes split draws a boundary between the tree and editor")
+    func notesSplitDrawsSidebarBoundary() throws {
         let notesSource = try compactSource("NotesView.swift")
         let notesLayout = try sourceSection(
             notesSource,
@@ -127,7 +130,150 @@ struct NotesPageLayoutTests {
             to: "privatevarprimaryAlertContent"
         )
 
-        #expect(notesLayout.contains("drawsDivider:false"))
+        #expect(notesLayout.contains("drawsDivider:true"))
+    }
+
+    @Test("the toolbar exposes library switching without paths or refresh")
+    func toolbarUsesCompactLibraryMenu() throws {
+        let notesSource = try compactSource("NotesView.swift")
+        let toolbar = try sourceSection(
+            notesSource,
+            from: "privatevarnotesToolbar",
+            to: "@ViewBuilderprivatevarshortcutButtons"
+        )
+
+        #expect(toolbar.contains("Text(library.displayName)"))
+        #expect(toolbar.contains("Label(\"更换笔记库…\""))
+        #expect(toolbar.contains("Image(systemName:\"sparkles\")"))
+        #expect(!toolbar.contains("library.rootPath"))
+        #expect(!toolbar.contains("Image(systemName:\"arrow.clockwise\")"))
+        #expect(!toolbar.contains("Image(systemName:\"chevron.down\")"))
+        #expect(!toolbar.contains("Image(systemName:\"magnifyingglass\")"))
+        #expect(
+            !toolbar.contains(
+                "Image(systemName:\"square.and.arrow.down\")"
+            )
+        )
+    }
+
+    @Test("the Markdown outline expands from a rail beside the note text")
+    func outlineExpandsFromTextRail() throws {
+        let notesSource = try compactSource("NotesView.swift")
+        let sidebarHeader = try sourceSection(
+            notesSource,
+            from: "privatevarsidebarHeader",
+            to: "privatevarfileBrowser"
+        )
+        let editorArea = try sourceSection(
+            notesSource,
+            from: "privatevareditorArea",
+            to: "privatefunceditor("
+        )
+
+        #expect(!sidebarHeader.contains("\"大纲\""))
+        #expect(editorArea.contains("ifdocument.kind==.markdown"))
+        #expect(editorArea.contains("ZStack(alignment:.topTrailing)"))
+        #expect(
+            editorArea.contains(
+                "documentOutlineControl.padding(.top,NotesLayout.outlineTopInset)"
+            )
+        )
+        #expect(editorArea.contains("outlineTrailingInset("))
+        #expect(!editorArea.contains("Divider()documentOutline"))
+        let outline = try sourceSection(
+            notesSource,
+            from: "privatevardocumentOutlineControl",
+            to: "privatevarlibrarySearch"
+        )
+        #expect(!outline.contains("Text(\"大纲\")"))
+        #expect(outline.contains("documentOutlineRail"))
+        #expect(outline.contains(".onHover{hoveringin"))
+        #expect(outline.contains("index==activeHeadingIndex"))
+        #expect(outline.contains("NSCursor.pointingHand.push()"))
+        #expect(outline.contains("Color(nsColor:.windowBackgroundColor)"))
+        #expect(!outline.contains(".background(.regularMaterial"))
+        #expect(outline.contains("ifoutlineContentHeight>NotesLayout.outlineMaximumHeight"))
+        #expect(outline.contains("documentOutlineRows.fixedSize("))
+        #expect(!outline.contains("height:min("))
+    }
+
+    @Test("the Note Agent header owns one combined launch selector")
+    func noteAgentUsesOneHeaderLauncher() throws {
+        let notesSource = try compactSource("NotesView.swift")
+        let drawer = try sourceSection(
+            notesSource,
+            from: "privatestructNoteAgentDrawer",
+            to: "privatestructNoteAgentNativeTerminalView"
+        )
+        let idleSelector = try sourceSection(
+            String(drawer),
+            from: "privatevaridleSelector",
+            to: "@ViewBuilderprivatevaridleAgentLauncher"
+        )
+        let launcher = try sourceSection(
+            String(drawer),
+            from: "@ViewBuilderprivatevaridleAgentLauncher",
+            to: "privatevarnoteAgentScopeHelp"
+        )
+
+        #expect(drawer.contains("Image(systemName:\"info.circle\")"))
+        #expect(drawer.contains(".help(noteAgentScopeHelp)"))
+        #expect(!idleSelector.contains("Picker("))
+        #expect(!idleSelector.contains("Agent将以整座笔记库"))
+        #expect(
+            launcher.contains(
+                "Text(\"启动\\(selectedAdapter.displayName)\")"
+            )
+        )
+        #expect(launcher.contains(".menuIndicator(.hidden)"))
+        #expect(launcher.contains("Image(systemName:\"chevron.down\")"))
+    }
+
+    @Test("document find and source controls live in the bottom utility bar")
+    func editorControlsLiveAtTheBottom() throws {
+        let notesSource = try compactSource("NotesView.swift")
+        let editorArea = try sourceSection(
+            notesSource,
+            from: "privatevareditorArea",
+            to: "privatefunceditorBottomBar"
+        )
+        let bottomBar = try sourceSection(
+            notesSource,
+            from: "privatefunceditorBottomBar",
+            to: "privatefunceditor("
+        )
+
+        #expect(editorArea.contains("editorBottomBar(document)"))
+        #expect(bottomBar.contains("Image(systemName:\"magnifyingglass\")"))
+        #expect(
+            bottomBar.contains(
+                "\"chevron.left.forwardslash.chevron.right\""
+            )
+        )
+        #expect(!bottomBar.contains("square.and.arrow.down"))
+    }
+
+    @Test("the file browser presents a disclosure tree rooted at the library")
+    func fileBrowserUsesDisclosureTree() throws {
+        let notesSource = try compactSource("NotesView.swift")
+        let rootRow = try sourceSection(
+            notesSource,
+            from: "privatevarlibraryRootRow",
+            to: "privatevardocumentOutline"
+        )
+        let entryRow = try sourceSection(
+            notesSource,
+            from: "privatestructNoteLibraryEntryRow",
+            to: "privatestructNoteAgentDrawer"
+        )
+
+        #expect(rootRow.contains("\"chevron.down\""))
+        #expect(rootRow.contains("\"chevron.right\""))
+        #expect(rootRow.contains("selectedPaths.removeAll()"))
+        #expect(rootRow.contains("ifselectedPaths.isEmpty"))
+        #expect(rootRow.contains("Button(\"更换笔记库…\")"))
+        #expect(entryRow.contains("ifentry.kind==.folder"))
+        #expect(entryRow.contains("ForEach(0..<level"))
     }
 
     @MainActor

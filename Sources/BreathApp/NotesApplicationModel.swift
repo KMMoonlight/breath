@@ -129,6 +129,7 @@ final class NotesApplicationModel: ObservableObject {
         recoveryTasks[id] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
             guard let self, !Task.isCancelled else { return }
+            self.recoveryTasks[id] = nil
             do {
                 try await self.flushPendingEdits(ids: [id])
             } catch {

@@ -326,6 +326,226 @@ struct AgentQuotaAdapterTests {
         #expect(status == .available(fallbackSnapshot))
     }
 
+    @Test("Claude preserves an unsupported CLI result without an OAuth credential")
+    func claudeWithoutOAuthPreservesUnsupportedFallback() async {
+        let client = AgentQuotaHTTPClient { _ in
+            Issue.record("HTTP must not run without a Claude OAuth credential")
+            throw CancellationError()
+        }
+
+        let status = await ClaudeAgentQuotaAdapter.query(
+            credentialProvider: { nil },
+            httpClient: client,
+            fallback: { .unsupported }
+        )
+
+        #expect(status == .unsupported)
+    }
+
+    @Test("Kimi preserves its official weekly, rolling, and extra-usage limits")
+    func kimiQuotaResponse() throws {
+        let snapshot = try KimiAgentQuotaAdapter.decode(
+            Data(
+                """
+                {
+                  "usage": {
+                    "used": "40",
+                    "limit": "1000",
+                    "resetTime": "2030-01-01T00:00:00Z"
+                  },
+                  "limits": [
+                    {
+                      "window": {
+                        "duration": 300,
+                        "timeUnit": "TIME_UNIT_MINUTE"
+                      },
+                      "detail": {
+                        "used": "25",
+                        "limit": "100",
+                        "resetTime": "2030-01-02T00:00:00Z"
+                      }
+                    }
+                  ],
+                  "boosterWallet": {
+                    "balance": {
+                      "type": "BOOSTER",
+                      "amount": "20000000000",
+                      "amountLeft": "10000000000"
+                    },
+                    "monthlyChargeLimitEnabled": true,
+                    "monthlyChargeLimit": {
+                      "currency": "USD",
+                      "priceInCents": "20000"
+                    },
+                    "monthlyUsed": {
+                      "currency": "USD",
+                      "priceInCents": "5000"
+                    }
+                  }
+                }
+                """.utf8
+            )
+        )
+
+        #expect(snapshot.providerName == "Kimi Code")
+        #expect(snapshot.windows.map(\.name) == [
+            "每周",
+            "5 小时",
+            "Extra Usage",
+        ])
+        #expect(snapshot.windows.map(\.value) == [
+            .percentage(value: 4, direction: .used),
+            .percentage(value: 25, direction: .used),
+            .amount(value: "50 / 200", unit: "USD"),
+        ])
+        #expect(snapshot.windows[0].resetsAt == Date(timeIntervalSince1970: 1_893_456_000))
+    }
+
+    @Test("Kimi sends its in-memory OAuth token only to the official usage endpoint")
+    func kimiQuotaRequest() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "breath-kimi-adapter-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try writeKimiCredential(
+            homeDirectory: directory,
+            accessToken: "kimi-test-access",
+            refreshToken: "kimi-test-refresh"
+        )
+        let recorder = QuotaRequestRecorder()
+        let client = AgentQuotaHTTPClient { request in
+            await recorder.record(request)
+            let response = try #require(
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: nil
+                )
+            )
+            return (
+                Data(#"{"usage":{"used":"20","limit":"100"}}"#.utf8),
+                response
+            )
+        }
+
+        let status = await KimiAgentQuotaAdapter.query(
+            credentialStore: AgentQuotaCredentialStore(
+                homeDirectory: directory
+            ),
+            httpClient: client
+        )
+
+        guard case .available = status else {
+            Issue.record("Expected available Kimi quota, got \(status)")
+            return
+        }
+        let request = try #require(await recorder.request)
+        #expect(
+            request.url?.absoluteString
+                == "https://api.kimi.com/coding/v1/usages"
+        )
+        #expect(
+            request.value(forHTTPHeaderField: "Authorization")
+                == "Bearer kimi-test-access"
+        )
+        #expect(request.value(forHTTPHeaderField: "Accept") == "application/json")
+        #expect(!String(describing: status).contains("kimi-test-access"))
+        #expect(!String(describing: status).contains("kimi-test-refresh"))
+    }
+
+    @Test("Kimi refreshes an expired OAuth token with the official flow and persists the rotation")
+    func kimiRefreshesExpiredCredential() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "breath-kimi-refresh-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try writeKimiCredential(
+            homeDirectory: directory,
+            accessToken: "expired-access",
+            refreshToken: "old-refresh"
+        )
+        let recorder = QuotaRequestSequenceRecorder()
+        let client = AgentQuotaHTTPClient { request in
+            let index = await recorder.record(request)
+            let statusCode: Int
+            let data: Data
+            switch index {
+            case 0:
+                statusCode = 401
+                data = Data()
+            case 1:
+                statusCode = 200
+                data = Data(
+                    """
+                    {
+                      "access_token": "rotated-access",
+                      "refresh_token": "rotated-refresh",
+                      "expires_in": 900,
+                      "scope": "kimi-code",
+                      "token_type": "Bearer"
+                    }
+                    """.utf8
+                )
+            default:
+                statusCode = 200
+                data = Data(
+                    #"{"usage":{"used":"10","limit":"100"}}"#.utf8
+                )
+            }
+            let response = try #require(
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: statusCode,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: nil
+                )
+            )
+            return (data, response)
+        }
+
+        let status = await KimiAgentQuotaAdapter.query(
+            credentialStore: AgentQuotaCredentialStore(
+                homeDirectory: directory
+            ),
+            httpClient: client,
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+        )
+
+        guard case .available = status else {
+            Issue.record("Expected refreshed Kimi quota, got \(status)")
+            return
+        }
+        let requests = await recorder.requests
+        #expect(requests.map { $0.url?.absoluteString } == [
+            "https://api.kimi.com/coding/v1/usages",
+            "https://auth.kimi.com/api/oauth/token",
+            "https://api.kimi.com/coding/v1/usages",
+        ])
+        #expect(
+            String(decoding: requests[1].httpBody ?? Data(), as: UTF8.self)
+                == "client_id=17e5f671-d194-4dfb-9706-5516cb48c098&grant_type=refresh_token&refresh_token=old-refresh"
+        )
+        let credentialURL = directory
+            .appendingPathComponent(".kimi-code/credentials/kimi-code.json")
+        let stored = try #require(
+            try JSONSerialization.jsonObject(
+                with: Data(contentsOf: credentialURL)
+            ) as? [String: Any]
+        )
+        #expect(stored["access_token"] as? String == "rotated-access")
+        #expect(stored["refresh_token"] as? String == "rotated-refresh")
+        #expect(stored["expires_at"] as? Double == 1_800_000_900)
+        let permissions = try FileManager.default.attributesOfItem(
+            atPath: credentialURL.path
+        )[.posixPermissions] as? NSNumber
+        #expect(permissions?.intValue == 0o600)
+    }
+
     @Test("OpenRouter keeps official purchased and used credit amounts")
     func openRouterCredits() async throws {
         let recorder = QuotaRequestRecorder()
@@ -508,6 +728,58 @@ struct AgentQuotaAdapterTests {
         #expect(!String(describing: provider).contains("backup-secret"))
     }
 
+    @Test("Qwen current settings schema resolves OpenRouter from the selected model endpoint")
+    func qwenCurrentSettingsProvider() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "breath-qwen-current-provider-\(UUID())",
+                isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        try FileManager.default.createDirectory(
+            at: temporaryDirectory,
+            withIntermediateDirectories: true
+        )
+        let settingsURL = temporaryDirectory.appendingPathComponent("settings.json")
+        try Data(
+            """
+            {
+              "security": {
+                "auth": {
+                  "selectedType": "openai"
+                }
+              },
+              "model": {
+                "name": "deepseek/deepseek-chat",
+                "baseUrl": "https://openrouter.ai/api/v1"
+              },
+              "modelProviders": {
+                "openai": [
+                  {
+                    "id": "deepseek/deepseek-chat",
+                    "baseUrl": "https://openrouter.ai/api/v1",
+                    "envKey": "OPENROUTER_API_KEY"
+                  }
+                ]
+              }
+            }
+            """.utf8
+        ).write(to: settingsURL)
+        let resolver = CurrentQuotaProviderResolver(
+            settingsURLs: [settingsURL],
+            authURL: nil,
+            environment: [
+                "OPENROUTER_API_KEY": "selected-secret",
+            ]
+        )
+
+        let provider = try #require(resolver.resolve())
+
+        #expect(provider.id == "openrouter")
+        #expect(provider.name == "OpenRouter")
+        #expect(provider.credential != nil)
+    }
+
     @Test("official CLI text decoder keeps percentage direction and amount units")
     func officialCLIQuotaText() throws {
         let snapshot = try AgentQuotaCLITextDecoder.decode(
@@ -541,6 +813,59 @@ struct AgentQuotaAdapterTests {
 
         #expect(snapshot.windows.first?.resetsAt == nil)
         #expect(snapshot.windows.first?.resetDescription == "resets in 2 hours")
+    }
+
+    @Test("official CLI decoder reads Claude subscription usage screen")
+    func officialCLIReadsClaudeUsageScreen() throws {
+        let snapshot = try AgentQuotaCLITextDecoder.decode(
+            """
+            Current session
+            [=================                                 ] 34% used
+            Resets in 2 hours
+
+            Current week (all models)
+            [====================================              ] 72% used
+            Resets Aug 1 at 9:00 AM
+            """,
+            providerName: "Anthropic"
+        )
+
+        #expect(snapshot.windows.map(\.name) == ["5 小时", "每周"])
+        #expect(snapshot.windows.map(\.value) == [
+            .percentage(value: 34, direction: .used),
+            .percentage(value: 72, direction: .used),
+        ])
+        #expect(snapshot.windows.map(\.resetDescription) == [
+            "Resets in 2 hours",
+            "Resets Aug 1 at 9:00 AM",
+        ])
+    }
+
+    @Test("official CLI decoder reads multiline TUI quota groups")
+    func officialCLIMultilineQuotaGroups() throws {
+        let snapshot = try AgentQuotaCLITextDecoder.decode(
+            """
+            \u{001B}[32mGEMINI MODELS\u{001B}[0m
+            Weekly Limit
+            [====================] 93.79%
+            94% remaining · Refreshes in 155h 41m
+
+            CLAUDE AND GPT MODELS
+            Weekly Limit
+            [===============     ] 73.41%
+            73% remaining · Refreshes in 46h 38m
+            """,
+            providerName: "Google Antigravity"
+        )
+
+        #expect(snapshot.windows.map(\.name) == [
+            "Gemini · 每周",
+            "Claude / GPT · 每周",
+        ])
+        #expect(snapshot.windows.map(\.value) == [
+            .percentage(value: 94, direction: .remaining),
+            .percentage(value: 73, direction: .remaining),
+        ])
     }
 
     @Test("official CLI fallback sends only the local quota command")
@@ -600,6 +925,64 @@ struct AgentQuotaAdapterTests {
         #expect(status == .failed("额度响应格式无法识别。"))
     }
 
+    @Test("Claude API-billing sessions report unsupported account quota")
+    func claudeAPIBillingIsUnsupported() async {
+        let runner = AgentQuotaCommandRunner { _, _, _ in
+            AgentQuotaCommandOutput(
+                data: Data(
+                    """
+                    Welcome back!
+                    deepseek-v4-pro · API Usage Billing
+                    Settings  Status  Config  Usage  Stats
+                    Session
+                    Total cost: $0.0000
+                    """.utf8
+                ),
+                exitCode: 0
+            )
+        }
+
+        let status = await AgentQuotaOfficialCLIAdapter.query(
+            agent: .claudeCode,
+            providerName: "Anthropic",
+            command: "/usage",
+            commandRunner: runner
+        )
+
+        #expect(status == .unsupported)
+    }
+
+    @Test("a cleanup command error does not discard an already parsed quota")
+    func officialCLICleanupErrorAfterQuota() async {
+        let runner = AgentQuotaCommandRunner { _, _, _ in
+            AgentQuotaCommandOutput(
+                data: Data(
+                    """
+                    5-hour: 34% used
+                    unknown command: /exit
+                    """.utf8
+                ),
+                exitCode: 1
+            )
+        }
+
+        let status = await AgentQuotaOfficialCLIAdapter.query(
+            agent: .factoryDroid,
+            providerName: "Factory",
+            command: "/limits",
+            commandRunner: runner
+        )
+
+        guard case let .available(snapshot) = status else {
+            Issue.record("Expected parsed quota, got \(status)")
+            return
+        }
+        #expect(snapshot.windows.first?.value == .percentage(
+            value: 34,
+            direction: .used
+        ))
+    }
+
     @Test("Claude does not infer warning state from percentage values")
     func claudeDoesNotInferWarningThreshold() throws {
         let snapshot = try ClaudeAgentQuotaAdapter.decode(
@@ -618,11 +1001,51 @@ struct AgentQuotaAdapterTests {
     }
 }
 
+private func writeKimiCredential(
+    homeDirectory: URL,
+    accessToken: String,
+    refreshToken: String
+) throws {
+    let directory = homeDirectory
+        .appendingPathComponent(".kimi-code/credentials", isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true
+    )
+    let url = directory.appendingPathComponent("kimi-code.json")
+    try Data(
+        """
+        {
+          "access_token": "\(accessToken)",
+          "refresh_token": "\(refreshToken)",
+          "expires_at": 1,
+          "expires_in": 900,
+          "scope": "kimi-code",
+          "token_type": "Bearer"
+        }
+        """.utf8
+    ).write(to: url)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o600],
+        ofItemAtPath: url.path
+    )
+}
+
 private actor QuotaRequestRecorder {
     private(set) var request: URLRequest?
 
     func record(_ request: URLRequest) {
         self.request = request
+    }
+}
+
+private actor QuotaRequestSequenceRecorder {
+    private(set) var requests: [URLRequest] = []
+
+    func record(_ request: URLRequest) -> Int {
+        let index = requests.count
+        requests.append(request)
+        return index
     }
 }
 

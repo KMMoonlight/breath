@@ -211,8 +211,8 @@ struct AgentCLIInstallationStatusTests {
         )
     }
 
-    @Test("quota capability respects the supported Agent CLI minimum version")
-    func quotaCapabilityRequiresMinimumVersion() throws {
+    @Test("detector reports whether an Agent meets the global integration minimum")
+    func detectorChecksGlobalIntegrationMinimumVersion() throws {
         let temporaryDirectory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
         try writeExecutable(

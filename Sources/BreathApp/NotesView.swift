@@ -14,9 +14,8 @@ struct NotesView: View {
     @State private var filter = ""
     @State private var expandedPaths: Set<String> = []
     @State private var selectedPaths: Set<String> = []
+    @State private var isLibraryRootExpanded = true
     @State private var fileTreeHasFocus = false
-    @State private var sortKey: NoteSortKey = .name
-    @State private var sortAscending = true
     @State private var findQuery = ""
     @State private var findRevision = 0
     @State private var findBackwards = false
@@ -33,6 +32,11 @@ struct NotesView: View {
     @State private var pendingLibraryURL: URL?
     @State private var agentDrawerWidth: CGFloat = 420
     @State private var agentDrawerDragStart: CGFloat?
+    @State private var isDocumentOutlinePresented = false
+    @State private var activeHeadingIndex: Int?
+    @State private var hoveredOutlineHeadingIndex: Int?
+    @State private var headingNavigationIndex: Int?
+    @State private var headingNavigationRevision = 0
 
     init(applicationModel: BreathApplicationModel) {
         self.applicationModel = applicationModel
@@ -62,6 +66,10 @@ struct NotesView: View {
                 expandParents(of: path)
                 model.consumeInlineRenameRequest()
             }
+            .onChange(of: model.snapshot.selectedDocumentID) {
+                activeHeadingIndex = nil
+                headingNavigationIndex = nil
+            }
     }
 
     private var notesLayout: some View {
@@ -84,8 +92,8 @@ struct NotesView: View {
                             ),
                             minimumPosition: .points(180),
                             maximumPosition: .points(420),
-                            minimumSecondLength: 420,
-                            drawsDivider: false,
+                            minimumSecondLength: 600,
+                            drawsDivider: true,
                             updatesPosition: true,
                             onResize: { fraction in
                                 let availableWidth = notesContentWidth(
@@ -107,7 +115,7 @@ struct NotesView: View {
                                 .frame(minWidth: 180, maxWidth: 420)
                         } second: {
                             editorArea
-                                .frame(minWidth: 420, maxWidth: .infinity)
+                                .frame(minWidth: 600, maxWidth: .infinity)
                         }
                         if applicationModel.noteAgentModel.isDrawerPresented {
                             agentDrawerDivider(
@@ -312,15 +320,30 @@ struct NotesView: View {
 
     private var notesToolbar: some View {
         HStack(spacing: 10) {
-            Text(model.snapshot.library?.displayName ?? "笔记")
-                .font(.headline)
-                .lineLimit(1)
             if let library = model.snapshot.library {
-                Text(library.rootPath)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                Menu {
+                    Button {
+                        revealLibraryInFinder()
+                    } label: {
+                        Label("在 Finder 中显示", systemImage: "folder")
+                    }
+                    Divider()
+                    Button {
+                        chooseLibrary()
+                    } label: {
+                        Label("更换笔记库…", systemImage: "folder.badge.gearshape")
+                    }
+                } label: {
+                    Text(library.displayName)
+                        .font(.headline)
+                        .lineLimit(1)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("笔记库选项")
+            } else {
+                Text("笔记")
+                    .font(.headline)
             }
             switch model.snapshot.searchIndexStatus {
             case .ready:
@@ -336,50 +359,11 @@ struct NotesView: View {
                     .help("笔记文件仍可正常编辑和保存")
             }
             Spacer()
-            if model.selectedDocument != nil {
-                Button {
-                    showsDocumentFind.toggle()
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                }
-                .help("在当前笔记中查找（⌘F）")
-
-                Button {
-                    model.toggleSourceMode()
-                } label: {
-                    Image(systemName: "chevron.left.forwardslash.chevron.right")
-                }
-                .help("切换 Markdown 源码（⌘/）")
-                .keyboardShortcut("/", modifiers: .command)
-                .disabled(model.selectedDocument?.kind == .plainText)
-
-                Button {
-                    model.saveSelectedDocument()
-                } label: {
-                    Image(systemName: "square.and.arrow.down")
-                }
-                .help("保存（⌘S）")
-                .keyboardShortcut("s", modifiers: .command)
-            }
-            Button {
-                model.refresh()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .help("刷新笔记库")
-
-            Button {
-                chooseLibrary()
-            } label: {
-                Image(systemName: "folder.badge.gearshape")
-            }
-            .help("更换笔记库")
-
             Button {
                 applicationModel.noteAgentModel.isDrawerPresented.toggle()
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "terminal")
+                    Image(systemName: "sparkles")
                     if applicationModel.noteAgentModel.status != .idle {
                         Circle()
                             .fill(
@@ -420,6 +404,11 @@ struct NotesView: View {
             .keyboardShortcut("f", modifiers: .command)
 
             Button("") {
+                model.saveSelectedDocument()
+            }
+            .keyboardShortcut("s", modifiers: .command)
+
+            Button("") {
                 sidebarMode = .search
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
@@ -448,7 +437,7 @@ struct NotesView: View {
         BreathEmptyState(
             title: "笔记库不可访问",
             systemImage: "externaldrive.badge.exclamationmark",
-            message: model.snapshot.library?.rootPath ?? ""
+            message: "原笔记库目录目前不可用。"
         ) {
             HStack {
                 Button("重试") { model.refresh() }
@@ -471,8 +460,6 @@ struct NotesView: View {
             switch sidebarMode {
             case .files:
                 fileBrowser
-            case .outline:
-                outline
             case .search:
                 librarySearch
             }
@@ -482,37 +469,24 @@ struct NotesView: View {
 
     private var sidebarHeader: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $sidebarMode) {
-                Text("文件").tag(SidebarMode.files)
-                Text("大纲").tag(SidebarMode.outline)
-                Text("搜索").tag(SidebarMode.search)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 8)
-            .frame(height: NotesLayout.navigationBarHeight)
+            HStack(spacing: 6) {
+                Text(sidebarMode == .files ? "文件" : "搜索")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
 
-            Divider()
+                Button {
+                    sidebarMode = sidebarMode == .files ? .search : .files
+                } label: {
+                    Image(
+                        systemName: sidebarMode == .files
+                            ? "magnifyingglass"
+                            : "xmark"
+                    )
+                }
+                .help(sidebarMode == .files ? "搜索笔记库（⇧⌘F）" : "返回文件树")
 
-            if sidebarMode == .files {
-                HStack(spacing: 6) {
-                    TextField("筛选文件", text: $filter)
-                        .textFieldStyle(.roundedBorder)
-                    Menu {
-                        Picker("排序", selection: $sortKey) {
-                            Text("名称").tag(NoteSortKey.name)
-                            Text("修改时间").tag(NoteSortKey.modified)
-                            Text("创建时间").tag(NoteSortKey.created)
-                        }
-                        Divider()
-                        Button(sortAscending ? "降序" : "升序") {
-                            sortAscending.toggle()
-                        }
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                    }
-                    .menuStyle(.borderlessButton)
-                    .frame(width: 24)
-
+                if sidebarMode == .files {
                     Menu {
                         Button {
                             model.createMarkdownDocument(
@@ -536,19 +510,22 @@ struct NotesView: View {
                         Image(systemName: "plus")
                     }
                     .menuStyle(.borderlessButton)
-                    .frame(width: 24)
+                    .menuIndicator(.hidden)
+                    .frame(width: 22)
                     .help("新建笔记或文件夹")
-
-                    Button {
-                        model.undoLastFileOperation()
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                    }
-                    .help("撤销上一次文件操作")
                 }
-                .buttonStyle(.borderless)
-                .padding(.horizontal, 8)
-                .frame(height: NotesLayout.navigationBarHeight)
+            }
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 8)
+            .frame(height: NotesLayout.navigationBarHeight)
+
+            Divider()
+
+            if sidebarMode == .files {
+                TextField("筛选文件", text: $filter)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal, 8)
+                    .frame(height: NotesLayout.navigationBarHeight)
 
                 Divider()
             }
@@ -558,34 +535,36 @@ struct NotesView: View {
     private var fileBrowser: some View {
         VStack(spacing: 0) {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
-                    ForEach(filteredEntries) { entry in
-                        NoteLibraryEntryRow(
-                            entry: entry,
-                            level: 0,
-                            expandedPaths: $expandedPaths,
-                            selectedPaths: $selectedPaths,
-                            inlineRenamingPath: $inlineRenamingPath,
-                            inlineRenameValue: $inlineRenameValue,
-                            onOpen: model.open,
-                            onCreateNote: {
-                                model.createMarkdownDocument(
-                                    in: directoryPath(for: $0)
-                                )
-                            },
-                            onCreateFolder: {
-                                model.createFolder(in: directoryPath(for: $0))
-                            },
-                            onRename: beginRename,
-                            onCommitInlineRename: commitInlineRename,
-                            onMove: requestMove,
-                            onDelete: requestDelete,
-                            onReveal: revealInFinder,
-                            onCopy: copyFileReferences
-                        )
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    libraryRootRow
+                    if isLibraryRootExpanded {
+                        ForEach(filteredEntries) { entry in
+                            NoteLibraryEntryRow(
+                                entry: entry,
+                                level: 1,
+                                expandedPaths: $expandedPaths,
+                                selectedPaths: $selectedPaths,
+                                inlineRenamingPath: $inlineRenamingPath,
+                                inlineRenameValue: $inlineRenameValue,
+                                onOpen: model.open,
+                                onCreateNote: {
+                                    model.createMarkdownDocument(
+                                        in: directoryPath(for: $0)
+                                    )
+                                },
+                                onCreateFolder: {
+                                    model.createFolder(in: directoryPath(for: $0))
+                                },
+                                onRename: beginRename,
+                                onCommitInlineRename: commitInlineRename,
+                                onMove: requestMove,
+                                onDelete: requestDelete,
+                                onReveal: revealInFinder,
+                                onCopy: copyFileReferences
+                            )
+                        }
                     }
                 }
-                .padding(.horizontal, 6)
                 .padding(.bottom, 8)
             }
             .dropDestination(for: URL.self) { urls, _ in
@@ -604,29 +583,276 @@ struct NotesView: View {
         }
     }
 
-    private var outline: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 4) {
-                ForEach(currentHeadings, id: \.offset) { heading in
-                    Button {
-                        findQuery = heading.title
-                        findBackwards = false
-                        findRevision += 1
-                    } label: {
-                        Text(heading.title)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .padding(
-                                .leading,
-                                CGFloat(max(0, heading.level - 1)) * 12
-                            )
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
+    private var libraryRootRow: some View {
+        Button {
+            selectedPaths.removeAll()
+            isLibraryRootExpanded.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(
+                    systemName: isLibraryRootExpanded
+                        ? "chevron.down"
+                        : "chevron.right"
+                )
+                .font(.system(size: 9, weight: .semibold))
+                .frame(width: 12)
+                Image(systemName: isLibraryRootExpanded ? "folder.fill" : "folder")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14)
+                Text(model.snapshot.library?.displayName ?? "笔记库")
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .contentShape(Rectangle())
+            .background {
+                if selectedPaths.isEmpty {
+                    Color.accentColor.opacity(0.18)
                 }
             }
-            .padding(10)
         }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("新建 Markdown") {
+                model.createMarkdownDocument()
+            }
+            Button("新建文件夹") {
+                model.createFolder()
+            }
+            Divider()
+            Button("在 Finder 中显示") {
+                revealLibraryInFinder()
+            }
+            Button("更换笔记库…") {
+                chooseLibrary()
+            }
+        }
+        .accessibilityLabel(model.snapshot.library?.displayName ?? "笔记库")
+        .accessibilityValue(isLibraryRootExpanded ? "已展开" : "已折叠")
+    }
+
+    private var documentOutlineControl: some View {
+        ZStack(alignment: .topTrailing) {
+            if isDocumentOutlinePresented {
+                documentOutline
+                    .frame(width: NotesLayout.outlineWidth)
+                    .padding(
+                        .trailing,
+                        NotesLayout.outlineRailWidth
+                            + NotesLayout.outlineRailGap
+                    )
+                    .transition(
+                        .opacity.combined(with: .move(edge: .trailing))
+                    )
+            }
+
+            Button {
+                isDocumentOutlinePresented = true
+            } label: {
+                documentOutlineRail
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("显示大纲")
+            .help("悬停查看大纲")
+        }
+        .frame(
+            width: isDocumentOutlinePresented
+                ? NotesLayout.outlineWidth
+                    + NotesLayout.outlineRailGap
+                    + NotesLayout.outlineRailWidth
+                : NotesLayout.outlineRailWidth,
+            alignment: .trailing
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.14)) {
+                isDocumentOutlinePresented = hovering
+            }
+        }
+        .onExitCommand {
+            isDocumentOutlinePresented = false
+        }
+    }
+
+    private var documentOutlineRail: some View {
+        Group {
+            if outlineRailContentHeight > NotesLayout.outlineMaximumHeight {
+                ScrollView(.vertical) {
+                    documentOutlineRailMarks
+                }
+                .scrollIndicators(.hidden)
+                .frame(height: NotesLayout.outlineMaximumHeight)
+            } else {
+                documentOutlineRailMarks
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(width: NotesLayout.outlineRailWidth)
+        .contentShape(Rectangle())
+    }
+
+    private var documentOutlineRailMarks: some View {
+        VStack(alignment: .leading, spacing: NotesLayout.outlineRailMarkSpacing) {
+            ForEach(currentHeadings.indices, id: \.self) { index in
+                let heading = currentHeadings[index]
+                Capsule()
+                    .fill(
+                        index == activeHeadingIndex
+                            ? Color.accentColor.opacity(0.82)
+                            : Color.secondary.opacity(
+                                heading.level == 1 ? 0.28 : 0.14
+                            )
+                    )
+                    .frame(
+                        width: outlineRailMarkWidth(
+                            level: heading.level,
+                            title: heading.title
+                        ),
+                        height: NotesLayout.outlineRailMarkHeight
+                    )
+            }
+        }
+        .padding(.horizontal, NotesLayout.outlineRailHorizontalPadding)
+        .padding(.vertical, NotesLayout.outlineRailVerticalPadding)
+    }
+
+    private var documentOutline: some View {
+        Group {
+            if outlineContentHeight > NotesLayout.outlineMaximumHeight {
+                ScrollView(.vertical) {
+                    documentOutlineRows
+                }
+                .frame(height: NotesLayout.outlineMaximumHeight)
+            } else {
+                documentOutlineRows
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .background {
+            RoundedRectangle(cornerRadius: 11)
+                .fill(Color(nsColor: .windowBackgroundColor))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 11)
+                        .fill(
+                            Color.primary.opacity(
+                                colorScheme == .dark ? 0.08 : 0.025
+                            )
+                        )
+                }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 11)
+                .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.24), radius: 14, y: 5)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("大纲")
+    }
+
+    private var documentOutlineRows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(currentHeadings.indices, id: \.self) { index in
+                let heading = currentHeadings[index]
+                Button {
+                    activeHeadingIndex = index
+                    headingNavigationIndex = index
+                    headingNavigationRevision += 1
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        Capsule()
+                            .fill(
+                                index == activeHeadingIndex
+                                    ? Color.accentColor.opacity(0.92)
+                                    : Color.primary.opacity(0.28)
+                            )
+                            .frame(
+                                width: max(
+                                    8,
+                                    20 - CGFloat(heading.level * 2)
+                                ),
+                                height: 2
+                            )
+                        Text(heading.title)
+                            .font(.caption)
+                            .foregroundStyle(
+                                Color.primary.opacity(
+                                    index == activeHeadingIndex ? 1 : 0.74
+                                )
+                            )
+                            .lineLimit(1)
+                            .frame(
+                                maxWidth: .infinity,
+                                alignment: .leading
+                            )
+                        Text("H\(heading.level)")
+                            .font(
+                                .system(
+                                    size: 8,
+                                    weight: .medium,
+                                    design: .monospaced
+                                )
+                            )
+                            .foregroundStyle(
+                                Color.primary.opacity(
+                                    index == activeHeadingIndex ? 0.7 : 0.4
+                                )
+                            )
+                    }
+                    .padding(.horizontal, 7)
+                    .frame(height: NotesLayout.outlineRowHeight)
+                    .background {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(
+                                index == activeHeadingIndex
+                                    ? Color.accentColor.opacity(0.16)
+                                    : Color.primary.opacity(
+                                        hoveredOutlineHeadingIndex == index
+                                            ? 0.07
+                                            : 0
+                                    )
+                            )
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hovering in
+                    if hovering {
+                        hoveredOutlineHeadingIndex = index
+                        NSCursor.pointingHand.push()
+                    } else {
+                        if hoveredOutlineHeadingIndex == index {
+                            hoveredOutlineHeadingIndex = nil
+                        }
+                        NSCursor.pop()
+                    }
+                }
+            }
+        }
+    }
+
+    private var outlineContentHeight: CGFloat {
+        CGFloat(currentHeadings.count) * NotesLayout.outlineRowHeight
+    }
+
+    private var outlineRailContentHeight: CGFloat {
+        guard !currentHeadings.isEmpty else { return 0 }
+        return CGFloat(currentHeadings.count)
+            * NotesLayout.outlineRailMarkHeight
+            + CGFloat(currentHeadings.count - 1)
+                * NotesLayout.outlineRailMarkSpacing
+            + NotesLayout.outlineRailVerticalPadding * 2
+    }
+
+    private func outlineRailMarkWidth(level: Int, title: String) -> CGFloat {
+        let titleWidth = CGFloat(min(title.count, 18))
+        let hierarchyReduction = CGFloat(max(0, level - 1)) * 2
+        return min(
+            NotesLayout.outlineRailMaximumMarkWidth,
+            max(10, 14 + titleWidth - hierarchyReduction)
+        )
     }
 
     private var librarySearch: some View {
@@ -678,44 +904,32 @@ struct NotesView: View {
         VStack(spacing: 0) {
             noteTabBar
             Divider()
-            if showsDocumentFind, model.selectedDocument != nil {
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("在当前笔记中查找", text: $findQuery)
-                        .textFieldStyle(.plain)
-                        .onSubmit {
-                            requestNextFind(backwards: false)
-                        }
-                    Button {
-                        requestNextFind(backwards: true)
-                    } label: {
-                        Image(systemName: "chevron.up")
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(findQuery.isEmpty)
-                    Button {
-                        requestNextFind(backwards: false)
-                    } label: {
-                        Image(systemName: "chevron.down")
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(findQuery.isEmpty)
-                    Button {
-                        showsDocumentFind = false
-                        findQuery = ""
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 10)
-                .frame(height: 32)
-                Divider()
-            }
             if let document = model.selectedDocument {
                 documentStateBanner(document)
-                editor(document)
+                ZStack(alignment: .topTrailing) {
+                    editor(document)
+                        .frame(minWidth: 400, maxWidth: .infinity)
+                    if document.kind == .markdown,
+                       !currentHeadings.isEmpty
+                    {
+                        GeometryReader { geometry in
+                            documentOutlineControl
+                                .padding(.top, NotesLayout.outlineTopInset)
+                                .padding(
+                                    .trailing,
+                                    outlineTrailingInset(
+                                        for: geometry.size.width
+                                    )
+                                )
+                                .frame(
+                                    maxWidth: .infinity,
+                                    maxHeight: .infinity,
+                                    alignment: .topTrailing
+                                )
+                        }
+                    }
+                }
+                editorBottomBar(document)
             } else if let imageURL = model.previewedImageURL,
                       let image = NSImage(contentsOf: imageURL)
             {
@@ -735,6 +949,71 @@ struct NotesView: View {
         }
         .onTapGesture {
             fileTreeHasFocus = false
+        }
+    }
+
+    private func editorBottomBar(_ document: NoteDocument) -> some View {
+        Group {
+            if showsDocumentFind {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("在当前笔记中查找", text: $findQuery)
+                        .textFieldStyle(.plain)
+                        .onSubmit {
+                            requestNextFind(backwards: false)
+                        }
+                    Button {
+                        requestNextFind(backwards: true)
+                    } label: {
+                        Image(systemName: "chevron.up")
+                    }
+                    .disabled(findQuery.isEmpty)
+                    Button {
+                        requestNextFind(backwards: false)
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .disabled(findQuery.isEmpty)
+                    Button {
+                        showsDocumentFind = false
+                        findQuery = ""
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                }
+            } else {
+                HStack(spacing: 12) {
+                    Spacer()
+                    Button {
+                        showsDocumentFind = true
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .help("在当前笔记中查找（⌘F）")
+
+                    Button {
+                        model.toggleSourceMode()
+                    } label: {
+                        Image(
+                            systemName:
+                                "chevron.left.forwardslash.chevron.right"
+                        )
+                    }
+                    .help("切换 Markdown 源码（⌘/）")
+                    .keyboardShortcut("/", modifiers: .command)
+                    .disabled(document.kind == .plainText)
+                }
+            }
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 10)
+        .frame(height: NotesLayout.utilityBarHeight)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 1)
         }
     }
 
@@ -780,10 +1059,19 @@ struct NotesView: View {
                 findQuery: findQuery.isEmpty ? nil : findQuery,
                 findRevision: findRevision,
                 findBackwards: findBackwards,
+                headingNavigationIndex: headingNavigationIndex,
+                headingNavigationRevision: headingNavigationRevision,
                 onChange: {
                     model.updateDocument(document.id, content: $0)
                 },
                 onOpenLink: openLink,
+                onActiveHeadingChange: { index in
+                    guard model.snapshot.selectedDocumentID == document.id
+                    else {
+                        return
+                    }
+                    activeHeadingIndex = index
+                },
                 onImportAttachment: { data, filename in
                     await model.importAttachment(
                         data: data,
@@ -918,10 +1206,9 @@ struct NotesView: View {
     }
 
     private var filteredEntries: [NoteLibraryEntry] {
-        let filtered = filter.isEmpty
+        filter.isEmpty
             ? model.snapshot.entries
             : model.snapshot.entries.compactMap(filtered)
-        return sorted(filtered)
     }
 
     private func filtered(_ entry: NoteLibraryEntry) -> NoteLibraryEntry? {
@@ -939,44 +1226,6 @@ struct NotesView: View {
             creationDate: entry.creationDate,
             modificationDate: entry.modificationDate
         )
-    }
-
-    private func sorted(_ entries: [NoteLibraryEntry]) -> [NoteLibraryEntry] {
-        entries.map {
-            NoteLibraryEntry(
-                relativePath: $0.relativePath,
-                name: $0.name,
-                kind: $0.kind,
-                children: sorted($0.children),
-                creationDate: $0.creationDate,
-                modificationDate: $0.modificationDate
-            )
-        }.sorted { lhs, rhs in
-            if (lhs.kind == .folder) != (rhs.kind == .folder) {
-                return lhs.kind == .folder
-            }
-            let result: ComparisonResult
-            switch sortKey {
-            case .name:
-                result = lhs.name.localizedStandardCompare(rhs.name)
-            case .modified:
-                result = compare(lhs.modificationDate, rhs.modificationDate)
-            case .created:
-                result = compare(lhs.creationDate, rhs.creationDate)
-            }
-            return sortAscending
-                ? result == .orderedAscending
-                : result == .orderedDescending
-        }
-    }
-
-    private func compare(_ lhs: Date?, _ rhs: Date?) -> ComparisonResult {
-        switch (lhs, rhs) {
-        case let (lhs?, rhs?): lhs.compare(rhs)
-        case (nil, nil): .orderedSame
-        case (nil, _): .orderedAscending
-        case (_, nil): .orderedDescending
-        }
     }
 
     private var currentHeadings:
@@ -1004,6 +1253,26 @@ struct NotesView: View {
         colorScheme == .dark
             ? model.snapshot.preferences.darkTheme
             : model.snapshot.preferences.lightTheme
+    }
+
+    private func outlineTrailingInset(for editorWidth: CGFloat) -> CGFloat {
+        let availableContentWidth = max(
+            0,
+            editorWidth - NotesLayout.editorHorizontalPadding * 2
+        )
+        let contentWidth = min(
+            availableContentWidth,
+            NotesLayout.editorContentWidth(for: currentTheme)
+        )
+        let contentTrailingEdge = (editorWidth + contentWidth) / 2
+        let desiredRailTrailingEdge =
+            contentTrailingEdge
+            + NotesLayout.outlineTextGap
+            + NotesLayout.outlineRailWidth
+        return max(
+            NotesLayout.outlineInset,
+            editorWidth - desiredRailTrailingEdge
+        )
     }
 
     private var noteAgentButtonHelp: String {
@@ -1131,7 +1400,12 @@ struct NotesView: View {
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "选择笔记库"
+        panel.prompt = model.snapshot.library == nil
+            ? "选择笔记库"
+            : "更换笔记库"
+        panel.directoryURL = model.snapshot.library.map {
+            URL(fileURLWithPath: $0.rootPath, isDirectory: true)
+        }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         if model.hasDirtyDocuments
             || applicationModel.noteAgentModel.status != .idle
@@ -1140,6 +1414,13 @@ struct NotesView: View {
         } else {
             model.selectLibrary(url)
         }
+    }
+
+    private func revealLibraryInFinder() {
+        guard let library = model.snapshot.library else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([
+            URL(fileURLWithPath: library.rootPath, isDirectory: true),
+        ])
     }
 
     private var librarySwitchMessage: String {
@@ -1479,18 +1760,39 @@ struct NotesView: View {
 
 private enum NotesLayout {
     static let navigationBarHeight: CGFloat = 34
+    static let outlineWidth: CGFloat = 184
+    static let outlineInset: CGFloat = 16
+    static let outlineTopInset: CGFloat = 48
+    static let outlineRowHeight: CGFloat = 25
+    static let outlineMaximumHeight: CGFloat = 280
+    static let outlineRailWidth: CGFloat = 44
+    static let outlineRailGap: CGFloat = 6
+    static let outlineRailMarkHeight: CGFloat = 2
+    static let outlineRailMarkSpacing: CGFloat = 8
+    static let outlineRailMaximumMarkWidth: CGFloat = 30
+    static let outlineRailHorizontalPadding: CGFloat = 7
+    static let outlineRailVerticalPadding: CGFloat = 5
+    static let outlineTextGap: CGFloat = 10
+    static let editorHorizontalPadding: CGFloat = 32
+    static let utilityBarHeight: CGFloat = 32
+
+    static func editorContentWidth(for theme: NoteMarkdownTheme) -> CGFloat {
+        switch theme {
+        case .pixyll:
+            720
+        case .whitey:
+            760
+        case .gothic:
+            780
+        case .github, .newsprint, .night:
+            860
+        }
+    }
 }
 
 private enum SidebarMode {
     case files
-    case outline
     case search
-}
-
-private enum NoteSortKey {
-    case name
-    case modified
-    case created
 }
 
 private struct PendingTabClose {
@@ -1531,6 +1833,7 @@ private struct NoteLibraryEntryRow: View {
     let onReveal: (NoteLibraryEntry) -> Void
     let onCopy: (NoteLibraryEntry) -> Void
     @FocusState private var isInlineRenameFocused: Bool
+    @State private var isHovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -1557,8 +1860,23 @@ private struct NoteLibraryEntryRow: View {
                     onOpen(entry)
                 }
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
+                    if entry.kind == .folder {
+                        Image(
+                            systemName: expandedPaths.contains(entry.relativePath)
+                                ? "chevron.down"
+                                : "chevron.right"
+                        )
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 10)
+                    } else {
+                        Color.clear
+                            .frame(width: 10, height: 1)
+                    }
                     Image(systemName: iconName)
+                        .font(.system(size: 12))
+                        .foregroundStyle(iconColor)
                         .frame(width: 14)
                     if inlineRenamingPath == entry.relativePath {
                         TextField("", text: $inlineRenameValue)
@@ -1581,18 +1899,33 @@ private struct NoteLibraryEntryRow: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .padding(.leading, CGFloat(level) * 14)
-                .padding(.horizontal, 4)
-                .frame(height: 24)
+                .font(.system(size: 12.5))
+                .padding(.leading, 8 + CGFloat(level) * 13)
+                .padding(.trailing, 8)
+                .frame(height: 22)
                 .contentShape(Rectangle())
                 .background {
                     if selectedPaths.contains(entry.relativePath) {
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.accentColor.opacity(0.18))
+                        Color.accentColor.opacity(0.18)
+                    } else if isHovering {
+                        Color.primary.opacity(0.055)
+                    }
+                }
+                .overlay(alignment: .leading) {
+                    if level > 0 {
+                        HStack(spacing: 12) {
+                            ForEach(0..<level, id: \.self) { _ in
+                                Rectangle()
+                                    .fill(Color.secondary.opacity(0.16))
+                                    .frame(width: 1)
+                            }
+                        }
+                        .padding(.leading, 14)
                     }
                 }
             }
             .buttonStyle(.plain)
+            .onHover { isHovering = $0 }
             .draggable(entry.relativePath)
             .dropDestination(for: String.self) { paths, _ in
                 guard entry.kind == .folder else { return false }
@@ -1665,6 +1998,17 @@ private struct NoteLibraryEntryRow: View {
             "paperclip"
         }
     }
+
+    private var iconColor: Color {
+        switch entry.kind {
+        case .folder:
+            .secondary
+        case .markdown:
+            .accentColor
+        case .plainText, .image, .pdf, .attachment:
+            .secondary
+        }
+    }
 }
 
 private struct NoteAgentDrawer: View {
@@ -1676,11 +2020,18 @@ private struct NoteAgentDrawer: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Label("笔记 Agent", systemImage: "terminal")
+            HStack(spacing: 6) {
+                Label("笔记 Agent", systemImage: "sparkles")
                     .font(.headline)
+                Image(systemName: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help(noteAgentScopeHelp)
+                    .accessibilityLabel(noteAgentScopeHelp)
                 Spacer()
-                if model.status != .idle {
+                if model.status == .idle {
+                    idleAgentLauncher
+                } else {
                     Label(
                         model.status == .needsAttention ? "需要处理" : "运行中",
                         systemImage: model.status == .needsAttention
@@ -1749,81 +2100,95 @@ private struct NoteAgentDrawer: View {
                     systemImage: "terminal",
                     message: "安装 Breath 支持的 Agent CLI 后重新打开此抽屉。"
                 )
-            } else {
-                Text("Agent 将以整座笔记库为工作目录运行。Breath 不会注入当前笔记内容，也不会额外限制 CLI 权限。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Picker("Agent", selection: $selectedKind) {
-                    ForEach(model.availableAgents, id: \.kind) { adapter in
-                        Text(adapter.displayName)
-                            .tag(Optional(adapter.kind))
+            } else if let recovery = model.recoveryBinding,
+                      let adapter = model.availableAgents.first(where: {
+                          $0.kind == recovery.agent
+                      })
+            {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("上次对话")
+                        .font(.caption.weight(.semibold))
+                    Button("继续 \(adapter.displayName) 对话") {
+                        Task {
+                            await launch(
+                                adapter,
+                                resumeSessionID: recovery.sessionID
+                            )
+                        }
                     }
                 }
-
-                if let recovery = model.recoveryBinding,
-                   let adapter = model.availableAgents.first(where: {
-                       $0.kind == recovery.agent
-                   })
-                {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("上次对话")
-                            .font(.caption.weight(.semibold))
-                        Button("继续 \(adapter.displayName) 对话") {
-                            Task {
-                                await launch(
-                                    adapter,
-                                    resumeSessionID: recovery.sessionID
-                                )
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        Button("开始新对话") {
-                            Task {
-                                await launch(
-                                    selectedAdapter ?? adapter,
-                                    resumeSessionID: nil
-                                )
-                            }
-                        }
-                    }
-                } else if let selectedAdapter {
-                    HStack(spacing: 0) {
-                        Button("启动 \(selectedAdapter.displayName)") {
-                            Task {
-                                await launch(
-                                    selectedAdapter,
-                                    resumeSessionID: nil
-                                )
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        Menu {
-                            ForEach(model.availableAgents, id: \.kind) {
-                                adapter in
-                                Button(adapter.displayName) {
-                                    selectedKind = adapter.kind
-                                    Task {
-                                        await launch(
-                                            adapter,
-                                            resumeSessionID: nil
-                                        )
-                                    }
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "chevron.down")
-                        }
-                        .menuStyle(.borderlessButton)
-                        .frame(width: 28)
-                    }
-                }
-                Spacer()
+                .buttonStyle(.borderedProminent)
             }
+            Spacer()
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private var idleAgentLauncher: some View {
+        if let selectedAdapter {
+            HStack(spacing: 0) {
+                Button {
+                    Task {
+                        await launch(
+                            selectedAdapter,
+                            resumeSessionID: nil
+                        )
+                    }
+                } label: {
+                    Text("启动 \(selectedAdapter.displayName)")
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                        .frame(height: 26)
+                        .contentShape(Rectangle())
+                }
+                .help("使用 \(selectedAdapter.displayName) 启动新对话")
+
+                Divider()
+                    .frame(height: 14)
+
+                Menu {
+                    ForEach(model.availableAgents, id: \.kind) { adapter in
+                        Button {
+                            selectedKind = adapter.kind
+                        } label: {
+                            if adapter.kind == selectedAdapter.kind {
+                                Label(
+                                    adapter.displayName,
+                                    systemImage: "checkmark"
+                                )
+                            } else {
+                                Text(adapter.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .frame(width: 20, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help("选择 Agent")
+                .accessibilityLabel("选择 Agent")
+            }
+            .buttonStyle(.plain)
+            .fixedSize(horizontal: true, vertical: false)
+            .background(
+                Color(nsColor: .controlBackgroundColor),
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+            }
+        }
+    }
+
+    private var noteAgentScopeHelp: String {
+        "Agent 将以整座笔记库为工作目录运行。Breath 不会注入当前笔记内容，也不会额外限制 CLI 权限。"
     }
 
     private func runningTerminal(

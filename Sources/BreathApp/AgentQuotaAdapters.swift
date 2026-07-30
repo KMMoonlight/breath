@@ -22,6 +22,19 @@ struct AgentQuotaCredential: CustomStringConvertible, Sendable {
     }
 }
 
+struct KimiQuotaCredential: CustomStringConvertible, Sendable {
+    let accessToken: AgentQuotaSecret
+    let refreshToken: AgentQuotaSecret
+    let expiresAt: Date
+    let expiresIn: TimeInterval
+    let scope: String
+    let tokenType: String
+
+    var description: String {
+        "KimiQuotaCredential(accessToken: <redacted>, refreshToken: <redacted>, expiresAt: \(expiresAt), scope: \(scope), tokenType: \(tokenType))"
+    }
+}
+
 struct AgentQuotaHTTPClient: Sendable {
     private let send: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
@@ -156,6 +169,107 @@ struct AgentQuotaCredentialStore: Sendable {
         return AgentQuotaSecret(token)
     }
 
+    func kimiCredential() -> KimiQuotaCredential? {
+        guard let data = try? Data(contentsOf: kimiCredentialURL),
+              let wire = try? JSONDecoder().decode(KimiCredentialWire.self, from: data),
+              !wire.accessToken.isEmpty,
+              !wire.refreshToken.isEmpty
+        else {
+            return nil
+        }
+        return KimiQuotaCredential(
+            accessToken: AgentQuotaSecret(wire.accessToken),
+            refreshToken: AgentQuotaSecret(wire.refreshToken),
+            expiresAt: Date(timeIntervalSince1970: wire.expiresAt),
+            expiresIn: wire.expiresIn,
+            scope: wire.scope,
+            tokenType: wire.tokenType
+        )
+    }
+
+    func saveKimiCredential(_ credential: KimiQuotaCredential) throws {
+        let fileManager = FileManager.default
+        let directory = kimiCredentialURL.deletingLastPathComponent()
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: directory.path
+        )
+        let wire = KimiCredentialWire(
+            accessToken: credential.accessToken.value,
+            refreshToken: credential.refreshToken.value,
+            expiresAt: credential.expiresAt.timeIntervalSince1970,
+            scope: credential.scope,
+            tokenType: credential.tokenType,
+            expiresIn: credential.expiresIn
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        var data = try encoder.encode(wire)
+        data.append(0x0A)
+        let temporaryURL = directory.appendingPathComponent(
+            "kimi-code.json.tmp.\(ProcessInfo.processInfo.processIdentifier).\(UUID().uuidString)"
+        )
+        guard fileManager.createFile(
+            atPath: temporaryURL.path,
+            contents: nil,
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer { try? fileManager.removeItem(at: temporaryURL) }
+        let handle = try FileHandle(forWritingTo: temporaryURL)
+        do {
+            try handle.write(contentsOf: data)
+            try handle.synchronize()
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
+        if fileManager.fileExists(atPath: kimiCredentialURL.path) {
+            _ = try fileManager.replaceItemAt(
+                kimiCredentialURL,
+                withItemAt: temporaryURL
+            )
+        } else {
+            try fileManager.moveItem(
+                at: temporaryURL,
+                to: kimiCredentialURL
+            )
+        }
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: kimiCredentialURL.path
+        )
+    }
+
+    var kimiOAuthLockURL: URL {
+        kimiConfigurationDirectory
+            .appendingPathComponent("oauth", isDirectory: true)
+            .appendingPathComponent("kimi-code.lock", isDirectory: true)
+    }
+
+    private var kimiConfigurationDirectory: URL {
+        if let configuredPath = environment["KIMI_CODE_HOME"],
+           NSString(string: configuredPath).isAbsolutePath
+        {
+            return URL(fileURLWithPath: configuredPath, isDirectory: true)
+        }
+        return homeDirectory
+            .appendingPathComponent(".kimi-code", isDirectory: true)
+    }
+
+    private var kimiCredentialURL: URL {
+        kimiConfigurationDirectory
+            .appendingPathComponent("credentials", isDirectory: true)
+            .appendingPathComponent("kimi-code.json")
+    }
+
     private static func claudeAccessToken(in data: Data) -> String? {
         guard let object = try? JSONSerialization.jsonObject(with: data)
                 as? [String: Any]
@@ -180,6 +294,24 @@ struct AgentQuotaCredentialStore: Sendable {
         enum CodingKeys: String, CodingKey {
             case accessToken = "access_token"
             case accountID = "account_id"
+        }
+    }
+
+    private struct KimiCredentialWire: Codable {
+        let accessToken: String
+        let refreshToken: String
+        let expiresAt: TimeInterval
+        let scope: String
+        let tokenType: String
+        let expiresIn: TimeInterval
+
+        enum CodingKeys: String, CodingKey {
+            case accessToken = "access_token"
+            case refreshToken = "refresh_token"
+            case expiresAt = "expires_at"
+            case scope
+            case tokenType = "token_type"
+            case expiresIn = "expires_in"
         }
     }
 }
@@ -552,92 +684,176 @@ enum AgentQuotaCLITextDecoder {
         _ output: String,
         providerName: String
     ) throws -> AgentQuotaSnapshot {
-        var windows: [AgentQuotaWindow] = []
-        for rawLine in output.split(whereSeparator: \.isNewline) {
+        var parsedWindows: [ParsedWindow] = []
+        var currentContext: String?
+        var pendingWindow: (name: String, context: String?)?
+        for rawLine in plainText(output).split(whereSeparator: \.isNewline) {
             let line = String(rawLine)
-            guard let name = windowName(in: line) else { continue }
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            if let context = quotaContext(in: line) {
+                currentContext = context
+                pendingWindow = nil
+                continue
+            }
+            let lineWindowName = windowName(in: line)
+            if let lineWindowName {
+                pendingWindow = (lineWindowName, currentContext)
+            }
             let reset = resetDetails(in: line)
+            guard let value = quotaValue(in: line),
+                  let window = lineWindowName.map({
+                      (name: $0, context: currentContext)
+                  }) ?? pendingWindow
+            else {
+                if reset.date != nil || reset.description != nil,
+                   let index = parsedWindows.indices.last
+                {
+                    parsedWindows[index].resetsAt =
+                        reset.date ?? parsedWindows[index].resetsAt
+                    parsedWindows[index].resetDescription =
+                        reset.description
+                            ?? parsedWindows[index].resetDescription
+                }
+                continue
+            }
             let warning = line.range(
                 of: #"limit\s+reached|exhausted|depleted"#,
                 options: [.regularExpression, .caseInsensitive]
             ) != nil
-            if let percentage = firstMatch(
-                #"([0-9]+(?:\.[0-9]+)?)\s*%\s*(used|remaining)"#,
-                in: line
-            ), let value = Double(percentage[0]) {
-                windows.append(
-                    AgentQuotaWindow(
-                        name: name,
-                        value: .percentage(
-                            value: value,
-                            direction: percentage[1].lowercased() == "remaining"
-                                ? .remaining
-                                : .used
-                        ),
-                        resetsAt: reset.date,
-                        resetDescription: reset.description,
-                        warning: warning
-                    )
+            parsedWindows.append(
+                ParsedWindow(
+                    name: window.name,
+                    context: window.context,
+                    value: value,
+                    resetsAt: reset.date,
+                    resetDescription: reset.description,
+                    warning: warning
                 )
-                continue
-            }
-            if let percentage = firstMatch(
-                #"(used|remaining)[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*%"#,
-                in: line
-            ), let value = Double(percentage[1]) {
-                windows.append(
-                    AgentQuotaWindow(
-                        name: name,
-                        value: .percentage(
-                            value: value,
-                            direction: percentage[0].lowercased() == "remaining"
-                                ? .remaining
-                                : .used
-                        ),
-                        resetsAt: reset.date,
-                        resetDescription: reset.description,
-                        warning: warning
-                    )
-                )
-                continue
-            }
-            if let amount = firstMatch(
-                #"([0-9]+(?:\.[0-9]+)?)\s*(Credits?|requests?|tokens?|USD)"#,
-                in: line
-            ) {
-                windows.append(
-                    AgentQuotaWindow(
-                        name: name,
-                        value: .amount(
-                            value: amount[0],
-                            unit: amount[1]
-                        ),
-                        resetsAt: reset.date,
-                        resetDescription: reset.description,
-                        warning: warning
-                    )
-                )
-            }
+            )
+            pendingWindow = nil
         }
-        guard !windows.isEmpty else {
+        guard !parsedWindows.isEmpty else {
             throw AgentQuotaAdapterError.invalidResponse
         }
+        let nameCounts = Dictionary(
+            grouping: parsedWindows,
+            by: \.name
+        ).mapValues(\.count)
         return AgentQuotaSnapshot(
             providerName: providerName,
             maskedAccount: nil,
-            windows: windows
+            windows: parsedWindows.map { parsed in
+                let name: String
+                if nameCounts[parsed.name, default: 0] > 1,
+                   let context = parsed.context
+                {
+                    name = "\(context) · \(parsed.name)"
+                } else {
+                    name = parsed.name
+                }
+                return AgentQuotaWindow(
+                    name: name,
+                    value: parsed.value,
+                    resetsAt: parsed.resetsAt,
+                    resetDescription: parsed.resetDescription,
+                    warning: parsed.warning
+                )
+            }
+        )
+    }
+
+    private static func quotaValue(in line: String) -> AgentQuotaValue? {
+        if let percentage = firstMatch(
+            #"([0-9]+(?:\.[0-9]+)?)\s*%\s*(used|remaining)"#,
+            in: line
+        ), let value = Double(percentage[0]) {
+            return .percentage(
+                value: value,
+                direction: percentage[1].lowercased() == "remaining"
+                    ? .remaining
+                    : .used
+            )
+        }
+        if let percentage = firstMatch(
+            #"(used|remaining)[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*%"#,
+            in: line
+        ), let value = Double(percentage[1]) {
+            return .percentage(
+                value: value,
+                direction: percentage[0].lowercased() == "remaining"
+                    ? .remaining
+                    : .used
+            )
+        }
+        if let amount = firstMatch(
+            #"([0-9]+(?:\.[0-9]+)?)\s*(Credits?|requests?|tokens?|USD)"#,
+            in: line
+        ) {
+            return .amount(value: amount[0], unit: amount[1])
+        }
+        return nil
+    }
+
+    private static func quotaContext(in line: String) -> String? {
+        let lowercased = line.lowercased()
+        if lowercased.contains("claude and gpt models") {
+            return "Claude / GPT"
+        }
+        if lowercased.contains("gemini models") {
+            return "Gemini"
+        }
+        guard windowName(in: line) == nil,
+              line.rangeOfCharacter(from: .decimalDigits) == nil,
+              lowercased.contains("models")
+                || lowercased.contains("standard usage")
+                || lowercased.contains("droid core")
+        else {
+            return nil
+        }
+        return line.trimmingCharacters(
+            in: CharacterSet.alphanumerics
+                .union(.whitespaces)
+                .inverted
+        )
+    }
+
+    static func plainText(_ output: String) -> String {
+        output
+            .replacingOccurrences(
+                of: #"\x1B\][^\x07]*(?:\x07|\x1B\\)"#,
+                with: "",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"\x1B\[[0-?]*[ -/]*[@-~]"#,
+                with: "",
+                options: .regularExpression
+            )
+            .replacingOccurrences(of: "\r", with: "\n")
+    }
+
+    static func searchableText(_ output: String) -> String {
+        String(
+            plainText(output)
+                .lowercased()
+                .filter { $0.isLetter || $0.isNumber }
         )
     }
 
     private static func windowName(in line: String) -> String? {
         let lowercased = line.lowercased()
+        if lowercased.contains("current session") {
+            return "5 小时"
+        }
         if lowercased.range(
             of: #"\b5(?:-| )?(?:hour|hours|hr|hrs)\b|\b5h\b"#,
             options: .regularExpression
         ) != nil {
             return "5 小时"
         }
-        if lowercased.contains("weekly")
+        if lowercased.contains("current week")
+            || lowercased.contains("weekly")
             || lowercased.range(
                 of: #"\b7(?:-| )?day\b"#,
                 options: .regularExpression
@@ -683,7 +899,7 @@ enum AgentQuotaCLITextDecoder {
             }
         }
         let description = firstMatch(
-            #"((?:resets?|resetting)\b[^,;]*)$"#,
+            #"((?:resets?|resetting|refreshes?)\b[^,;]*)$"#,
             in: line
         )?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (
@@ -717,6 +933,15 @@ enum AgentQuotaCLITextDecoder {
             return String(string[range])
         }
     }
+
+    private struct ParsedWindow {
+        let name: String
+        let context: String?
+        let value: AgentQuotaValue
+        var resetsAt: Date?
+        var resetDescription: String?
+        let warning: Bool
+    }
 }
 
 enum ClaudeAgentQuotaAdapter {
@@ -726,8 +951,7 @@ enum ClaudeAgentQuotaAdapter {
         fallback: @escaping AgentQuotaQuery
     ) async -> AgentQuotaStatus {
         guard let credential = await credentialProvider() else {
-            let fallbackStatus = await fallback()
-            return fallbackStatus == .unsupported ? .notLoggedIn : fallbackStatus
+            return await fallback()
         }
         guard let url = URL(
             string: "https://api.anthropic.com/api/oauth/usage"
@@ -894,6 +1118,473 @@ enum ClaudeAgentQuotaAdapter {
             case monthlyLimit = "monthly_limit"
             case usedCredits = "used_credits"
             case utilization
+        }
+    }
+}
+
+enum KimiAgentQuotaAdapter {
+    private static let usageURL = URL(
+        string: "https://api.kimi.com/coding/v1/usages"
+    )!
+    private static let refreshURL = URL(
+        string: "https://auth.kimi.com/api/oauth/token"
+    )!
+    private static let clientID = "17e5f671-d194-4dfb-9706-5516cb48c098"
+
+    static func query(
+        credentialStore: AgentQuotaCredentialStore,
+        httpClient: AgentQuotaHTTPClient,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) async -> AgentQuotaStatus {
+        guard let credential = credentialStore.kimiCredential() else {
+            return .notLoggedIn
+        }
+        do {
+            switch try await fetchUsage(
+                credential: credential,
+                httpClient: httpClient
+            ) {
+            case let .available(snapshot):
+                return .available(snapshot)
+            case .unsupported:
+                return .unsupported
+            case .failed:
+                return .failed("额度查询失败。")
+            case .unauthorized:
+                break
+            }
+
+            let refreshed = try await refreshedCredential(
+                rejectedCredential: credential,
+                credentialStore: credentialStore,
+                httpClient: httpClient,
+                now: now
+            )
+            switch try await fetchUsage(
+                credential: refreshed,
+                httpClient: httpClient
+            ) {
+            case let .available(snapshot):
+                return .available(snapshot)
+            case .unauthorized:
+                return .notLoggedIn
+            case .unsupported:
+                return .unsupported
+            case .failed:
+                return .failed("额度查询失败。")
+            }
+        } catch is CancellationError {
+            return .failed("额度查询已取消。")
+        } catch KimiQuotaError.unauthorized {
+            return .notLoggedIn
+        } catch {
+            return .failed("额度查询失败。")
+        }
+    }
+
+    static func decode(_ data: Data) throws -> AgentQuotaSnapshot {
+        let response: UsageResponse
+        do {
+            response = try JSONDecoder().decode(UsageResponse.self, from: data)
+        } catch {
+            throw AgentQuotaAdapterError.invalidResponse
+        }
+
+        var windows: [AgentQuotaWindow] = []
+        if let summary = response.usage {
+            append(
+                summary,
+                named: "每周",
+                to: &windows
+            )
+        }
+        for limit in response.limits ?? [] {
+            guard let detail = limit.detail else { continue }
+            append(
+                detail,
+                named: windowName(
+                    window: limit.window,
+                    fallback: limit.name ?? detail.name
+                ),
+                to: &windows
+            )
+        }
+        appendExtraUsage(response.boosterWallet, to: &windows)
+        guard !windows.isEmpty else {
+            throw AgentQuotaAdapterError.invalidResponse
+        }
+        return AgentQuotaSnapshot(
+            providerName: "Kimi Code",
+            maskedAccount: nil,
+            windows: windows
+        )
+    }
+
+    private static func fetchUsage(
+        credential: KimiQuotaCredential,
+        httpClient: AgentQuotaHTTPClient
+    ) async throws -> UsageFetchResult {
+        var request = URLRequest(
+            url: usageURL,
+            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
+            timeoutInterval: 8
+        )
+        request.setValue(
+            "Bearer \(credential.accessToken.value)",
+            forHTTPHeaderField: "Authorization"
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await httpClient.data(for: request)
+        switch response.statusCode {
+        case 200..<300:
+            guard let snapshot = try? decode(data) else {
+                return .failed
+            }
+            return .available(snapshot)
+        case 401, 403:
+            return .unauthorized
+        case 404:
+            return .unsupported
+        default:
+            return .failed
+        }
+    }
+
+    private static func refreshedCredential(
+        rejectedCredential: KimiQuotaCredential,
+        credentialStore: AgentQuotaCredentialStore,
+        httpClient: AgentQuotaHTTPClient,
+        now: @escaping @Sendable () -> Date
+    ) async throws -> KimiQuotaCredential {
+        try await withCredentialLock(credentialStore: credentialStore) {
+            guard let latest = credentialStore.kimiCredential() else {
+                throw KimiQuotaError.unauthorized
+            }
+            if latest.accessToken.value != rejectedCredential.accessToken.value {
+                return latest
+            }
+
+            var request = URLRequest(
+                url: refreshURL,
+                cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
+                timeoutInterval: 8
+            )
+            request.httpMethod = "POST"
+            request.setValue(
+                "application/x-www-form-urlencoded",
+                forHTTPHeaderField: "Content-Type"
+            )
+            request.setValue(
+                "application/json",
+                forHTTPHeaderField: "Accept"
+            )
+            var components = URLComponents()
+            components.queryItems = [
+                URLQueryItem(name: "client_id", value: clientID),
+                URLQueryItem(name: "grant_type", value: "refresh_token"),
+                URLQueryItem(
+                    name: "refresh_token",
+                    value: latest.refreshToken.value
+                ),
+            ]
+            request.httpBody = Data(
+                (components.percentEncodedQuery ?? "").utf8
+            )
+            let (data, response) = try await httpClient.data(for: request)
+            let oauthError = try? JSONDecoder().decode(
+                OAuthErrorResponse.self,
+                from: data
+            )
+            if response.statusCode == 401
+                || response.statusCode == 403
+                || oauthError?.error == "invalid_grant"
+            {
+                throw KimiQuotaError.unauthorized
+            }
+            guard (200..<300).contains(response.statusCode),
+                  let wire = try? JSONDecoder().decode(
+                    RefreshResponse.self,
+                    from: data
+                  ),
+                  !wire.accessToken.isEmpty,
+                  !wire.refreshToken.isEmpty,
+                  wire.expiresIn.value > 0
+            else {
+                throw KimiQuotaError.refreshFailed
+            }
+            let credential = KimiQuotaCredential(
+                accessToken: AgentQuotaSecret(wire.accessToken),
+                refreshToken: AgentQuotaSecret(wire.refreshToken),
+                expiresAt: now().addingTimeInterval(wire.expiresIn.value),
+                expiresIn: wire.expiresIn.value,
+                scope: wire.scope ?? "",
+                tokenType: wire.tokenType ?? "Bearer"
+            )
+            try credentialStore.saveKimiCredential(credential)
+            return credential
+        }
+    }
+
+    private static func withCredentialLock<T>(
+        credentialStore: AgentQuotaCredentialStore,
+        operation: () async throws -> T
+    ) async throws -> T {
+        let fileManager = FileManager.default
+        let lockURL = credentialStore.kimiOAuthLockURL
+        try fileManager.createDirectory(
+            at: lockURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        var acquired = false
+        for _ in 0..<80 {
+            try Task.checkCancellation()
+            do {
+                try fileManager.createDirectory(
+                    at: lockURL,
+                    withIntermediateDirectories: false
+                )
+                acquired = true
+                break
+            } catch {
+                guard fileManager.fileExists(atPath: lockURL.path) else {
+                    throw error
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        guard acquired else {
+            throw KimiQuotaError.lockUnavailable
+        }
+        guard let lockIdentifier = fileIdentifier(at: lockURL) else {
+            try? fileManager.removeItem(at: lockURL)
+            throw KimiQuotaError.lockUnavailable
+        }
+        let heartbeat = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled,
+                      fileIdentifier(at: lockURL) == lockIdentifier
+                else {
+                    return
+                }
+                try? FileManager.default.setAttributes(
+                    [.modificationDate: Date()],
+                    ofItemAtPath: lockURL.path
+                )
+            }
+        }
+        defer {
+            heartbeat.cancel()
+            if fileIdentifier(at: lockURL) == lockIdentifier {
+                try? fileManager.removeItem(at: lockURL)
+            }
+        }
+        return try await operation()
+    }
+
+    private static func fileIdentifier(at url: URL) -> NSNumber? {
+        guard let attributes = try? FileManager.default.attributesOfItem(
+            atPath: url.path
+        ) else {
+            return nil
+        }
+        return attributes[.systemFileNumber] as? NSNumber
+    }
+
+    private static func append(
+        _ row: UsageRow,
+        named name: String,
+        to windows: inout [AgentQuotaWindow]
+    ) {
+        guard row.used != nil || row.limit != nil else { return }
+        let used = row.used?.value ?? 0
+        let limit = row.limit?.value ?? 0
+        let ratio = limit > 0
+            ? (min(max(used / limit, 0), 1) * 100).rounded()
+            : 0
+        windows.append(
+            AgentQuotaWindow(
+                name: name,
+                value: .percentage(value: ratio, direction: .used),
+                resetsAt: date(from: row.resetTime),
+                warning: limit > 0 && used >= limit
+            )
+        )
+    }
+
+    private static func appendExtraUsage(
+        _ wallet: BoosterWallet?,
+        to windows: inout [AgentQuotaWindow]
+    ) {
+        guard let wallet,
+              wallet.balance?.type == "BOOSTER"
+        else {
+            return
+        }
+        let currency = wallet.monthlyChargeLimit?.currency
+            ?? wallet.monthlyUsed?.currency
+            ?? "USD"
+        if wallet.monthlyChargeLimitEnabled == true,
+           let used = wallet.monthlyUsed?.priceInCents?.value,
+           let limit = wallet.monthlyChargeLimit?.priceInCents?.value,
+           limit > 0
+        {
+            windows.append(
+                AgentQuotaWindow(
+                    name: "Extra Usage",
+                    value: .amount(
+                        value: "\(quotaNumber(used / 100)) / \(quotaNumber(limit / 100))",
+                        unit: currency
+                    ),
+                    resetsAt: nil,
+                    warning: used >= limit
+                )
+            )
+        } else if let amountLeft = wallet.balance?.amountLeft?.value {
+            windows.append(
+                AgentQuotaWindow(
+                    name: "Extra Usage",
+                    value: .amount(
+                        value: quotaNumber(amountLeft / 100_000_000),
+                        unit: currency
+                    ),
+                    resetsAt: nil,
+                    warning: amountLeft <= 0
+                )
+            )
+        }
+    }
+
+    private static func windowName(
+        window: UsageWindow?,
+        fallback: String?
+    ) -> String {
+        guard let window,
+              let duration = window.duration?.value
+        else {
+            return fallback ?? "额度"
+        }
+        switch window.timeUnit {
+        case "TIME_UNIT_MINUTE" where duration == 300:
+            return "5 小时"
+        case "TIME_UNIT_HOUR" where duration == 5:
+            return "5 小时"
+        case "TIME_UNIT_DAY" where duration == 7,
+             "TIME_UNIT_WEEK" where duration == 1:
+            return "每周"
+        case "TIME_UNIT_DAY" where duration == 30:
+            return "每月"
+        default:
+            return fallback ?? "\(quotaNumber(duration)) \(window.timeUnit ?? "")"
+                .trimmingCharacters(in: .whitespaces)
+        }
+    }
+
+    private static func date(from value: String?) -> Date? {
+        guard let value else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds,
+        ]
+        if let date = formatter.date(from: value) {
+            return date
+        }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
+    }
+
+    private enum UsageFetchResult {
+        case available(AgentQuotaSnapshot)
+        case unauthorized
+        case unsupported
+        case failed
+    }
+
+    private enum KimiQuotaError: Error {
+        case unauthorized
+        case refreshFailed
+        case lockUnavailable
+    }
+
+    private struct UsageResponse: Decodable {
+        let usage: UsageRow?
+        let limits: [UsageLimit]?
+        let boosterWallet: BoosterWallet?
+    }
+
+    private struct UsageLimit: Decodable {
+        let name: String?
+        let window: UsageWindow?
+        let detail: UsageRow?
+    }
+
+    private struct UsageWindow: Decodable {
+        let duration: FlexibleNumber?
+        let timeUnit: String?
+    }
+
+    private struct UsageRow: Decodable {
+        let name: String?
+        let used: FlexibleNumber?
+        let limit: FlexibleNumber?
+        let resetTime: String?
+    }
+
+    private struct BoosterWallet: Decodable {
+        let balance: BoosterBalance?
+        let monthlyChargeLimitEnabled: Bool?
+        let monthlyChargeLimit: Money?
+        let monthlyUsed: Money?
+    }
+
+    private struct BoosterBalance: Decodable {
+        let type: String?
+        let amountLeft: FlexibleNumber?
+    }
+
+    private struct Money: Decodable {
+        let currency: String?
+        let priceInCents: FlexibleNumber?
+    }
+
+    private struct RefreshResponse: Decodable {
+        let accessToken: String
+        let refreshToken: String
+        let expiresIn: FlexibleNumber
+        let scope: String?
+        let tokenType: String?
+
+        enum CodingKeys: String, CodingKey {
+            case accessToken = "access_token"
+            case refreshToken = "refresh_token"
+            case expiresIn = "expires_in"
+            case scope
+            case tokenType = "token_type"
+        }
+    }
+
+    private struct OAuthErrorResponse: Decodable {
+        let error: String?
+    }
+
+    private struct FlexibleNumber: Decodable {
+        let value: Double
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let number = try? container.decode(Double.self) {
+                value = number
+                return
+            }
+            if let string = try? container.decode(String.self),
+               let number = Double(string)
+            {
+                value = number
+                return
+            }
+            throw AgentQuotaAdapterError.invalidResponse
         }
     }
 }
@@ -1102,6 +1793,26 @@ struct CurrentQuotaProviderResolver: Sendable {
                 return provider.lowercased()
             }
             if let model = object["model"] as? [String: Any],
+               let provider = inferredProviderID(in: model)
+            {
+                return provider
+            }
+            if let security = object["security"] as? [String: Any],
+               let auth = security["auth"] as? [String: Any],
+               let selectedType = firstString(
+                   in: auth,
+                   keys: ["selectedType", "enforcedType"]
+               )
+            {
+                if let provider = selectedModelProviderID(
+                    in: object,
+                    authType: selectedType
+                ) {
+                    return provider
+                }
+                return selectedType.lowercased()
+            }
+            if let model = object["model"] as? [String: Any],
                let provider = firstString(
                    in: model,
                    keys: ["provider", "providerID", "providerId"]
@@ -1125,6 +1836,61 @@ struct CurrentQuotaProviderResolver: Sendable {
             {
                 return String(model[..<separator]).lowercased()
             }
+        }
+        return nil
+    }
+
+    private func selectedModelProviderID(
+        in object: [String: Any],
+        authType: String
+    ) -> String? {
+        guard let providers = object["modelProviders"] as? [String: Any],
+              let entries = providers[authType] as? [[String: Any]]
+        else {
+            return nil
+        }
+        let model = object["model"] as? [String: Any]
+        let selectedModel = model.flatMap {
+            firstString(in: $0, keys: ["name", "id"])
+        }
+        let selectedBaseURL = model.flatMap {
+            firstString(in: $0, keys: ["baseUrl", "baseURL"])
+        }
+        let matchingEntries = entries.filter { entry in
+            if let selectedBaseURL,
+               firstString(in: entry, keys: ["baseUrl", "baseURL"])
+                    != selectedBaseURL
+            {
+                return false
+            }
+            if let selectedModel,
+               firstString(in: entry, keys: ["id", "name"]) != selectedModel
+            {
+                return false
+            }
+            return true
+        }
+        return matchingEntries.lazy.compactMap {
+            inferredProviderID(in: $0)
+        }.first
+    }
+
+    private func inferredProviderID(in object: [String: Any]) -> String? {
+        if let environmentKey = firstString(
+            in: object,
+            keys: ["envKey", "apiKeyEnvKey"]
+        ), environmentKey.uppercased() == "OPENROUTER_API_KEY" {
+            return "openrouter"
+        }
+        guard let rawURL = firstString(
+            in: object,
+            keys: ["baseUrl", "baseURL", "url", "endpoint"]
+        ), let host = URL(string: rawURL)?.host?.lowercased()
+        else {
+            return nil
+        }
+        if host == "openrouter.ai" || host.hasSuffix(".openrouter.ai") {
+            return "openrouter"
         }
         return nil
     }
@@ -1239,6 +2005,7 @@ extension AgentQuotaService {
         homeDirectory: URL,
         detector: InstalledAgentCLIDetector,
         sessionProvider: @escaping @Sendable () -> URLSession,
+        httpClient suppliedHTTPClient: AgentQuotaHTTPClient? = nil,
         processEnvironment: @escaping
             @Sendable ([String: String]) -> [String: String] = {
                 NetworkSessionManager.shared.processEnvironment(basedOn: $0)
@@ -1249,7 +2016,8 @@ extension AgentQuotaService {
             homeDirectory: homeDirectory,
             environment: environment
         )
-        let httpClient = AgentQuotaHTTPClient.live(sessionProvider: sessionProvider)
+        let httpClient = suppliedHTTPClient
+            ?? AgentQuotaHTTPClient.live(sessionProvider: sessionProvider)
         let commandRunner = AgentQuotaCommandRunner.live(
             detector: detector,
             baseEnvironment: environment,
@@ -1310,16 +2078,10 @@ extension AgentQuotaService {
             environment: environment
         )
         let adapters = AgentAdapterRegistry.builtIn.adapters
-        let adaptersByKind = Dictionary(
-            uniqueKeysWithValues: adapters.map { ($0.kind, $0) }
-        )
         return AgentQuotaService(
             adapters: adapters,
             isInstalled: { detector.isInstalled($0) },
-            isSupported: { kind in
-                guard let adapter = adaptersByKind[kind] else { return false }
-                return detector.supportsMinimumVersion(of: adapter)
-            },
+            isSupported: { detector.isInstalled($0) },
             providerNames: [
                 .qwenCode: { qwenProvider.providerName() },
                 .openCode: { openCodeProvider.providerName() },
@@ -1354,13 +2116,20 @@ extension AgentQuotaService {
                             await AgentQuotaOfficialCLIAdapter.query(
                                 agent: .claudeCode,
                                 providerName: "Anthropic",
-                                command: "/status",
+                                command: "/usage",
                                 commandRunner: commandRunner
                             )
                         }
                     )
                 },
-                .antigravityCLI: { .unsupported },
+                .antigravityCLI: {
+                    await AgentQuotaOfficialCLIAdapter.query(
+                        agent: .antigravityCLI,
+                        providerName: "Google Antigravity",
+                        command: "/usage",
+                        commandRunner: commandRunner
+                    )
+                },
                 .githubCopilotCLI: {
                     await AgentQuotaOfficialCLIAdapter.query(
                         agent: .githubCopilotCLI,
@@ -1396,7 +2165,12 @@ extension AgentQuotaService {
                         httpClient: httpClient
                     )
                 },
-                .kimiCode: { .unsupported },
+                .kimiCode: {
+                    await KimiAgentQuotaAdapter.query(
+                        credentialStore: credentialStore,
+                        httpClient: httpClient
+                    )
+                },
             ]
         )
     }

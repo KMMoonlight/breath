@@ -99,18 +99,65 @@ struct NotesEditorWebKitContractTests {
         }
         #expect(hasMath)
         #expect(hasMermaid)
-        let preservesCode = try #require(
+        let preservesCodeValue = try await webView.evaluateJavaScript(
+            """
+            Array.from(document.querySelectorAll('pre code')).some(
+              node => node.textContent.includes(
+                '<script>example shown as code</script>'
+              )
+            )
+            """
+        )
+        let preservesCode = try #require(preservesCodeValue as? Bool)
+        #expect(preservesCode)
+    }
+
+    @Test("heading navigation updates the editor's active outline entry")
+    func headingNavigationUpdatesActiveEntry() async throws {
+        let webView = try await makeEditor()
+        let filler = Array(
+            repeating: "A paragraph that makes the document scroll.",
+            count: 60
+        ).joined(separator: "\n\n")
+        try await load(
+            """
+            # First section
+
+            \(filler)
+
+            ## Second section
+
+            \(filler)
+            """,
+            into: webView
+        )
+
+        let didNavigateValue = try await webView.evaluateJavaScript(
+            "window.breathNotes.scrollToHeading(1, 'auto')"
+        )
+        let didNavigate = try #require(didNavigateValue as? Bool)
+        #expect(didNavigate)
+        try await Task.sleep(for: .milliseconds(50))
+
+        let activeIndex = try #require(
+            try await webView.evaluateJavaScript(
+                "window.breathNotes.activeHeadingIndex()"
+            ) as? NSNumber
+        )
+        #expect(activeIndex.intValue == 1)
+
+        let headingTop = try #require(
             try await webView.evaluateJavaScript(
                 """
-                Array.from(document.querySelectorAll('pre code')).some(
-                  node => node.textContent.includes(
-                    '<script>example shown as code</script>'
-                  )
-                )
+                document.querySelectorAll(
+                  '#editor h1, #editor h2, #editor h3, '
+                  + '#editor h4, #editor h5, #editor h6'
+                )[1].getBoundingClientRect().top
                 """
-            ) as? Bool
+            ) as? NSNumber
         )
-        #expect(preservesCode)
+        #expect(headingTop.doubleValue >= 60)
+        #expect(headingTop.doubleValue <= 90)
     }
 
     private func makeEditor() async throws -> WKWebView {

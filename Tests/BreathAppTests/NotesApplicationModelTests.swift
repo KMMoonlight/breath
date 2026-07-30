@@ -40,6 +40,32 @@ struct NotesApplicationModelTests {
         #expect(model.selectedDocument?.isDirty == false)
     }
 
+    @Test("debounced recovery persistence does not cancel itself")
+    func debouncedRecoveryDoesNotReportCancellation() async throws {
+        let fixture = try NotesApplicationFixture()
+        defer { fixture.remove() }
+        let noteURL = fixture.libraryURL.appendingPathComponent("draft.md")
+        try Data("saved".utf8).write(to: noteURL)
+        let repository = try SQLiteWorkbenchRepository(
+            databaseURL: fixture.databaseURL
+        )
+        let model = NotesApplicationModel(
+            service: NotesService(repository: repository)
+        )
+        model.selectLibrary(fixture.libraryURL)
+        await waitUntil { model.snapshot.entries.count == 1 }
+        model.open(try #require(model.snapshot.entries.first))
+        await waitUntil { model.selectedDocument != nil }
+        let id = try #require(model.selectedDocument?.id)
+
+        model.updateDocument(id, content: "# Draft")
+        try await Task.sleep(for: .milliseconds(400))
+
+        #expect(model.lastError == nil)
+        let persisted = try await repository.loadNotesState()
+        #expect(persisted.recoveryDrafts["draft.md"]?.content == "# Draft")
+    }
+
     @Test("new notes and folders request immediate inline rename")
     func creationRequestsInlineRename() async throws {
         let fixture = try NotesApplicationFixture()

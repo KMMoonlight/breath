@@ -31,6 +31,8 @@ let mode = 'wysiwyg'
 let isLoading = false
 let forcePlainTextPaste = false
 let diagramSequence = 0
+let lastActiveHeadingIndex
+let activeHeadingViewportFrame = null
 let ui = {}
 
 const translations = {
@@ -271,6 +273,11 @@ const editor = new Editor({
     normalizedBaseline = nextNormalized
     source.value = markdown
     post('editorChange', { content: markdown })
+    reportActiveHeading(activeHeadingFromEditorSelection())
+  },
+  onSelectionUpdate: () => {
+    if (isLoading || mode !== 'wysiwyg') return
+    reportActiveHeading(activeHeadingFromEditorSelection())
   },
   editorProps: {
     transformPastedHTML(html) {
@@ -424,6 +431,91 @@ function post(name, payload = {}) {
   })
 }
 
+function renderedHeadings() {
+  return Array.from(root.querySelectorAll('h1, h2, h3, h4, h5, h6'))
+}
+
+function activeHeadingFromViewport() {
+  const headings = renderedHeadings()
+  if (headings.length === 0) return null
+  const activationY = Math.min(160, Math.max(72, window.innerHeight * 0.18))
+  let activeIndex = 0
+  headings.forEach((heading, index) => {
+    if (heading.getBoundingClientRect().top <= activationY) {
+      activeIndex = index
+    }
+  })
+  return activeIndex
+}
+
+function activeHeadingFromEditorSelection() {
+  let headingIndex = -1
+  let activeIndex = null
+  const selectionPosition = editor.state.selection.from
+  editor.state.doc.descendants((node, position) => {
+    if (node.type.name !== 'heading') return
+    headingIndex += 1
+    if (position <= selectionPosition) activeIndex = headingIndex
+  })
+  return activeIndex ?? (headingIndex >= 0 ? 0 : null)
+}
+
+function sourceHeadings() {
+  return Array.from(
+    source.value.matchAll(/^(#{1,6})[ \t]+.+$/gm),
+    (match) => ({
+      start: match.index ?? 0,
+      end: (match.index ?? 0) + match[0].length,
+      line: source.value.slice(0, match.index ?? 0).split('\n').length - 1,
+    }),
+  )
+}
+
+function activeHeadingFromSourceSelection() {
+  const headings = sourceHeadings()
+  if (headings.length === 0) return null
+  let activeIndex = 0
+  headings.forEach((heading, index) => {
+    if (heading.start <= source.selectionStart) activeIndex = index
+  })
+  return activeIndex
+}
+
+function activeHeadingFromSourceViewport() {
+  const headings = sourceHeadings()
+  if (headings.length === 0) return null
+  const lineHeight = Number.parseFloat(
+    window.getComputedStyle(source).lineHeight,
+  ) || 23
+  const activationLine = (source.scrollTop + 72) / lineHeight
+  let activeIndex = 0
+  headings.forEach((heading, index) => {
+    if (heading.line <= activationLine) activeIndex = index
+  })
+  return activeIndex
+}
+
+function reportActiveHeading(index) {
+  const normalized = Number.isInteger(index) && index >= 0 ? index : null
+  if (lastActiveHeadingIndex === normalized) return
+  lastActiveHeadingIndex = normalized
+  post('activeHeadingChange', { index: normalized })
+}
+
+function scheduleActiveHeadingFromViewport() {
+  if (mode !== 'wysiwyg' || activeHeadingViewportFrame !== null) return
+  activeHeadingViewportFrame = window.requestAnimationFrame(() => {
+    activeHeadingViewportFrame = null
+    reportActiveHeading(activeHeadingFromViewport())
+  })
+}
+
+window.addEventListener(
+  'scroll',
+  scheduleActiveHeadingFromViewport,
+  { passive: true },
+)
+
 function patchedMarkdown(nextNormalized) {
   return patchNormalizedMarkdown(
     originalSource,
@@ -465,6 +557,11 @@ function setMode(nextMode) {
   }
   document.body.dataset.mode = mode
   post('modeChange', { mode })
+  reportActiveHeading(
+    mode === 'source'
+      ? activeHeadingFromSourceSelection()
+      : activeHeadingFromViewport(),
+  )
 }
 
 source.addEventListener('input', () => {
@@ -473,7 +570,24 @@ source.addEventListener('input', () => {
   sourceModeOriginal = markdown
   sourceModeBaseline = source.value
   post('editorChange', { content: markdown })
+  reportActiveHeading(activeHeadingFromSourceSelection())
 })
+
+source.addEventListener('selectionchange', () => {
+  if (mode === 'source') {
+    reportActiveHeading(activeHeadingFromSourceSelection())
+  }
+})
+
+source.addEventListener(
+  'scroll',
+  () => {
+    if (mode === 'source') {
+      reportActiveHeading(activeHeadingFromSourceViewport())
+    }
+  },
+  { passive: true },
+)
 
 window.breathNotes = {
   load(payload) {
@@ -502,7 +616,15 @@ window.breathNotes = {
     )
     isLoading = false
     status.textContent = ''
+    lastActiveHeadingIndex = undefined
     post('ready')
+    window.requestAnimationFrame(() => {
+      reportActiveHeading(
+        mode === 'source'
+          ? activeHeadingFromSourceSelection()
+          : activeHeadingFromViewport(),
+      )
+    })
   },
   setMode,
   setLanguage,
@@ -566,6 +688,34 @@ window.breathNotes = {
   },
   find(query, backwards = false) {
     return window.find(query, false, backwards, true, false, true, false)
+  },
+  scrollToHeading(index, behavior = 'smooth') {
+    if (!Number.isInteger(index) || index < 0) return false
+    if (mode === 'source') {
+      const heading = sourceHeadings()[index]
+      if (!heading) return false
+      const lineHeight = Number.parseFloat(
+        window.getComputedStyle(source).lineHeight,
+      ) || 23
+      source.focus()
+      source.setSelectionRange(heading.start, heading.end)
+      source.scrollTop = Math.max(
+        0,
+        heading.line * lineHeight - source.clientHeight * 0.2,
+      )
+    } else {
+      const heading = renderedHeadings()[index]
+      if (!heading) return false
+      const top = window.scrollY
+        + heading.getBoundingClientRect().top
+        - 72
+      window.scrollTo({ top: Math.max(0, top), behavior })
+    }
+    reportActiveHeading(index)
+    return true
+  },
+  activeHeadingIndex() {
+    return lastActiveHeadingIndex ?? null
   },
   highlightCode(language, code) {
     if (language && hljs.getLanguage(language)) {

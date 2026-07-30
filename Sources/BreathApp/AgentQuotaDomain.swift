@@ -1,5 +1,6 @@
 import BreathAgents
 import BreathCore
+import Dispatch
 import Foundation
 
 struct AgentQuotaAgent: Equatable, Identifiable, Sendable {
@@ -143,23 +144,106 @@ private func queryAgentQuota(
     _ query: @escaping AgentQuotaQuery,
     timeout: Duration
 ) async -> AgentQuotaStatus {
-    await withTaskGroup(
-        of: AgentQuotaStatus.self,
-        returning: AgentQuotaStatus.self
-    ) { group in
-        group.addTask {
-            await query()
-        }
-        group.addTask {
-            do {
-                try await Task.sleep(for: timeout)
-            } catch {
-                return .failed("额度查询已取消。")
+    let race = AgentQuotaQueryRace()
+    return await withTaskCancellationHandler {
+        await withCheckedContinuation { continuation in
+            race.install(continuation)
+            let timeoutWorkItem = DispatchWorkItem {
+                race.resolve(.failed("额度查询超时。"))
             }
-            return .failed("额度查询超时。")
+            race.install(timeoutWorkItem: timeoutWorkItem)
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(
+                deadline: quotaTimeoutDeadline(after: timeout),
+                execute: timeoutWorkItem
+            )
+            let queryTask = Task.detached(priority: .userInitiated) {
+                let status = await query()
+                race.resolve(status)
+            }
+            race.install(queryTask: queryTask)
         }
-        let first = await group.next() ?? .failed("额度查询失败。")
-        group.cancelAll()
-        return first
+    } onCancel: {
+        race.resolve(.failed("额度查询已取消。"))
+    }
+}
+
+private func quotaTimeoutDeadline(after timeout: Duration) -> DispatchTime {
+    let components = timeout.components
+    let seconds = Double(components.seconds)
+        + Double(components.attoseconds) / 1_000_000_000_000_000_000
+    let nanoseconds = Int(
+        min(
+            max(seconds * 1_000_000_000, 0),
+            Double(Int.max)
+        )
+    )
+    return .now() + .nanoseconds(nanoseconds)
+}
+
+private final class AgentQuotaQueryRace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<AgentQuotaStatus, Never>?
+    private var pendingResult: AgentQuotaStatus?
+    private var queryTask: Task<Void, Never>?
+    private var timeoutWorkItem: DispatchWorkItem?
+    private var isResolved = false
+
+    func install(
+        _ continuation: CheckedContinuation<AgentQuotaStatus, Never>
+    ) {
+        lock.lock()
+        if let pendingResult {
+            self.pendingResult = nil
+            lock.unlock()
+            continuation.resume(returning: pendingResult)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func install(queryTask: Task<Void, Never>) {
+        lock.lock()
+        if isResolved {
+            lock.unlock()
+            queryTask.cancel()
+            return
+        }
+        self.queryTask = queryTask
+        lock.unlock()
+    }
+
+    func install(timeoutWorkItem: DispatchWorkItem) {
+        lock.lock()
+        if isResolved {
+            lock.unlock()
+            timeoutWorkItem.cancel()
+            return
+        }
+        self.timeoutWorkItem = timeoutWorkItem
+        lock.unlock()
+    }
+
+    func resolve(_ result: AgentQuotaStatus) {
+        lock.lock()
+        guard !isResolved else {
+            lock.unlock()
+            return
+        }
+        isResolved = true
+        let continuation = self.continuation
+        self.continuation = nil
+        if continuation == nil {
+            pendingResult = result
+        }
+        let queryTask = self.queryTask
+        self.queryTask = nil
+        let timeoutWorkItem = self.timeoutWorkItem
+        self.timeoutWorkItem = nil
+        lock.unlock()
+
+        queryTask?.cancel()
+        timeoutWorkItem?.cancel()
+        continuation?.resume(returning: result)
     }
 }

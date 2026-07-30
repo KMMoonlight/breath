@@ -15,8 +15,11 @@ struct NotesMarkdownEditor: NSViewRepresentable {
     let findQuery: String?
     let findRevision: Int
     let findBackwards: Bool
+    let headingNavigationIndex: Int?
+    let headingNavigationRevision: Int
     let onChange: (String) -> Void
     let onOpenLink: (String) -> Void
+    let onActiveHeadingChange: (Int?) -> Void
     let onImportAttachment: (Data, String) async -> String?
 
     func makeCoordinator() -> Coordinator {
@@ -42,6 +45,7 @@ struct NotesMarkdownEditor: NSViewRepresentable {
         context.coordinator.webView = webView
         context.coordinator.onChange = onChange
         context.coordinator.onOpenLink = onOpenLink
+        context.coordinator.onActiveHeadingChange = onActiveHeadingChange
         context.coordinator.onImportAttachment = onImportAttachment
 
         guard let htmlURL = BreathResources.notesEditorHTMLURL else {
@@ -58,6 +62,7 @@ struct NotesMarkdownEditor: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.onChange = onChange
         context.coordinator.onOpenLink = onOpenLink
+        context.coordinator.onActiveHeadingChange = onActiveHeadingChange
         context.coordinator.onImportAttachment = onImportAttachment
         context.coordinator.pendingDocument = document
         context.coordinator.pendingLibraryRoot = libraryRoot
@@ -70,6 +75,10 @@ struct NotesMarkdownEditor: NSViewRepresentable {
         context.coordinator.pendingFindQuery = findQuery
         context.coordinator.pendingFindRevision = findRevision
         context.coordinator.pendingFindBackwards = findBackwards
+        context.coordinator.pendingHeadingNavigationIndex =
+            headingNavigationIndex
+        context.coordinator.pendingHeadingNavigationRevision =
+            headingNavigationRevision
         context.coordinator.synchronizeIfReady()
     }
 
@@ -94,6 +103,7 @@ struct NotesMarkdownEditor: NSViewRepresentable {
         weak var webView: WKWebView?
         var onChange: ((String) -> Void)?
         var onOpenLink: ((String) -> Void)?
+        var onActiveHeadingChange: ((Int?) -> Void)?
         var onImportAttachment: ((Data, String) async -> String?)?
         let resourceHandler = NoteEditorResourceSchemeHandler()
         var pendingDocument: NoteDocument?
@@ -107,6 +117,8 @@ struct NotesMarkdownEditor: NSViewRepresentable {
         var pendingFindQuery: String?
         var pendingFindRevision = 0
         var pendingFindBackwards = false
+        var pendingHeadingNavigationIndex: Int?
+        var pendingHeadingNavigationRevision = 0
         private var isReady = false
         private var loadedDocumentID: NoteDocumentID?
         private var loadedContent: String?
@@ -119,6 +131,7 @@ struct NotesMarkdownEditor: NSViewRepresentable {
         private var appliedSpellCheck: Bool?
         private var appliedFindQuery: String?
         private var appliedFindRevision = -1
+        private var appliedHeadingNavigationRevision = -1
 
         func webView(
             _ webView: WKWebView,
@@ -197,6 +210,10 @@ struct NotesMarkdownEditor: NSViewRepresentable {
                 if let href = body["href"] as? String {
                     onOpenLink?(href)
                 }
+            case "activeHeadingChange":
+                onActiveHeadingChange?(
+                    (body["index"] as? NSNumber)?.intValue
+                )
             case "importAttachment":
                 guard let encoded = body["base64"] as? String,
                       let data = Data(base64Encoded: encoded),
@@ -268,6 +285,7 @@ struct NotesMarkdownEditor: NSViewRepresentable {
                 appliedSpellCheck = pendingSpellCheck
                 appliedFindQuery = nil
                 appliedFindRevision = -1
+                appliedHeadingNavigationRevision = -1
                 webView.evaluateJavaScript(
                     "window.breathNotes.load(\(json))"
                 ) { [weak self] _, _ in
@@ -333,6 +351,20 @@ struct NotesMarkdownEditor: NSViewRepresentable {
                 )
                 appliedFindQuery = pendingFindQuery
                 appliedFindRevision = pendingFindRevision
+            }
+            if let pendingHeadingNavigationIndex,
+               appliedHeadingNavigationRevision
+                != pendingHeadingNavigationRevision
+            {
+                webView.evaluateJavaScript(
+                    """
+                    window.breathNotes.scrollToHeading(
+                      \(pendingHeadingNavigationIndex)
+                    )
+                    """
+                )
+                appliedHeadingNavigationRevision =
+                    pendingHeadingNavigationRevision
             }
         }
 
