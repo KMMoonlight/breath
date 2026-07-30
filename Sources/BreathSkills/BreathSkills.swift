@@ -115,6 +115,7 @@ public struct InstalledSkillCopy: Codable, Hashable, Identifiable, Sendable {
     public let directory: URL
     public let resolvedDirectory: URL
     public let isSymbolicLink: Bool
+    public let symbolicLinkDestination: URL?
     public let source: SkillSourceKind
     public let repository: String?
     public let sourceRelativePath: String?
@@ -132,6 +133,7 @@ public struct InstalledSkillCopy: Codable, Hashable, Identifiable, Sendable {
         directory: URL,
         resolvedDirectory: URL,
         isSymbolicLink: Bool,
+        symbolicLinkDestination: URL? = nil,
         source: SkillSourceKind = .unknown,
         repository: String? = nil,
         sourceRelativePath: String? = nil,
@@ -148,6 +150,7 @@ public struct InstalledSkillCopy: Codable, Hashable, Identifiable, Sendable {
         self.directory = directory
         self.resolvedDirectory = resolvedDirectory
         self.isSymbolicLink = isSymbolicLink
+        self.symbolicLinkDestination = symbolicLinkDestination
         self.source = source
         self.repository = repository
         self.sourceRelativePath = sourceRelativePath
@@ -276,6 +279,8 @@ public struct GlobalSkill: Codable, Hashable, Identifiable, Sendable {
                 action: .removeSymbolicLink,
                 copies: copies.filter {
                     $0.directory.standardizedFileURL.path == presentedPath
+                        || $0.symbolicLinkDestination?.standardizedFileURL.path
+                            == presentedPath
                 }
             )
         })
@@ -287,7 +292,7 @@ public struct GlobalSkill: Codable, Hashable, Identifiable, Sendable {
 }
 
 public struct InstalledSkillSharedCopyGroup: Hashable, Identifiable, Sendable {
-    public var id: String { resolvedDirectory.standardizedFileURL.path }
+    public var id: String { directory.standardizedFileURL.path }
     public let directory: URL
     public let resolvedDirectory: URL
     public let action: SkillUninstallAction
@@ -299,11 +304,12 @@ public struct InstalledSkillSharedCopyGroup: Hashable, Identifiable, Sendable {
     }
 
     public var linkedDirectories: [URL] {
-        guard action == .moveToTrash else { return [] }
         var seenPaths: Set<String> = []
+        let primaryPath = directory.standardizedFileURL.path
         return copies.compactMap { copy in
             guard copy.isSymbolicLink else { return nil }
             let path = copy.directory.standardizedFileURL.path
+            guard path != primaryPath else { return nil }
             guard seenPaths.insert(path).inserted else { return nil }
             return copy.directory
         }
@@ -722,6 +728,18 @@ public actor GlobalSkillsService {
             .isSymbolicLinkKey,
         ])
         let isSymbolicLink = values.isSymbolicLink == true
+        let symbolicLinkDestination: URL?
+        if isSymbolicLink {
+            let destination = try fileManager.destinationOfSymbolicLink(
+                atPath: presentedURL.path
+            )
+            symbolicLinkDestination = URL(
+                fileURLWithPath: destination,
+                relativeTo: presentedURL.deletingLastPathComponent()
+            ).standardizedFileURL
+        } else {
+            symbolicLinkDestination = nil
+        }
         let resolvedURL = isSymbolicLink
             ? presentedURL.resolvingSymlinksInPath()
             : presentedURL
@@ -776,6 +794,7 @@ public actor GlobalSkillsService {
                 directory: presentedURL,
                 resolvedDirectory: resolvedURL,
                 isSymbolicLink: isSymbolicLink,
+                symbolicLinkDestination: symbolicLinkDestination,
                 source: installationOrigin?.source ?? .unknown,
                 repository: matchingRecord?.repository
                     ?? installationOrigin?.sharedProvenance?.repository,

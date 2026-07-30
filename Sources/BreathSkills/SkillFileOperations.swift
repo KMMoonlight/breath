@@ -363,7 +363,18 @@ struct SkillUninstallCommitter: @unchecked Sendable {
         }
         switch item.action {
         case .removeSymbolicLink:
-            try fileManager.removeItem(at: item.directory)
+            let dependentLinks = try validatedLinks(
+                at: item.linkedDirectoriesToRemove,
+                resolvingTo: item.resolvedDirectory
+            )
+            let primaryLink = try validatedLinks(
+                at: [item.directory],
+                resolvingTo: item.resolvedDirectory
+            )
+            try await removeLinksWithRollback(
+                dependentLinks + primaryLink,
+                operation: {}
+            )
         case .moveToTrash:
             try await moveSharedTargetToTrash(item)
         }
@@ -386,30 +397,54 @@ struct SkillUninstallCommitter: @unchecked Sendable {
     private func moveSharedTargetToTrash(
         _ item: SkillUninstallPreviewItem
     ) async throws {
-        let links = try item.linkedDirectoriesToRemove.map { linkedDirectory in
+        let links = try validatedLinks(
+            at: item.linkedDirectoriesToRemove,
+            resolvingTo: item.resolvedDirectory
+        )
+        try await removeLinksWithRollback(links) {
+            try await trash.moveToTrash(item.directory)
+        }
+    }
+
+    private struct ValidatedSymbolicLink {
+        let url: URL
+        let destination: String
+    }
+
+    private func validatedLinks(
+        at directories: [URL],
+        resolvingTo target: URL
+    ) throws -> [ValidatedSymbolicLink] {
+        try directories.map { linkedDirectory in
             let linkedValues = try linkedDirectory.resourceValues(
                 forKeys: [.isSymbolicLinkKey]
             )
             guard linkedValues.isSymbolicLink == true,
                   linkedDirectory.resolvingSymlinksInPath().standardizedFileURL
-                    == item.resolvedDirectory.standardizedFileURL
+                    == target.standardizedFileURL
             else {
                 throw SkillInstallationError.stalePreview
             }
-            return (
+            return ValidatedSymbolicLink(
                 url: linkedDirectory,
                 destination: try fileManager.destinationOfSymbolicLink(
                     atPath: linkedDirectory.path
                 )
             )
         }
-        var removedLinks: [(url: URL, destination: String)] = []
+    }
+
+    private func removeLinksWithRollback(
+        _ links: [ValidatedSymbolicLink],
+        operation: () async throws -> Void
+    ) async throws {
+        var removedLinks: [ValidatedSymbolicLink] = []
         do {
             for link in links {
                 try fileManager.removeItem(at: link.url)
                 removedLinks.append(link)
             }
-            try await trash.moveToTrash(item.directory)
+            try await operation()
         } catch {
             for link in removedLinks.reversed() {
                 try? fileManager.createSymbolicLink(

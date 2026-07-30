@@ -90,7 +90,19 @@ struct SkillUninstallPresentationTests {
                 isDirectory: true
             ),
             resolvedDirectory: externalDirectory,
-            isSymbolicLink: true
+            isSymbolicLink: true,
+            symbolicLinkDestination: sharedLink
+        )
+        let antigravityCopy = installedCopy(
+            agent: .antigravityCLI,
+            displayName: "Antigravity",
+            directory: URL(
+                fileURLWithPath: "/Users/example/.gemini/antigravity/skills/review",
+                isDirectory: true
+            ),
+            resolvedDirectory: externalDirectory,
+            isSymbolicLink: true,
+            symbolicLinkDestination: externalDirectory
         )
         let skill = GlobalSkill(
             name: "review",
@@ -98,18 +110,80 @@ struct SkillUninstallPresentationTests {
             manifest: "---",
             contentDigest: "digest",
             files: [],
-            copies: [codexSharedCopy, kimiSharedCopy, claudeCopy]
+            copies: [codexSharedCopy, kimiSharedCopy, claudeCopy, antigravityCopy]
         )
 
         let presentation = SkillUninstallSelectionPresentation(skill: skill)
 
-        #expect(presentation.selectableCopies.map(\.agent) == [.claudeCode])
+        #expect(presentation.selectableCopies.map(\.agent) == [.antigravityCLI])
         let sharedCopy = try #require(presentation.sharedCopies.first)
         #expect(presentation.sharedCopies.count == 1)
         #expect(sharedCopy.directory == sharedLink)
         #expect(sharedCopy.resolvedDirectory == externalDirectory)
         #expect(sharedCopy.action == .removeSymbolicLink)
-        #expect(sharedCopy.affectedAgentDisplayNames == ["Codex", "Kimi Code"])
+        #expect(sharedCopy.affectedAgentDisplayNames == ["Claude Code", "Codex", "Kimi Code"])
+    }
+
+    @Test("shared discovery links to one target keep distinct presentation identities")
+    func sharedDiscoveryLinkIdentitiesUsePresentedPaths() {
+        let externalDirectory = URL(
+            fileURLWithPath: "/Volumes/skills/review",
+            isDirectory: true
+        )
+        let firstLink = URL(
+            fileURLWithPath: "/Users/example/.agents/skills/review",
+            isDirectory: true
+        )
+        let secondLink = URL(
+            fileURLWithPath: "/Users/example/.agents/skills/review-alias",
+            isDirectory: true
+        )
+        let skill = GlobalSkill(
+            name: "review",
+            description: "Review before shipping.",
+            manifest: "---",
+            contentDigest: "digest",
+            files: [],
+            copies: [
+                installedCopy(
+                    agent: .codex,
+                    displayName: "Codex",
+                    directory: firstLink,
+                    resolvedDirectory: externalDirectory,
+                    isSymbolicLink: true,
+                    symbolicLinkDestination: externalDirectory
+                ),
+                installedCopy(
+                    agent: .kimiCode,
+                    displayName: "Kimi Code",
+                    directory: firstLink,
+                    resolvedDirectory: externalDirectory,
+                    isSymbolicLink: true,
+                    symbolicLinkDestination: externalDirectory
+                ),
+                installedCopy(
+                    agent: .codex,
+                    displayName: "Codex",
+                    directory: secondLink,
+                    resolvedDirectory: externalDirectory,
+                    isSymbolicLink: true,
+                    symbolicLinkDestination: externalDirectory
+                ),
+                installedCopy(
+                    agent: .kimiCode,
+                    displayName: "Kimi Code",
+                    directory: secondLink,
+                    resolvedDirectory: externalDirectory,
+                    isSymbolicLink: true,
+                    symbolicLinkDestination: externalDirectory
+                ),
+            ]
+        )
+
+        let presentation = SkillUninstallSelectionPresentation(skill: skill)
+
+        #expect(presentation.sharedCopies.count == 2)
+        #expect(Set(presentation.sharedCopies.map(\.id)).count == 2)
     }
 
     private func installedCopy(
@@ -117,14 +191,16 @@ struct SkillUninstallPresentationTests {
         displayName: String,
         directory: URL,
         resolvedDirectory: URL? = nil,
-        isSymbolicLink: Bool = false
+        isSymbolicLink: Bool = false,
+        symbolicLinkDestination: URL? = nil
     ) -> InstalledSkillCopy {
         InstalledSkillCopy(
             agent: agent,
             agentDisplayName: displayName,
             directory: directory,
             resolvedDirectory: resolvedDirectory ?? directory,
-            isSymbolicLink: isSymbolicLink
+            isSymbolicLink: isSymbolicLink,
+            symbolicLinkDestination: symbolicLinkDestination
         )
     }
 }

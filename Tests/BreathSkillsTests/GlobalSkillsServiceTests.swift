@@ -1786,6 +1786,16 @@ struct GlobalSkillsServiceTests {
             at: sharedLink,
             withDestinationURL: externalSkill
         )
+        let claudeLink = try fixture.skillRoot(for: .claudeCode)
+            .appendingPathComponent("review", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: claudeLink.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: claudeLink,
+            withDestinationURL: sharedLink
+        )
         let trash = RecordingSkillTrash(
             recoveryDirectory: fixture.home.appendingPathComponent("Trash", isDirectory: true)
         )
@@ -1806,13 +1816,14 @@ struct GlobalSkillsServiceTests {
         #expect(item.action == .removeSymbolicLink)
         #expect(item.directory == sharedLink.standardizedFileURL)
         #expect(item.resolvedDirectory == externalSkill.resolvingSymlinksInPath())
-        #expect(Set(item.affectedAgents) == Set([.codex, .kimiCode]))
+        #expect(Set(item.affectedAgents) == Set([.codex, .claudeCode, .kimiCode]))
 
         let result = await service.uninstall(preview)
 
         #expect(result.items.first?.status == .succeeded)
         #expect(result.snapshot.skills.isEmpty)
         #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: sharedLink.path)) == nil)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: claudeLink.path)) == nil)
         #expect(FileManager.default.fileExists(atPath: externalSkill.path))
         #expect(await trash.trashedItems().isEmpty)
     }
