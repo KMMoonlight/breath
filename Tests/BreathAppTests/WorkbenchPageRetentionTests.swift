@@ -48,6 +48,50 @@ private struct RetainedPageHarness: View {
     }
 }
 
+@MainActor
+private final class RetainedPageNativeViewRecorder {
+    private(set) var views: [RetainedPageFixture: NSView] = [:]
+
+    func record(_ view: NSView, for page: RetainedPageFixture) {
+        views[page] = view
+    }
+}
+
+private struct RetainedPageNativeVisibilityHarness: View {
+    @ObservedObject var model: RetainedPageHarnessModel
+    let recorder: RetainedPageNativeViewRecorder
+
+    var body: some View {
+        RetainedPageDeck(selection: model.selection) { page in
+            RetainedPageNativeVisibilityProbe(
+                page: page,
+                recorder: recorder
+            )
+        }
+    }
+}
+
+private struct RetainedPageNativeVisibilityProbe: NSViewRepresentable {
+    @Environment(\.retainedPageIsActive) private var retainedPageIsActive
+    let page: RetainedPageFixture
+    let recorder: RetainedPageNativeViewRecorder
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        configure(view)
+        recorder.record(view, for: page)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        configure(nsView)
+    }
+
+    private func configure(_ view: NSView) {
+        view.isHidden = !retainedPageIsActive
+    }
+}
+
 @Suite("Workbench page retention")
 struct WorkbenchPageRetentionTests {
     @Test("selection retains each page once")
@@ -93,6 +137,42 @@ struct WorkbenchPageRetentionTests {
         #expect(recorder.appearances[.git] == 1)
         #expect(recorder.disappearances[.workspace, default: 0] == 0)
         #expect(recorder.disappearances[.git, default: 0] == 0)
+        NativeUITestLifetime.retainUntilProcessExit(hostingView)
+    }
+
+    @Test("retained pages propagate native visibility to AppKit views")
+    @MainActor
+    func retainedPagesPropagateNativeVisibility() async throws {
+        await NativeUITestGate.shared.acquire()
+        defer { NativeUITestGate.shared.release() }
+        _ = NSApplication.shared
+        let model = RetainedPageHarnessModel()
+        let recorder = RetainedPageNativeViewRecorder()
+        let hostingView = NSHostingView(
+            rootView: RetainedPageNativeVisibilityHarness(
+                model: model,
+                recorder: recorder
+            )
+        )
+        hostingView.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
+        hostingView.layoutSubtreeIfNeeded()
+        await settleViewUpdates()
+
+        let workspaceView = try #require(recorder.views[.workspace])
+        #expect(!workspaceView.isHidden)
+
+        model.select(.git)
+        await settleViewUpdates()
+
+        let gitView = try #require(recorder.views[.git])
+        #expect(workspaceView.isHidden)
+        #expect(!gitView.isHidden)
+
+        model.select(.workspace)
+        await settleViewUpdates()
+
+        #expect(!workspaceView.isHidden)
+        #expect(gitView.isHidden)
         NativeUITestLifetime.retainUntilProcessExit(hostingView)
     }
 

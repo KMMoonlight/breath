@@ -1,5 +1,6 @@
 import AppKit
 import BreathCore
+import BreathTestSupport
 import BreathTerminal
 import Foundation
 import Testing
@@ -379,6 +380,36 @@ struct TerminalKeyboardShortcutTests {
 
         #expect(window.firstResponder !== terminalView)
         #expect(!terminalHasInputFocus)
+    }
+
+    @MainActor
+    @Test("a hidden retained terminal stops monitoring keyboard events")
+    func hiddenRetainedTerminalStopsMonitoringKeyboardEvents() async throws {
+        await NativeUITestGate.shared.acquire()
+        defer { NativeUITestGate.shared.release() }
+        _ = NSApplication.shared
+        let terminalView = FocusableTerminalTestView()
+        let terminalHost = TerminalHostView()
+        terminalHost.install(terminalView)
+        let contentView = NSView(
+            frame: NSRect(x: 0, y: 0, width: 320, height: 180)
+        )
+        terminalHost.frame = contentView.bounds
+        contentView.addSubview(terminalHost)
+        let window = TerminalFocusTestWindow(
+            contentRect: contentView.bounds,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = contentView
+        #expect(terminalHost.isMonitoringFocusEvents)
+
+        terminalHost.isHidden = true
+        #expect(!terminalHost.isMonitoringFocusEvents)
+
+        terminalHost.isHidden = false
+        #expect(terminalHost.isMonitoringFocusEvents)
     }
 
     private func commandKeyEvent(_ characters: String) throws -> NSEvent {

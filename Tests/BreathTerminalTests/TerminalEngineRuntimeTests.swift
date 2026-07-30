@@ -83,6 +83,15 @@ struct TerminalEngineRuntimeTests {
         try await Task.sleep(for: .milliseconds(100))
     }
 
+    @Test("libghostty redispatches Control key equivalents into the PTY")
+    @MainActor
+    func libghosttyControlKeyEquivalentRedispatch() async throws {
+        await NativeUITestGate.shared.acquire()
+        defer { NativeUITestGate.shared.release() }
+        try await verifyLibghosttyControlKeyEquivalentRedispatch()
+        try await Task.sleep(for: .milliseconds(100))
+    }
+
     @Test("libghostty marks precise scrolling deltas as pixels")
     func libghosttyPreciseScrolling() {
         #expect(
@@ -156,6 +165,7 @@ private struct LibghosttyTestFixture {
     let engine: GhosttyTerminalEngine
     private let window: NSWindow
     private let directory: URL
+    var windowNumber: Int { window.windowNumber }
 
     init(directoryPrefix: String) throws {
         _ = NSApplication.shared
@@ -184,6 +194,20 @@ private struct LibghosttyTestFixture {
         NativeUITestLifetime.retainUntilProcessExit(window)
         try? FileManager.default.removeItem(at: directory)
     }
+
+    func focus(_ view: NSView) throws {
+        view.frame = window.contentView?.bounds
+            ?? NSRect(x: 0, y: 0, width: 900, height: 600)
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+        guard window.makeFirstResponder(view) else {
+            throw LibghosttyTestFixtureError.cannotFocusSurface
+        }
+    }
+}
+
+private enum LibghosttyTestFixtureError: Error {
+    case cannotFocusSurface
 }
 
 @MainActor
@@ -321,6 +345,98 @@ private func verifyLibghosttyShortcutArbitration() async throws {
     ))
     #expect(engine.handleShortcutKeyDown(shiftTab, for: terminalApplicationPaneID))
     await engine.close(terminalApplicationPaneID)
+}
+
+@MainActor
+private func verifyLibghosttyControlKeyEquivalentRedispatch() async throws {
+    let fixture = try LibghosttyTestFixture(
+        directoryPrefix: "breath-ghostty-control-key-equivalent"
+    )
+    defer { fixture.tearDown() }
+    let engine = fixture.engine
+    guard engine.usesLibghostty else { return }
+
+    let outputURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(
+            "breath-control-key-equivalent-\(UUID().uuidString)"
+        )
+    let readyURL = outputURL.appendingPathExtension("ready")
+    defer { try? FileManager.default.removeItem(at: outputURL) }
+    defer { try? FileManager.default.removeItem(at: readyURL) }
+
+    let paneID = TerminalPaneID(rawValue: UUID())
+    try await engine.open(
+        TerminalLaunch(
+            paneID: paneID,
+            workingDirectory: "/tmp",
+            executable: "/bin/zsh",
+            arguments: [
+                "-lc",
+                "stty raw -echo; "
+                    + "printf ready > \"$BREATH_TEST_READY\"; "
+                    + "dd bs=1 count=1 of=\"$BREATH_TEST_OUTPUT\" 2>/dev/null",
+            ],
+            environment: [
+                "BREATH_TEST_OUTPUT": outputURL.path,
+                "BREATH_TEST_READY": readyURL.path,
+            ]
+        )
+    )
+    let view = try #require(engine.view(for: paneID))
+    try fixture.focus(view)
+    for _ in 0..<80 {
+        if FileManager.default.fileExists(atPath: readyURL.path) {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(25))
+    }
+    #expect(FileManager.default.fileExists(atPath: readyURL.path))
+
+    let controlV = try #require(
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.control],
+            timestamp: 1,
+            windowNumber: fixture.windowNumber,
+            context: nil,
+            characters: "\u{16}",
+            charactersIgnoringModifiers: "v",
+            isARepeat: false,
+            keyCode: 9
+        )
+    )
+
+    NSApp.sendEvent(controlV)
+
+    for _ in 0..<40 {
+        if let data = try? Data(contentsOf: outputURL), !data.isEmpty {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(25))
+    }
+    #expect(try Data(contentsOf: outputURL) == Data([0x16]))
+    await engine.close(paneID)
+
+    func commandEvent(_ characters: String, keyCode: UInt16) throws -> NSEvent {
+        try #require(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.command],
+                timestamp: 2,
+                windowNumber: fixture.windowNumber,
+                context: nil,
+                characters: characters,
+                charactersIgnoringModifiers: characters,
+                isARepeat: false,
+                keyCode: keyCode
+            )
+        )
+    }
+
+    #expect(view.performKeyEquivalent(with: try commandEvent("c", keyCode: 8)))
+    #expect(view.performKeyEquivalent(with: try commandEvent("v", keyCode: 9)))
 }
 
 @MainActor

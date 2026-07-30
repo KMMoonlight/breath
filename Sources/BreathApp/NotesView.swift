@@ -1884,6 +1884,7 @@ private struct NoteAgentDrawer: View {
 }
 
 private struct NoteAgentNativeTerminalView: NSViewRepresentable {
+    @Environment(\.retainedPageIsActive) private var retainedPageIsActive
     let engine: any TerminalViewProviding
     let terminalID: NoteAgentTerminalID
     let shortcutPolicy: TerminalShortcutPolicy
@@ -1895,6 +1896,7 @@ private struct NoteAgentNativeTerminalView: NSViewRepresentable {
         host.handleTerminalShortcut = { event in
             _ = engine.handleShortcutKeyDown(event, for: terminalID)
         }
+        host.isHidden = !retainedPageIsActive
         host.install(
             engine.view(for: terminalID),
             placeholder: "Agent 终端正在启动…"
@@ -1911,6 +1913,7 @@ private struct NoteAgentNativeTerminalView: NSViewRepresentable {
         nsView.handleTerminalShortcut = { event in
             _ = engine.handleShortcutKeyDown(event, for: terminalID)
         }
+        nsView.isHidden = !retainedPageIsActive
         nsView.install(
             engine.view(for: terminalID),
             placeholder: "Agent 终端正在启动…"

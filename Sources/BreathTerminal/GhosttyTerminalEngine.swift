@@ -554,6 +554,7 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
     fileprivate var inputSubmittedHandler: (() -> Void)?
     private var markedText = NSMutableAttributedString()
     private var keyTextAccumulator: [String]?
+    private var lastPerformKeyEvent: TimeInterval?
     private var trackingArea: NSTrackingArea?
 
     override var acceptsFirstResponder: Bool { true }
@@ -745,6 +746,9 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
         guard surface != nil else { return }
         let hadMarkedText = hasMarkedText()
         keyTextAccumulator = []
+        // interpretKeyEvents can route Control/Command input back through
+        // doCommand. Once keyDown owns the event it must not be redispatched.
+        lastPerformKeyEvent = nil
         interpretKeyEvents([event])
         let committed = keyTextAccumulator ?? []
         keyTextAccumulator = nil
@@ -793,20 +797,81 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard event.modifierFlags.contains(.command),
-              let characters = event.charactersIgnoringModifiers?.lowercased()
+        guard event.type == .keyDown,
+              window?.firstResponder === self
         else {
             return false
         }
-        if characters == "c" {
-            copy(nil)
-            return true
+
+        if event.modifierFlags.contains(.command),
+           let characters = event.charactersIgnoringModifiers?.lowercased()
+        {
+            if characters == "c" {
+                copy(nil)
+                return true
+            }
+            if characters == "v" {
+                paste(nil)
+                return true
+            }
         }
-        if characters == "v" {
-            paste(nil)
-            return true
+
+        let equivalent: String
+        let unmodifiedEquivalent: String
+        switch event.charactersIgnoringModifiers {
+        case "\r":
+            guard event.modifierFlags.contains(.control) else { return false }
+            equivalent = "\r"
+            unmodifiedEquivalent = "\r"
+        case "/":
+            guard event.modifierFlags.contains(.control),
+                  event.modifierFlags.isDisjoint(
+                      with: [.shift, .command, .option]
+                  )
+            else {
+                return false
+            }
+            equivalent = "_"
+            unmodifiedEquivalent = "_"
+        default:
+            guard event.timestamp != 0 else { return false }
+            guard event.modifierFlags.contains(.command)
+                    || event.modifierFlags.contains(.control)
+            else {
+                lastPerformKeyEvent = nil
+                return false
+            }
+
+            if let lastPerformKeyEvent {
+                self.lastPerformKeyEvent = nil
+                if lastPerformKeyEvent == event.timestamp {
+                    equivalent = event.characters ?? ""
+                    unmodifiedEquivalent =
+                        event.charactersIgnoringModifiers ?? equivalent
+                    break
+                }
+            }
+
+            lastPerformKeyEvent = event.timestamp
+            return false
         }
-        return false
+
+        guard let finalEvent = NSEvent.keyEvent(
+            with: .keyDown,
+            location: event.locationInWindow,
+            modifierFlags: event.modifierFlags,
+            timestamp: event.timestamp,
+            windowNumber: event.windowNumber,
+            context: nil,
+            characters: equivalent,
+            charactersIgnoringModifiers: unmodifiedEquivalent,
+            isARepeat: event.isARepeat,
+            keyCode: event.keyCode
+        ) else {
+            return false
+        }
+        keyDown(with: finalEvent)
+        return true
     }
 
     @objc func copy(_ sender: Any?) {
@@ -934,7 +999,15 @@ private final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClien
         }
     }
 
-    override func doCommand(by selector: Selector) {}
+    override func doCommand(by selector: Selector) {
+        guard let lastPerformKeyEvent,
+              let currentEvent = NSApp.currentEvent,
+              lastPerformKeyEvent == currentEvent.timestamp
+        else {
+            return
+        }
+        NSApp.sendEvent(currentEvent)
+    }
 
     private func syncPreedit(clearIfNeeded: Bool = true) {
         guard let surface else { return }

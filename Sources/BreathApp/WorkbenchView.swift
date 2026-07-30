@@ -28,6 +28,17 @@ private enum WorkbenchDetailMode: Hashable {
     case gitWorkbench
 }
 
+private struct RetainedPageIsActiveEnvironmentKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var retainedPageIsActive: Bool {
+        get { self[RetainedPageIsActiveEnvironmentKey.self] }
+        set { self[RetainedPageIsActiveEnvironmentKey.self] = newValue }
+    }
+}
+
 struct RetainedPageSelection<Page: Hashable>: Equatable {
     private(set) var selected: Page
     private(set) var retainedPages: [Page]
@@ -61,6 +72,10 @@ struct RetainedPageDeck<Page: Hashable, Content: View>: View {
         ZStack {
             ForEach(selection.retainedPages, id: \.self) { page in
                 content(page)
+                    .environment(
+                        \.retainedPageIsActive,
+                        selection.selected == page
+                    )
                     .opacity(selection.selected == page ? 1 : 0)
                     .allowsHitTesting(selection.selected == page)
                     .accessibilityHidden(selection.selected != page)
@@ -3082,6 +3097,7 @@ private extension TerminalColorTheme {
 }
 
 private struct TerminalNativeView: NSViewRepresentable {
+    @Environment(\.retainedPageIsActive) private var retainedPageIsActive
     let engine: any TerminalViewProviding
     let paneID: TerminalPaneID
     let placeholder: String
@@ -3097,6 +3113,7 @@ private struct TerminalNativeView: NSViewRepresentable {
         host.handleTerminalShortcut = { event in
             _ = engine.handleShortcutKeyDown(event, for: paneID)
         }
+        host.isHidden = !retainedPageIsActive
         host.install(engine.view(for: paneID), placeholder: placeholder)
         return host
     }
@@ -3108,6 +3125,7 @@ private struct TerminalNativeView: NSViewRepresentable {
         nsView.handleTerminalShortcut = { event in
             _ = engine.handleShortcutKeyDown(event, for: paneID)
         }
+        nsView.isHidden = !retainedPageIsActive
         nsView.install(engine.view(for: paneID), placeholder: placeholder)
     }
 }
@@ -3162,6 +3180,7 @@ final class TerminalHostView: NSView {
     var shortcutPolicy: TerminalShortcutPolicy = .breathFirst
     var breathShortcutMatch: ((NSEvent) -> BreathShortcutMatch?)?
     var handleTerminalShortcut: ((NSEvent) -> Void)?
+    var isMonitoringFocusEvents: Bool { focusEventMonitor != nil }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -3175,11 +3194,13 @@ final class TerminalHostView: NSView {
         super.viewDidUnhide()
         attachRequestedViewIfNeeded()
         synchronizeHostedViewGeometry()
+        updateFocusMonitoring()
     }
 
     override func viewDidHide() {
         super.viewDidHide()
         relinquishInputFocus(in: window)
+        stopFocusMonitoring()
     }
 
     override func layout() {
@@ -3250,12 +3271,16 @@ final class TerminalHostView: NSView {
     }
 
     private func updateFocusMonitoring() {
-        guard monitoredWindow !== window else { return }
         let previousWindow = monitoredWindow
-        if let focusEventMonitor {
-            NSEvent.removeMonitor(focusEventMonitor)
-            self.focusEventMonitor = nil
+        guard isVisibleInWindow else {
+            stopFocusMonitoring()
+            relinquishInputFocus(in: previousWindow)
+            return
         }
+        guard monitoredWindow !== window || focusEventMonitor == nil else {
+            return
+        }
+        stopFocusMonitoring()
         monitoredWindow = window
         guard let window else {
             relinquishInputFocus(in: previousWindow)
@@ -3265,6 +3290,7 @@ final class TerminalHostView: NSView {
             matching: [.leftMouseDown, .rightMouseDown, .keyDown]
         ) { [weak self, weak window] event in
             guard let self, let window, event.window === window else { return event }
+            guard self.isVisibleInWindow else { return event }
             if event.type == .leftMouseDown || event.type == .rightMouseDown {
                 self.reconcileFocusAfterMouseEvent()
             } else {
@@ -3283,6 +3309,14 @@ final class TerminalHostView: NSView {
             }
             return event
         }
+    }
+
+    private func stopFocusMonitoring() {
+        if let focusEventMonitor {
+            NSEvent.removeMonitor(focusEventMonitor)
+            self.focusEventMonitor = nil
+        }
+        monitoredWindow = nil
     }
 
     private func reconcileFocusAfterMouseEvent() {
