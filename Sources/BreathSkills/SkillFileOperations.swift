@@ -361,11 +361,25 @@ struct SkillUninstallCommitter: @unchecked Sendable {
         guard (item.action == .removeSymbolicLink) == isLink else {
             throw SkillInstallationError.stalePreview
         }
+        for linkedDirectory in item.linkedDirectoriesToRemove {
+            let linkedValues = try linkedDirectory.resourceValues(
+                forKeys: [.isSymbolicLinkKey]
+            )
+            guard linkedValues.isSymbolicLink == true,
+                  linkedDirectory.resolvingSymlinksInPath().standardizedFileURL
+                    == item.resolvedDirectory.standardizedFileURL
+            else {
+                throw SkillInstallationError.stalePreview
+            }
+        }
         switch item.action {
         case .removeSymbolicLink:
             try fileManager.removeItem(at: item.directory)
         case .moveToTrash:
             try await trash.moveToTrash(item.directory)
+            for linkedDirectory in item.linkedDirectoriesToRemove {
+                try fileManager.removeItem(at: linkedDirectory)
+            }
         }
         do {
             try removeSharedRegistryEntry(for: item)
@@ -373,9 +387,11 @@ struct SkillUninstallCommitter: @unchecked Sendable {
             throw SkillInstallationError.sharedRegistryPersistenceFailed
         }
         do {
-            try await recordRepository?.removeSkillInstallationRecord(
-                installationDirectory: item.directory
-            )
+            for directory in [item.directory] + item.linkedDirectoriesToRemove {
+                try await recordRepository?.removeSkillInstallationRecord(
+                    installationDirectory: directory
+                )
+            }
         } catch {
             throw SkillInstallationError.recordPersistenceFailed
         }

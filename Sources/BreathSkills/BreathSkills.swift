@@ -227,6 +227,79 @@ public struct GlobalSkill: Codable, Hashable, Identifiable, Sendable {
     public var sourceKinds: Set<SkillSourceKind> {
         Set(copies.map(\.source))
     }
+
+    public var independentCopies: [InstalledSkillCopy] {
+        let sharedPaths = Set(
+            sharedDiscoveryCopyGroups.map { $0.resolvedDirectory.standardizedFileURL.path }
+        )
+        return copies.filter {
+            !sharedPaths.contains($0.resolvedDirectory.standardizedFileURL.path)
+        }
+    }
+
+    public var sharedDiscoveryCopyGroups: [InstalledSkillSharedCopyGroup] {
+        let sharedPaths = Set(
+            copies
+                .filter(\.isSharedAgentDiscoveryCopy)
+                .map { $0.resolvedDirectory.standardizedFileURL.path }
+        )
+        return Dictionary(
+            grouping: copies.filter {
+                sharedPaths.contains($0.resolvedDirectory.standardizedFileURL.path)
+            }
+        ) {
+            $0.resolvedDirectory.standardizedFileURL.path
+        }
+        .values
+        .compactMap(InstalledSkillSharedCopyGroup.init(copies:))
+        .sorted { $0.directory.path < $1.directory.path }
+    }
+}
+
+public struct InstalledSkillSharedCopyGroup: Hashable, Identifiable, Sendable {
+    public var id: String { resolvedDirectory.standardizedFileURL.path }
+    public let directory: URL
+    public let resolvedDirectory: URL
+    public let copies: [InstalledSkillCopy]
+    public let affectedAgents: [SkillAffectedAgent]
+
+    public var affectedAgentDisplayNames: [String] {
+        affectedAgents.map(\.displayName)
+    }
+
+    public var linkedDirectories: [URL] {
+        var seenPaths: Set<String> = []
+        return copies.compactMap { copy in
+            guard copy.isSymbolicLink else { return nil }
+            let path = copy.directory.standardizedFileURL.path
+            guard seenPaths.insert(path).inserted else { return nil }
+            return copy.directory
+        }
+    }
+
+    init?(copies: [InstalledSkillCopy]) {
+        let sortedCopies = copies.sorted {
+            let comparison = $0.agentDisplayName.localizedStandardCompare(
+                $1.agentDisplayName
+            )
+            if comparison != .orderedSame { return comparison == .orderedAscending }
+            return $0.directory.path < $1.directory.path
+        }
+        guard let sharedCopy = sortedCopies.first(where: \.isSharedAgentDiscoveryCopy) else {
+            return nil
+        }
+        var seenAgents: Set<AgentKind> = []
+        self.directory = sharedCopy.directory
+        self.resolvedDirectory = sharedCopy.resolvedDirectory
+        self.copies = sortedCopies
+        self.affectedAgents = sortedCopies.compactMap { copy in
+            guard seenAgents.insert(copy.agent).inserted else { return nil }
+            return SkillAffectedAgent(
+                agent: copy.agent,
+                displayName: copy.agentDisplayName
+            )
+        }
+    }
 }
 
 public struct UnrecognizedSkillItem: Codable, Hashable, Identifiable, Sendable {
@@ -1038,14 +1111,18 @@ public actor GlobalSkillsService {
         guard let skill = snapshot.skills.first(where: { $0.id == skillID }) else {
             return SkillUninstallPreview(items: [], createdAt: now())
         }
-        var items = skill.copies.filter {
-            targetAgents.contains($0.agent) && !$0.isSharedAgentDiscoveryCopy
+        var items = skill.independentCopies.filter {
+            targetAgents.contains($0.agent)
         }.map { copy in
             SkillUninstallPreviewItem(
                 skillID: skill.id,
                 skillName: skill.name,
-                affectedAgents: [copy.agent],
-                affectedAgentDisplayNames: [copy.agentDisplayName],
+                affectedAgentEntries: [
+                    SkillAffectedAgent(
+                        agent: copy.agent,
+                        displayName: copy.agentDisplayName
+                    ),
+                ],
                 scope: .agent,
                 directory: copy.directory,
                 resolvedDirectory: copy.resolvedDirectory,
@@ -1055,33 +1132,23 @@ public actor GlobalSkillsService {
             )
         }
         if includeSharedDiscoveryCopies {
-            let sharedCopiesByDirectory = Dictionary(
-                grouping: skill.copies.filter(\.isSharedAgentDiscoveryCopy)
-            ) {
-                $0.directory.standardizedFileURL.path
-            }
-            items.append(contentsOf: sharedCopiesByDirectory.values.compactMap { copies in
-                let sortedCopies = copies.sorted {
-                    $0.agentDisplayName.localizedStandardCompare($1.agentDisplayName)
-                        == .orderedAscending
-                }
-                guard let first = sortedCopies.first else { return nil }
-                let sharedRegistryIdentifiers = Set(sortedCopies.compactMap {
+            items.append(contentsOf: skill.sharedDiscoveryCopyGroups.map { group in
+                let sharedRegistryIdentifiers = Set(group.copies.compactMap {
                     $0.installationOrigin?.sharedProvenance?.skillIdentifier
                 })
                 return SkillUninstallPreviewItem(
                     skillID: skill.id,
                     skillName: skill.name,
-                    affectedAgents: sortedCopies.map(\.agent),
-                    affectedAgentDisplayNames: sortedCopies.map(\.agentDisplayName),
+                    affectedAgentEntries: group.affectedAgents,
                     scope: .sharedLibrary,
-                    directory: first.directory,
-                    resolvedDirectory: first.resolvedDirectory,
+                    directory: group.directory,
+                    resolvedDirectory: group.resolvedDirectory,
                     action: .moveToTrash,
                     expectedDigest: skill.contentDigest,
                     sharedRegistrySkillIdentifier: sharedRegistryIdentifiers.count == 1
                         ? sharedRegistryIdentifiers.first
-                        : nil
+                        : nil,
+                    linkedDirectoriesToRemove: group.linkedDirectories
                 )
             })
         }
@@ -1116,8 +1183,7 @@ public actor GlobalSkillsService {
                         }
                         result = SkillUninstallResultItem(
                             skillName: item.skillName,
-                            affectedAgents: item.affectedAgents,
-                            affectedAgentDisplayNames: item.affectedAgentDisplayNames,
+                            affectedAgentEntries: item.affectedAgentEntries,
                             scope: item.scope,
                             directory: item.directory,
                             status: .succeeded,
@@ -1126,8 +1192,7 @@ public actor GlobalSkillsService {
                     } catch {
                         result = SkillUninstallResultItem(
                             skillName: item.skillName,
-                            affectedAgents: item.affectedAgents,
-                            affectedAgentDisplayNames: item.affectedAgentDisplayNames,
+                            affectedAgentEntries: item.affectedAgentEntries,
                             scope: item.scope,
                             directory: item.directory,
                             status: .failed,

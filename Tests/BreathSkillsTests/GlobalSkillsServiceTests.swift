@@ -301,7 +301,7 @@ struct GlobalSkillsServiceTests {
         #expect(sharedUninstallPreview.items.first?.scope == .sharedLibrary)
         #expect(
             Set(sharedUninstallPreview.items.first?.affectedAgents ?? [])
-                == Set([.codex, .kimiCode])
+                == Set([.codex, .claudeCode, .kimiCode])
         )
 
         let preview = await service.previewInstallation(
@@ -1684,6 +1684,16 @@ struct GlobalSkillsServiceTests {
             ---
             """.utf8
         ).write(to: sharedSkill.appendingPathComponent("SKILL.md"))
+        let claudeLink = try fixture.skillRoot(for: .claudeCode)
+            .appendingPathComponent("review", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: claudeLink.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: claudeLink,
+            withDestinationURL: sharedSkill
+        )
         let sharedContainer = sharedSkill
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -1726,15 +1736,19 @@ struct GlobalSkillsServiceTests {
         let item = try #require(preview.items.first)
         #expect(preview.items.count == 1)
         #expect(item.scope == .sharedLibrary)
-        #expect(Set(item.affectedAgents) == Set([.codex, .kimiCode]))
+        #expect(Set(item.affectedAgents) == Set([.codex, .claudeCode, .kimiCode]))
 
         let result = await service.uninstall(preview)
 
         #expect(result.items.count == 1)
         #expect(result.items.first?.scope == .sharedLibrary)
-        #expect(Set(result.items.first?.affectedAgents ?? []) == Set([.codex, .kimiCode]))
+        #expect(
+            Set(result.items.first?.affectedAgents ?? [])
+                == Set([.codex, .claudeCode, .kimiCode])
+        )
         #expect(result.snapshot.skills.isEmpty)
         #expect(await trash.trashedItems().map(\.lastPathComponent) == ["review"])
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: claudeLink.path)) == nil)
         let updatedLock = try #require(
             JSONSerialization.jsonObject(with: Data(contentsOf: lockURL))
                 as? [String: Any]

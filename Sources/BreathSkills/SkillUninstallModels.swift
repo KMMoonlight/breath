@@ -24,43 +24,57 @@ public enum SkillUninstallScope: String, Codable, Hashable, Sendable {
     case sharedLibrary
 }
 
+public struct SkillAffectedAgent: Codable, Hashable, Sendable {
+    public let agent: AgentKind
+    public let displayName: String
+
+    public init(agent: AgentKind, displayName: String) {
+        self.agent = agent
+        self.displayName = displayName
+    }
+}
+
 public struct SkillUninstallPreviewItem: Identifiable, Hashable, Sendable {
     public var id: String { directory.standardizedFileURL.path }
     public let skillID: String
     public let skillName: String
-    public let affectedAgents: [AgentKind]
-    public let affectedAgentDisplayNames: [String]
+    public let affectedAgentEntries: [SkillAffectedAgent]
     public let scope: SkillUninstallScope
     public let directory: URL
     public let resolvedDirectory: URL
     public let action: SkillUninstallAction
     let expectedDigest: String
     let sharedRegistrySkillIdentifier: String?
+    let linkedDirectoriesToRemove: [URL]
 
+    public var affectedAgents: [AgentKind] { affectedAgentEntries.map(\.agent) }
+    public var affectedAgentDisplayNames: [String] {
+        affectedAgentEntries.map(\.displayName)
+    }
     public var agentDisplayName: String { affectedAgentDisplayNames.joined(separator: ", ") }
 
     init(
         skillID: String,
         skillName: String,
-        affectedAgents: [AgentKind],
-        affectedAgentDisplayNames: [String],
+        affectedAgentEntries: [SkillAffectedAgent],
         scope: SkillUninstallScope,
         directory: URL,
         resolvedDirectory: URL,
         action: SkillUninstallAction,
         expectedDigest: String,
-        sharedRegistrySkillIdentifier: String? = nil
+        sharedRegistrySkillIdentifier: String? = nil,
+        linkedDirectoriesToRemove: [URL] = []
     ) {
         self.skillID = skillID
         self.skillName = skillName
-        self.affectedAgents = affectedAgents
-        self.affectedAgentDisplayNames = affectedAgentDisplayNames
+        self.affectedAgentEntries = affectedAgentEntries
         self.scope = scope
         self.directory = directory
         self.resolvedDirectory = resolvedDirectory
         self.action = action
         self.expectedDigest = expectedDigest
         self.sharedRegistrySkillIdentifier = sharedRegistrySkillIdentifier
+        self.linkedDirectoriesToRemove = linkedDirectoriesToRemove
     }
 }
 
@@ -77,20 +91,22 @@ public struct SkillUninstallPreview: Sendable {
 public struct SkillUninstallResultItem: Identifiable, Hashable, Sendable {
     public var id: String { directory.standardizedFileURL.path }
     public let skillName: String
-    public let affectedAgents: [AgentKind]
-    public let affectedAgentDisplayNames: [String]
+    public let affectedAgentEntries: [SkillAffectedAgent]
     public let scope: SkillUninstallScope
     public let directory: URL
     public let status: SkillOperationStatus
     public let message: String
     public let diagnostic: String?
 
+    public var affectedAgents: [AgentKind] { affectedAgentEntries.map(\.agent) }
+    public var affectedAgentDisplayNames: [String] {
+        affectedAgentEntries.map(\.displayName)
+    }
     public var agentDisplayName: String { affectedAgentDisplayNames.joined(separator: ", ") }
 
     public init(
         skillName: String,
-        affectedAgents: [AgentKind],
-        affectedAgentDisplayNames: [String],
+        affectedAgentEntries: [SkillAffectedAgent],
         scope: SkillUninstallScope,
         directory: URL,
         status: SkillOperationStatus,
@@ -98,8 +114,7 @@ public struct SkillUninstallResultItem: Identifiable, Hashable, Sendable {
         diagnostic: String? = nil
     ) {
         self.skillName = skillName
-        self.affectedAgents = affectedAgents
-        self.affectedAgentDisplayNames = affectedAgentDisplayNames
+        self.affectedAgentEntries = affectedAgentEntries
         self.scope = scope
         self.directory = directory
         self.status = status

@@ -28,6 +28,16 @@ struct SkillUninstallPresentationTests {
             directory: URL(
                 fileURLWithPath: "/Users/example/.claude/skills/review",
                 isDirectory: true
+            ),
+            resolvedDirectory: sharedDirectory,
+            isSymbolicLink: true
+        )
+        let antigravityCopy = installedCopy(
+            agent: .antigravityCLI,
+            displayName: "Antigravity",
+            directory: URL(
+                fileURLWithPath: "/Users/example/.gemini/antigravity/skills/review",
+                isDirectory: true
             )
         )
         let skill = GlobalSkill(
@@ -36,29 +46,31 @@ struct SkillUninstallPresentationTests {
             manifest: "---",
             contentDigest: "digest",
             files: [],
-            copies: [codexSharedCopy, kimiSharedCopy, claudeCopy]
+            copies: [codexSharedCopy, kimiSharedCopy, claudeCopy, antigravityCopy]
         )
 
         let presentation = SkillUninstallSelectionPresentation(skill: skill)
 
-        #expect(presentation.selectableCopies.map(\.agent) == [.claudeCode])
+        #expect(presentation.selectableCopies.map(\.agent) == [.antigravityCLI])
         let sharedCopy = try #require(presentation.sharedCopies.first)
         #expect(presentation.sharedCopies.count == 1)
         #expect(sharedCopy.directory == sharedDirectory)
-        #expect(sharedCopy.affectedAgentDisplayNames == ["Codex", "Kimi Code"])
+        #expect(sharedCopy.affectedAgentDisplayNames == ["Claude Code", "Codex", "Kimi Code"])
     }
 
     private func installedCopy(
         agent: AgentKind,
         displayName: String,
-        directory: URL
+        directory: URL,
+        resolvedDirectory: URL? = nil,
+        isSymbolicLink: Bool = false
     ) -> InstalledSkillCopy {
         InstalledSkillCopy(
             agent: agent,
             agentDisplayName: displayName,
             directory: directory,
-            resolvedDirectory: directory,
-            isSymbolicLink: false
+            resolvedDirectory: resolvedDirectory ?? directory,
+            isSymbolicLink: isSymbolicLink
         )
     }
 }

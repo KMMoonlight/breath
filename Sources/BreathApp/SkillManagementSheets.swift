@@ -1095,35 +1095,12 @@ struct SkillUpdateReviewView: View {
 }
 
 struct SkillUninstallSelectionPresentation: Equatable {
-    struct SharedCopy: Identifiable, Equatable {
-        var id: String { directory.standardizedFileURL.path }
-        let directory: URL
-        let affectedAgents: [AgentKind]
-        let affectedAgentDisplayNames: [String]
-    }
-
     let selectableCopies: [InstalledSkillCopy]
-    let sharedCopies: [SharedCopy]
+    let sharedCopies: [InstalledSkillSharedCopyGroup]
 
     init(skill: GlobalSkill) {
-        selectableCopies = skill.copies.filter { !$0.isSharedAgentDiscoveryCopy }
-        let copiesByDirectory = Dictionary(
-            grouping: skill.copies.filter(\.isSharedAgentDiscoveryCopy)
-        ) {
-            $0.directory.standardizedFileURL.path
-        }
-        sharedCopies = copiesByDirectory.values.compactMap { copies in
-            let sortedCopies = copies.sorted {
-                $0.agentDisplayName.localizedStandardCompare($1.agentDisplayName)
-                    == .orderedAscending
-            }
-            guard let first = sortedCopies.first else { return nil }
-            return SharedCopy(
-                directory: first.directory,
-                affectedAgents: sortedCopies.map(\.agent),
-                affectedAgentDisplayNames: sortedCopies.map(\.agentDisplayName)
-            )
-        }.sorted { $0.directory.path < $1.directory.path }
+        selectableCopies = skill.independentCopies
+        sharedCopies = skill.sharedDiscoveryCopyGroups
     }
 }
 
