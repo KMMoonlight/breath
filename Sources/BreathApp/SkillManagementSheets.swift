@@ -1163,6 +1163,13 @@ struct SkillUninstallView: View {
                             )
                             .fontWeight(.medium)
                             Text(item.directory.path).font(.caption.monospaced())
+                            if item.resolvedDirectory.standardizedFileURL
+                                != item.directory.standardizedFileURL
+                            {
+                                Text("→ \(item.resolvedDirectory.path)")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
                             if item.scope == .sharedLibrary {
                                 Text(localizer.format(
                                     "将同时从以下 Agent 中移除：%@",
@@ -1216,6 +1223,13 @@ struct SkillUninstallView: View {
                             .fontWeight(.medium)
                         Text(sharedCopy.directory.path)
                             .font(.caption.monospaced())
+                        if sharedCopy.resolvedDirectory.standardizedFileURL
+                            != sharedCopy.directory.standardizedFileURL
+                        {
+                            Text("→ \(sharedCopy.resolvedDirectory.path)")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
                         Text(localizer.format(
                             "删除后，此 Skill 将同时从以下 Agent 中移除：%@",
                             formattedAgentNames(sharedCopy.affectedAgentDisplayNames)

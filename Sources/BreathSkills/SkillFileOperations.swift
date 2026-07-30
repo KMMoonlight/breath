@@ -361,25 +361,11 @@ struct SkillUninstallCommitter: @unchecked Sendable {
         guard (item.action == .removeSymbolicLink) == isLink else {
             throw SkillInstallationError.stalePreview
         }
-        for linkedDirectory in item.linkedDirectoriesToRemove {
-            let linkedValues = try linkedDirectory.resourceValues(
-                forKeys: [.isSymbolicLinkKey]
-            )
-            guard linkedValues.isSymbolicLink == true,
-                  linkedDirectory.resolvingSymlinksInPath().standardizedFileURL
-                    == item.resolvedDirectory.standardizedFileURL
-            else {
-                throw SkillInstallationError.stalePreview
-            }
-        }
         switch item.action {
         case .removeSymbolicLink:
             try fileManager.removeItem(at: item.directory)
         case .moveToTrash:
-            try await trash.moveToTrash(item.directory)
-            for linkedDirectory in item.linkedDirectoriesToRemove {
-                try fileManager.removeItem(at: linkedDirectory)
-            }
+            try await moveSharedTargetToTrash(item)
         }
         do {
             try removeSharedRegistryEntry(for: item)
@@ -394,6 +380,44 @@ struct SkillUninstallCommitter: @unchecked Sendable {
             }
         } catch {
             throw SkillInstallationError.recordPersistenceFailed
+        }
+    }
+
+    private func moveSharedTargetToTrash(
+        _ item: SkillUninstallPreviewItem
+    ) async throws {
+        let links = try item.linkedDirectoriesToRemove.map { linkedDirectory in
+            let linkedValues = try linkedDirectory.resourceValues(
+                forKeys: [.isSymbolicLinkKey]
+            )
+            guard linkedValues.isSymbolicLink == true,
+                  linkedDirectory.resolvingSymlinksInPath().standardizedFileURL
+                    == item.resolvedDirectory.standardizedFileURL
+            else {
+                throw SkillInstallationError.stalePreview
+            }
+            return (
+                url: linkedDirectory,
+                destination: try fileManager.destinationOfSymbolicLink(
+                    atPath: linkedDirectory.path
+                )
+            )
+        }
+        var removedLinks: [(url: URL, destination: String)] = []
+        do {
+            for link in links {
+                try fileManager.removeItem(at: link.url)
+                removedLinks.append(link)
+            }
+            try await trash.moveToTrash(item.directory)
+        } catch {
+            for link in removedLinks.reversed() {
+                try? fileManager.createSymbolicLink(
+                    atPath: link.url.path,
+                    withDestinationPath: link.destination
+                )
+            }
+            throw error
         }
     }
 

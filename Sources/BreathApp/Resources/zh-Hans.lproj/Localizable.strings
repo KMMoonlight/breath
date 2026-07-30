@@ -679,6 +679,7 @@
 "The source record could not be saved, so the previous directory was restored." = "来源记录保存失败，原目录已恢复。";
 "The Skill could not be installed at this target." = "无法将 Skill 安装到此目标。";
 "The shared Skill was moved to Trash and removed from every affected Agent." = "共享 Skill 已移入废纸篓，并从所有受影响的 Agent 中移除。";
+"The shared discovery link was removed from every affected Agent; its target was kept." = "共享发现链接已从所有受影响的 Agent 中移除，链接目标保持不变。";
 "The shared Skill was removed, but the skills CLI registry could not be updated." = "共享 Skill 已移除，但无法更新 skills CLI 清单。";
 "The selected symbolic link was removed; its shared target was kept." = "所选符号链接已移除，共享目标保持不变。";
 "The selected Skill was moved to Trash." = "所选 Skill 已移入废纸篓。";

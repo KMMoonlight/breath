@@ -679,6 +679,7 @@
 "The source record could not be saved, so the previous directory was restored." = "The source record could not be saved, so the previous directory was restored.";
 "The Skill could not be installed at this target." = "The Skill could not be installed at this target.";
 "The shared Skill was moved to Trash and removed from every affected Agent." = "The shared Skill was moved to Trash and removed from every affected Agent.";
+"The shared discovery link was removed from every affected Agent; its target was kept." = "The shared discovery link was removed from every affected Agent; its target was kept.";
 "The shared Skill was removed, but the skills CLI registry could not be updated." = "The shared Skill was removed, but the skills CLI registry could not be updated.";
 "The selected symbolic link was removed; its shared target was kept." = "The selected symbolic link was removed; its shared target was kept.";
 "The selected Skill was moved to Trash." = "The selected Skill was moved to Trash.";

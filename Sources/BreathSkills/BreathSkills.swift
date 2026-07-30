@@ -229,30 +229,60 @@ public struct GlobalSkill: Codable, Hashable, Identifiable, Sendable {
     }
 
     public var independentCopies: [InstalledSkillCopy] {
-        let sharedPaths = Set(
-            sharedDiscoveryCopyGroups.map { $0.resolvedDirectory.standardizedFileURL.path }
-        )
-        return copies.filter {
-            !sharedPaths.contains($0.resolvedDirectory.standardizedFileURL.path)
-        }
+        let groupedCopies = Set(sharedDiscoveryCopyGroups.flatMap(\.copies))
+        return copies.filter { !groupedCopies.contains($0) }
     }
 
     public var sharedDiscoveryCopyGroups: [InstalledSkillSharedCopyGroup] {
-        let sharedPaths = Set(
-            copies
-                .filter(\.isSharedAgentDiscoveryCopy)
-                .map { $0.resolvedDirectory.standardizedFileURL.path }
-        )
-        return Dictionary(
-            grouping: copies.filter {
-                sharedPaths.contains($0.resolvedDirectory.standardizedFileURL.path)
-            }
+        let physicalSharedCopies = copies.filter {
+            $0.isSharedAgentDiscoveryCopy && !$0.isSymbolicLink
+        }
+        let physicalCopiesByResolvedPath = Dictionary(
+            grouping: physicalSharedCopies
         ) {
             $0.resolvedDirectory.standardizedFileURL.path
         }
-        .values
-        .compactMap(InstalledSkillSharedCopyGroup.init(copies:))
-        .sorted { $0.directory.path < $1.directory.path }
+        var groups: [InstalledSkillSharedCopyGroup] =
+            physicalCopiesByResolvedPath.values.map { sharedCopies in
+            let sharedCopy = sharedCopies[0]
+            let resolvedPath = sharedCopy.resolvedDirectory.standardizedFileURL.path
+            return InstalledSkillSharedCopyGroup(
+                directory: sharedCopy.directory,
+                resolvedDirectory: sharedCopy.resolvedDirectory,
+                action: .moveToTrash,
+                copies: copies.filter {
+                    $0.resolvedDirectory.standardizedFileURL.path == resolvedPath
+                }
+            )
+        }
+        let physicalResolvedPaths = Set(physicalCopiesByResolvedPath.keys)
+        let sharedLinksByPresentedPath = Dictionary(
+            grouping: copies.filter {
+                $0.isSharedAgentDiscoveryCopy
+                    && $0.isSymbolicLink
+                    && !physicalResolvedPaths.contains(
+                        $0.resolvedDirectory.standardizedFileURL.path
+                    )
+            }
+        ) {
+            $0.directory.standardizedFileURL.path
+        }
+        groups.append(contentsOf: sharedLinksByPresentedPath.values.map { sharedCopies in
+            let sharedCopy = sharedCopies[0]
+            let presentedPath = sharedCopy.directory.standardizedFileURL.path
+            return InstalledSkillSharedCopyGroup(
+                directory: sharedCopy.directory,
+                resolvedDirectory: sharedCopy.resolvedDirectory,
+                action: .removeSymbolicLink,
+                copies: copies.filter {
+                    $0.directory.standardizedFileURL.path == presentedPath
+                }
+            )
+        })
+        return groups.sorted {
+            $0.directory.path.localizedStandardCompare($1.directory.path)
+                == .orderedAscending
+        }
     }
 }
 
@@ -260,6 +290,7 @@ public struct InstalledSkillSharedCopyGroup: Hashable, Identifiable, Sendable {
     public var id: String { resolvedDirectory.standardizedFileURL.path }
     public let directory: URL
     public let resolvedDirectory: URL
+    public let action: SkillUninstallAction
     public let copies: [InstalledSkillCopy]
     public let affectedAgents: [SkillAffectedAgent]
 
@@ -268,6 +299,7 @@ public struct InstalledSkillSharedCopyGroup: Hashable, Identifiable, Sendable {
     }
 
     public var linkedDirectories: [URL] {
+        guard action == .moveToTrash else { return [] }
         var seenPaths: Set<String> = []
         return copies.compactMap { copy in
             guard copy.isSymbolicLink else { return nil }
@@ -277,7 +309,12 @@ public struct InstalledSkillSharedCopyGroup: Hashable, Identifiable, Sendable {
         }
     }
 
-    init?(copies: [InstalledSkillCopy]) {
+    init(
+        directory: URL,
+        resolvedDirectory: URL,
+        action: SkillUninstallAction,
+        copies: [InstalledSkillCopy]
+    ) {
         let sortedCopies = copies.sorted {
             let comparison = $0.agentDisplayName.localizedStandardCompare(
                 $1.agentDisplayName
@@ -285,12 +322,10 @@ public struct InstalledSkillSharedCopyGroup: Hashable, Identifiable, Sendable {
             if comparison != .orderedSame { return comparison == .orderedAscending }
             return $0.directory.path < $1.directory.path
         }
-        guard let sharedCopy = sortedCopies.first(where: \.isSharedAgentDiscoveryCopy) else {
-            return nil
-        }
         var seenAgents: Set<AgentKind> = []
-        self.directory = sharedCopy.directory
-        self.resolvedDirectory = sharedCopy.resolvedDirectory
+        self.directory = directory
+        self.resolvedDirectory = resolvedDirectory
+        self.action = action
         self.copies = sortedCopies
         self.affectedAgents = sortedCopies.compactMap { copy in
             guard seenAgents.insert(copy.agent).inserted else { return nil }
@@ -1143,7 +1178,7 @@ public actor GlobalSkillsService {
                     scope: .sharedLibrary,
                     directory: group.directory,
                     resolvedDirectory: group.resolvedDirectory,
-                    action: .moveToTrash,
+                    action: group.action,
                     expectedDigest: skill.contentDigest,
                     sharedRegistrySkillIdentifier: sharedRegistryIdentifiers.count == 1
                         ? sharedRegistryIdentifiers.first
@@ -1174,8 +1209,10 @@ public actor GlobalSkillsService {
                         }
                         let message: String
                         switch (item.scope, item.action) {
-                        case (.sharedLibrary, _):
+                        case (.sharedLibrary, .moveToTrash):
                             message = "The shared Skill was moved to Trash and removed from every affected Agent."
+                        case (.sharedLibrary, .removeSymbolicLink):
+                            message = "The shared discovery link was removed from every affected Agent; its target was kept."
                         case (_, .removeSymbolicLink):
                             message = "The selected symbolic link was removed; its shared target was kept."
                         case (_, .moveToTrash):

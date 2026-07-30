@@ -58,6 +58,60 @@ struct SkillUninstallPresentationTests {
         #expect(sharedCopy.affectedAgentDisplayNames == ["Claude Code", "Codex", "Kimi Code"])
     }
 
+    @Test("a shared discovery link affects only Agents that use that same link")
+    func sharedDiscoveryLinkIsGroupedByItsPresentedPath() throws {
+        let sharedLink = URL(
+            fileURLWithPath: "/Users/example/.agents/skills/review",
+            isDirectory: true
+        )
+        let externalDirectory = URL(
+            fileURLWithPath: "/Volumes/skills/review",
+            isDirectory: true
+        )
+        let codexSharedCopy = installedCopy(
+            agent: .codex,
+            displayName: "Codex",
+            directory: sharedLink,
+            resolvedDirectory: externalDirectory,
+            isSymbolicLink: true
+        )
+        let kimiSharedCopy = installedCopy(
+            agent: .kimiCode,
+            displayName: "Kimi Code",
+            directory: sharedLink,
+            resolvedDirectory: externalDirectory,
+            isSymbolicLink: true
+        )
+        let claudeCopy = installedCopy(
+            agent: .claudeCode,
+            displayName: "Claude Code",
+            directory: URL(
+                fileURLWithPath: "/Users/example/.claude/skills/review",
+                isDirectory: true
+            ),
+            resolvedDirectory: externalDirectory,
+            isSymbolicLink: true
+        )
+        let skill = GlobalSkill(
+            name: "review",
+            description: "Review before shipping.",
+            manifest: "---",
+            contentDigest: "digest",
+            files: [],
+            copies: [codexSharedCopy, kimiSharedCopy, claudeCopy]
+        )
+
+        let presentation = SkillUninstallSelectionPresentation(skill: skill)
+
+        #expect(presentation.selectableCopies.map(\.agent) == [.claudeCode])
+        let sharedCopy = try #require(presentation.sharedCopies.first)
+        #expect(presentation.sharedCopies.count == 1)
+        #expect(sharedCopy.directory == sharedLink)
+        #expect(sharedCopy.resolvedDirectory == externalDirectory)
+        #expect(sharedCopy.action == .removeSymbolicLink)
+        #expect(sharedCopy.affectedAgentDisplayNames == ["Codex", "Kimi Code"])
+    }
+
     private func installedCopy(
         agent: AgentKind,
         displayName: String,

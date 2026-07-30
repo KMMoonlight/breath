@@ -1758,6 +1758,180 @@ struct GlobalSkillsServiceTests {
         #expect(lockedSkills["keep"] != nil)
     }
 
+    @Test("a symbolic link in the shared root is removed without trashing its target")
+    func removesSharedRootLinkWithoutTrashingTarget() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let externalSkill = fixture.home
+            .appendingPathComponent("external/review", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: externalSkill,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            ---
+            name: review
+            description: Review before shipping.
+            ---
+            """.utf8
+        ).write(to: externalSkill.appendingPathComponent("SKILL.md"))
+        let sharedLink = fixture.home
+            .appendingPathComponent(".agents/skills/review", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: sharedLink.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: sharedLink,
+            withDestinationURL: externalSkill
+        )
+        let trash = RecordingSkillTrash(
+            recoveryDirectory: fixture.home.appendingPathComponent("Trash", isDirectory: true)
+        )
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            trash: trash
+        )
+        let skill = try #require((await service.scan()).skills.first)
+        let preview = await service.previewUninstall(
+            skillID: skill.id,
+            targetAgents: [],
+            includeSharedDiscoveryCopies: true
+        )
+
+        let item = try #require(preview.items.first)
+        #expect(preview.items.count == 1)
+        #expect(item.action == .removeSymbolicLink)
+        #expect(item.directory == sharedLink.standardizedFileURL)
+        #expect(item.resolvedDirectory == externalSkill.resolvingSymlinksInPath())
+        #expect(Set(item.affectedAgents) == Set([.codex, .kimiCode]))
+
+        let result = await service.uninstall(preview)
+
+        #expect(result.items.first?.status == .succeeded)
+        #expect(result.snapshot.skills.isEmpty)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: sharedLink.path)) == nil)
+        #expect(FileManager.default.fileExists(atPath: externalSkill.path))
+        #expect(await trash.trashedItems().isEmpty)
+    }
+
+    @Test("shared uninstall restores Agent links when moving the target to Trash fails")
+    func restoresSharedLinksWhenTrashFails() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let sharedSkill = fixture.home
+            .appendingPathComponent(".agents/skills/review", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: sharedSkill,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            ---
+            name: review
+            description: Review before shipping.
+            ---
+            """.utf8
+        ).write(to: sharedSkill.appendingPathComponent("SKILL.md"))
+        let claudeLink = try fixture.skillRoot(for: .claudeCode)
+            .appendingPathComponent("review", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: claudeLink.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: claudeLink,
+            withDestinationURL: sharedSkill
+        )
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            trash: FailingSkillTrash()
+        )
+        let skill = try #require((await service.scan()).skills.first)
+        let preview = await service.previewUninstall(
+            skillID: skill.id,
+            targetAgents: [],
+            includeSharedDiscoveryCopies: true
+        )
+
+        let result = await service.uninstall(preview)
+
+        #expect(result.items.first?.status == .failed)
+        #expect(FileManager.default.fileExists(atPath: sharedSkill.path))
+        #expect(
+            claudeLink.resolvingSymlinksInPath().standardizedFileURL
+                == sharedSkill.standardizedFileURL
+        )
+    }
+
+    @Test("shared uninstall keeps its target when an Agent link cannot be removed")
+    func keepsSharedTargetWhenLinkRemovalFails() async throws {
+        let fixture = try SkillsFixture()
+        defer { fixture.remove() }
+        let sharedSkill = fixture.home
+            .appendingPathComponent(".agents/skills/review", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: sharedSkill,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            ---
+            name: review
+            description: Review before shipping.
+            ---
+            """.utf8
+        ).write(to: sharedSkill.appendingPathComponent("SKILL.md"))
+        let claudeLink = try fixture.skillRoot(for: .claudeCode)
+            .appendingPathComponent("review", isDirectory: true)
+        let claudeRoot = claudeLink.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: claudeRoot,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: claudeLink,
+            withDestinationURL: sharedSkill
+        )
+        let trash = RecordingSkillTrash(
+            recoveryDirectory: fixture.home.appendingPathComponent("Trash", isDirectory: true)
+        )
+        let service = GlobalSkillsService(
+            homeDirectory: fixture.home,
+            environment: [:],
+            trash: trash
+        )
+        let skill = try #require((await service.scan()).skills.first)
+        let preview = await service.previewUninstall(
+            skillID: skill.id,
+            targetAgents: [],
+            includeSharedDiscoveryCopies: true
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o500],
+            ofItemAtPath: claudeRoot.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: claudeRoot.path
+            )
+        }
+
+        let result = await service.uninstall(preview)
+
+        #expect(result.items.first?.status == .failed)
+        #expect(FileManager.default.fileExists(atPath: sharedSkill.path))
+        #expect(await trash.trashedItems().isEmpty)
+        #expect(
+            claudeLink.resolvingSymlinksInPath().standardizedFileURL
+                == sharedSkill.standardizedFileURL
+        )
+    }
+
     @Test("uninstall trashes physical copies but removes only an external link")
     func uninstallsSelectedCopiesSafely() async throws {
         let fixture = try SkillsFixture()
@@ -2141,6 +2315,12 @@ private actor RecordingSkillTrash: SkillTrashing {
 
     func trashedItems() -> [URL] {
         items
+    }
+}
+
+private struct FailingSkillTrash: SkillTrashing {
+    func moveToTrash(_ url: URL) async throws {
+        throw CocoaError(.fileWriteUnknown)
     }
 }
 
