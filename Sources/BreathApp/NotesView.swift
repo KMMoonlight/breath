@@ -69,7 +69,7 @@ struct NotesView: View {
             notesToolbar
             Divider()
             if model.snapshot.library == nil {
-                libraryEmptyState
+                Color.clear
             } else if !model.isLibraryAvailable {
                 unavailableLibraryState
             } else {
@@ -395,7 +395,8 @@ struct NotesView: View {
             .disabled(!model.isLibraryAvailable)
             .accessibilityLabel(noteAgentButtonHelp)
         }
-        .padding(.horizontal, 12)
+        .padding(.trailing, 12)
+        .pageToolbarLeadingPadding()
         .frame(height: WorkbenchLayout.pageToolbarHeight)
     }
 
@@ -431,18 +432,6 @@ struct NotesView: View {
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
-    }
-
-    private var libraryEmptyState: some View {
-        ContentUnavailableView {
-            Label("选择笔记库", systemImage: "note.text")
-        } description: {
-            Text("选择或创建一个本地目录，Markdown 文件仍由文件系统直接管理。")
-        } actions: {
-            Button("选择目录…", action: chooseLibrary)
-                .buttonStyle(.borderedProminent)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var unavailableLibraryState: some View {
