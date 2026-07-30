@@ -6,6 +6,42 @@ import Testing
 
 @Suite("Skill uninstall presentation")
 struct SkillUninstallPresentationTests {
+    @Test("shared warnings and selectable Agents use one top-aligned list")
+    func selectionRowsShareOneList() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/BreathApp/SkillManagementSheets.swift"
+            ),
+            encoding: .utf8
+        )
+        let viewStart = try #require(source.range(of: "struct SkillUninstallView: View"))
+        let riskBadgeStart = try #require(
+            source.range(
+                of: "private struct RiskBadge: View",
+                range: viewStart.upperBound..<source.endIndex
+            )
+        )
+        let viewSource = source[
+            viewStart.lowerBound..<riskBadgeStart.lowerBound
+        ].filter { !$0.isWhitespace }
+
+        #expect(
+            viewSource.contains(
+                "}else{List{ForEach(selectionPresentation.selectableCopies)"
+            )
+        )
+        #expect(
+            viewSource.contains(
+                ".toggleStyle(.checkbox)}ForEach(selectionPresentation.sharedCopies)"
+            )
+        )
+        #expect(!viewSource.contains("List(selectionPresentation.selectableCopies)"))
+    }
+
     @Test("shared copies are one consequence instead of Agent checkboxes")
     func sharedCopiesAreGroupedOutsideSelectableAgents() throws {
         let sharedDirectory = URL(

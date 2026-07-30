@@ -1198,46 +1198,48 @@ struct SkillUninstallView: View {
                     }
                 }
             } else {
-                List(selectionPresentation.selectableCopies) { copy in
-                    Toggle(isOn: Binding(
-                        get: { selectedAgents.contains(copy.agent) },
-                        set: { enabled in
-                            if enabled { selectedAgents.insert(copy.agent) }
-                            else { selectedAgents.remove(copy.agent) }
-                        }
-                    )) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(copy.agentDisplayName).fontWeight(.medium)
-                            Text(copy.directory.path).font(.caption.monospaced())
-                            if copy.isSymbolicLink {
-                                Text(localizer.string("外部符号链接"))
-                                    .font(.caption).foregroundStyle(.secondary)
+                List {
+                    ForEach(selectionPresentation.selectableCopies) { copy in
+                        Toggle(isOn: Binding(
+                            get: { selectedAgents.contains(copy.agent) },
+                            set: { enabled in
+                                if enabled { selectedAgents.insert(copy.agent) }
+                                else { selectedAgents.remove(copy.agent) }
+                            }
+                        )) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(copy.agentDisplayName).fontWeight(.medium)
+                                Text(copy.directory.path).font(.caption.monospaced())
+                                if copy.isSymbolicLink {
+                                    Text(localizer.string("外部符号链接"))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
                             }
                         }
+                        .toggleStyle(.checkbox)
                     }
-                    .toggleStyle(.checkbox)
-                }
-                ForEach(selectionPresentation.sharedCopies) { sharedCopy in
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(localizer.string("共享 Skill"))
-                            .fontWeight(.medium)
-                        Text(sharedCopy.directory.path)
-                            .font(.caption.monospaced())
-                        if sharedCopy.resolvedDirectory.standardizedFileURL
-                            != sharedCopy.directory.standardizedFileURL
-                        {
-                            Text("→ \(sharedCopy.resolvedDirectory.path)")
+                    ForEach(selectionPresentation.sharedCopies) { sharedCopy in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(localizer.string("共享 Skill"))
+                                .fontWeight(.medium)
+                            Text(sharedCopy.directory.path)
                                 .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
+                            if sharedCopy.resolvedDirectory.standardizedFileURL
+                                != sharedCopy.directory.standardizedFileURL
+                            {
+                                Text("→ \(sharedCopy.resolvedDirectory.path)")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(localizer.format(
+                                "删除后，此 Skill 将同时从以下 Agent 中移除：%@",
+                                formattedAgentNames(sharedCopy.affectedAgentDisplayNames)
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
-                        Text(localizer.format(
-                            "删除后，此 Skill 将同时从以下 Agent 中移除：%@",
-                            formattedAgentNames(sharedCopy.affectedAgentDisplayNames)
-                        ))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .accessibilityElement(children: .combine)
                     }
-                    .accessibilityElement(children: .combine)
                 }
             }
             Divider()
